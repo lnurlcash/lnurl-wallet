@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "prettier": "^3.9.6",
-    "sass": "^1.103.1",
+    "sass": "^1.104.0",
     "solid-icons": "^1.2.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
