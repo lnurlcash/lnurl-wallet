@@ -58,10 +58,10 @@ footer {
   }
 }
 
-// one section of the footer (version, Github, the privacy note, the LUD
-// list) - the "|" between them is a generated pseudo-element rather than
-// markup, so the mobile breakpoint can drop it for a stacked layout without
-// touching Footer.tsx
+// one section of the footer (version/Github row, the privacy note) - the
+// "|" between them is a generated pseudo-element rather than markup, so the
+// mobile breakpoint can drop it for a stacked layout without touching
+// Footer.tsx
 .footer-item {
   display: flex;
   align-items: center;
@@ -1167,6 +1167,14 @@ nav {
   }
 }
 
+// the tag filter's own panel (see Wallet.tsx) can list far more entries
+// than Sort's fixed two or More's fixed handful - caps it to a scrollable
+// height instead of letting a long tag list push the rest of the page down
+.tag-menu-panel {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 @media (max-width: 700px) {
   // icons only for the note-action row on a small screen - Rotate/Split/
   // Combine/etc's labels (.btn-label, set on each button above) just crowd
@@ -1473,6 +1481,27 @@ nav {
   overflow-wrap: anywhere;
 }
 
+// wraps a label's own leading [tag] pills (see noteTags.ts) alongside
+// whatever free text follows them, so a long tag list wraps onto its own
+// lines without dragging the label's italic caption along with it
+.bearer-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.bearer-tag {
+  font-size: 0.75em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  opacity: 0.9;
+  background-color: rgba(
+    color.adjust($accent-base, $lightness: -10%),
+    $transparency
+  );
+}
+
 .bearer-actions {
   display: flex;
   align-items: center;
@@ -1709,6 +1738,16 @@ nav {
   padding-right: 34px;
   h4 {
     margin: 0;
+  }
+  // overrides label's own block/margin-top - inline and vertically centered
+  // against the title next to it, not stacked below like a normal form label
+  label {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    font-size: 0.9em;
+    white-space: nowrap;
+    cursor: pointer;
   }
 }
 

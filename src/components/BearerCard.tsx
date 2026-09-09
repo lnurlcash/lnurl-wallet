@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, createMemo, createSignal} from 'solid-js'
+import {Show, For, createMemo, createSignal} from 'solid-js'
 import {
   IoTrashSharp,
   IoShieldCheckmarkSharp,
@@ -48,6 +48,7 @@ import {
 import Qr from './Qr'
 import FiatValue from './FiatValue'
 import Dialog from './Dialog'
+import {decodeTag, parseLabelTags} from '../noteTags'
 
 export type BearerCardProps = {
   bearer: Bearer
@@ -86,6 +87,10 @@ const BearerCard: Component<BearerCardProps> = props => {
 
   const k1 = () => noteK1(props.bearer.url) || ''
   const isSpent = () => !!props.bearer.spent
+
+  // a leading run of [tag] brackets on the label (see noteTags.ts) reads as
+  // this note's tags; whatever's left after them is the free-text label
+  const parsedLabel = createMemo(() => parseLabelTags(props.bearer.label || ''))
 
   // this note's issuing mint's self-reported node color (cached via the
   // mint-address lookup, see trustedMints.ts) - tints the card's own
@@ -253,7 +258,14 @@ const BearerCard: Component<BearerCardProps> = props => {
             <FiatValue msat={props.bearer.amount} />
           </span>
           <Show when={props.bearer.label && !isSpent()}>
-            <span class="bearer-label">{props.bearer.label}</span>
+            <div class="bearer-tags-row">
+              <For each={parsedLabel().tags}>
+                {tag => <span class="bearer-tag">{decodeTag(tag)}</span>}
+              </For>
+              <Show when={parsedLabel().text}>
+                <span class="bearer-label">{parsedLabel().text}</span>
+              </Show>
+            </div>
           </Show>
           <div class="bearer-badges">
             <Show when={sunsetDate()}>

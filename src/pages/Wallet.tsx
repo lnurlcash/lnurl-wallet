@@ -24,7 +24,8 @@ import {
   IoClipboardSharp,
   IoReturnDownForwardSharp,
   IoEllipsisVerticalSharp,
-  IoSwapVerticalSharp
+  IoSwapVerticalSharp,
+  IoPricetagsSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
 
@@ -70,6 +71,7 @@ import {
   setNoteGroupByMint
 } from '../notePrefs'
 import {notify, NotifyKind, msatToSats, pasteFromClipboard} from '../helpers'
+import {decodeTag, parseLabelTags} from '../noteTags'
 import {takeMeltInvoice} from '../meltHandoff'
 import {receiveIntoWallet} from '../receive'
 import BearerCard from '../components/BearerCard'
@@ -100,6 +102,10 @@ const Wallet: Component = () => {
   // separate per-mint sections
   const [showSpent, setShowSpent] = createSignal(false)
   const [searchQuery, setSearchQuery] = createSignal('')
+  // tag ids (see noteTags.ts) currently filtering the list - a note matches
+  // once it carries any one of these, not all of them; empty means no tag
+  // filter is active at all, same "off" meaning as an empty searchQuery
+  const [selectedTags, setSelectedTags] = createSignal<Set<string>>(new Set())
   // the search field starts collapsed to a plain button, like the other
   // list-controls toggles - opening it mounts the actual input (see the
   // ref below, which focuses it the moment it appears)
@@ -151,6 +157,11 @@ const Wallet: Component = () => {
   // collapse-behind-one-button treatment as that one and Sort above
   const [showListMoreMenu, setShowListMoreMenu] = createSignal(false)
   let listMoreMenuRef: HTMLDivElement | null = null
+  // same collapse-behind-one-button treatment as Sort/More above - a panel
+  // listing every tag currently in use (see noteTags.ts), toggled on/off
+  // the active filter set rather than picking just one
+  const [showTagMenu, setShowTagMenu] = createSignal(false)
+  let tagMenuRef: HTMLDivElement | null = null
   onMount(() => {
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as Node
@@ -162,6 +173,9 @@ const Wallet: Component = () => {
       }
       if (listMoreMenuRef && !listMoreMenuRef.contains(target)) {
         setShowListMoreMenu(false)
+      }
+      if (tagMenuRef && !tagMenuRef.contains(target)) {
+        setShowTagMenu(false)
       }
     }
     document.addEventListener('mousedown', onDocClick)
@@ -313,18 +327,49 @@ const Wallet: Component = () => {
     showSpent() ? bearers() : bearers().filter(b => !b.spent)
   )
 
+  // every distinct tag currently in use among the notes being shown (see
+  // noteTags.ts) - a tag only found on a hidden spent note doesn't appear
+  // here either, same visibility rule Show spent already applies to the
+  // list itself
+  const availableTags = createMemo(() => {
+    const tags = new Set<string>()
+    for (const b of visibleBearers()) {
+      for (const tag of parseLabelTags(b.label || '').tags) tags.add(tag)
+    }
+    return [...tags].sort((a, b) => decodeTag(a).localeCompare(decodeTag(b)))
+  })
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) next.delete(tag)
+      else next.add(tag)
+      return next
+    })
+  }
+
   // matches either the issuing mint's hostname or the note's sat amount -
   // msatToSats formats with locale thousands separators (e.g. "1,000"),
   // which would never match a plain typed "1000", so amount matching goes
-  // straight off the raw sats value instead
+  // straight off the raw sats value instead. A tag filter (if any tags are
+  // selected) is ANDed on top: a note need only carry one of them, not all
   const filteredBearers = createMemo(() => {
     const q = searchQuery().trim().toLowerCase()
-    if (!q) return visibleBearers()
-    return visibleBearers().filter(
-      b =>
-        serverOf(b.url).toLowerCase().includes(q) ||
-        String(Math.floor(b.amount / 1000)).includes(q)
-    )
+    const tags = selectedTags()
+    return visibleBearers().filter(b => {
+      if (
+        q &&
+        !serverOf(b.url).toLowerCase().includes(q) &&
+        !String(Math.floor(b.amount / 1000)).includes(q)
+      ) {
+        return false
+      }
+      if (tags.size > 0) {
+        const noteTags = parseLabelTags(b.label || '').tags
+        if (!noteTags.some(t => tags.has(t))) return false
+      }
+      return true
+    })
   })
 
   const sortedBearers = createMemo(() => {
@@ -1812,6 +1857,38 @@ const Wallet: Component = () => {
                   <IoLayersSharp />
                   <span class="btn-label">&nbsp;Group</span>
                 </button>
+                <Show when={availableTags().length > 0}>
+                  <div class="more-menu" ref={el => (tagMenuRef = el)}>
+                    <button
+                      type="button"
+                      class="icon-btn list-more-btn"
+                      classList={{active: selectedTags().size > 0}}
+                      title={
+                        selectedTags().size > 0
+                          ? `Filtering by ${selectedTags().size} tag${selectedTags().size === 1 ? '' : 's'} - click to change`
+                          : 'Filter by tag'
+                      }
+                      onClick={() => setShowTagMenu(v => !v)}
+                    >
+                      <IoPricetagsSharp />
+                    </button>
+                    <Show when={showTagMenu()}>
+                      <div class="more-menu-panel tag-menu-panel">
+                        <For each={availableTags()}>
+                          {tag => (
+                            <button
+                              type="button"
+                              classList={{active: selectedTags().has(tag)}}
+                              onClick={() => toggleTag(tag)}
+                            >
+                              {decodeTag(tag)}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
                 <div class="more-menu" ref={el => (listMoreMenuRef = el)}>
                   <button
                     type="button"
