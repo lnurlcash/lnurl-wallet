@@ -1149,6 +1149,23 @@ const Mint: Component = () => {
     }
   }
 
+  // bulk variants of the two buttons above - run every trusted mint's own
+  // refresh/rescan one at a time, reusing the exact same calls (and their
+  // existing addressBusy/rescanningServer single-flight guards), so a
+  // lone mint's own button is disabled for the same reason while either
+  // runs, and each card's own spinner lights up as its turn comes
+  const refreshAllMints = async () => {
+    for (const mint of trustedMints()) {
+      await refreshMint(mint)
+    }
+  }
+
+  const rescanAllMints = async () => {
+    for (const mint of trustedMints()) {
+      await rescanMint(mint)
+    }
+  }
+
   const addManualMint = () => {
     try {
       const name = manualServer().trim()
@@ -1547,6 +1564,49 @@ const Mint: Component = () => {
             </Show>
           </RequireWallet>
           <h4>Trusted mints</h4>
+          <Show when={trustedMints().length > 0}>
+            <div class="btns">
+              <button
+                type="button"
+                disabled={addressBusy() || offlineMode()}
+                title={
+                  offlineMode()
+                    ? 'Offline mode is on'
+                    : "Refresh every trusted mint's cached info, one at a time"
+                }
+                onClick={refreshAllMints}
+              >
+                <IoRefreshSharp classList={{spin: addressBusy()}} />
+                &nbsp;Refresh all
+              </button>
+              <Show when={state() === 'unlocked'}>
+                <button
+                  type="button"
+                  disabled={
+                    offlineMode() ||
+                    !hasCashRoot() ||
+                    rescanningServer() !== null
+                  }
+                  title={
+                    offlineMode()
+                      ? 'Offline mode is on'
+                      : !hasCashRoot()
+                        ? 'No seed loaded for this wallet - restore your seed again first'
+                        : 'Rescan every trusted mint for missing notes, one at a time'
+                  }
+                  onClick={rescanAllMints}
+                >
+                  <Show
+                    when={rescanningServer() !== null}
+                    fallback={<IoSearchSharp />}
+                  >
+                    <IoRefreshSharp class="spin" />
+                  </Show>
+                  &nbsp;Rescan all
+                </button>
+              </Show>
+            </div>
+          </Show>
           <Show
             when={trustedMints().length > 0}
             fallback={<p>No trusted mints yet.</p>}
@@ -1662,12 +1722,15 @@ const Mint: Component = () => {
                         </button>
                       </div>
                     </Show>
-                    <div class="btns mint-actions">
-                      {/* only meaningful with an unlocked wallet - this
-                      whole section otherwise stays usable locked/offline
-                      (see the top-of-file comment), but starting a mint
-                      needs the AES key to store the resulting bearer */}
-                      <Show when={state() === 'unlocked'}>
+                    {/* only meaningful with an unlocked wallet - this whole
+                    section otherwise stays usable locked/offline (see the
+                    top-of-file comment), but starting a mint needs the AES
+                    key to store the resulting bearer, and rescanning needs
+                    the seed-derived cash root - split onto its own row
+                    (with labels) since it's a different .btns block, rather
+                    than crammed unlabeled among the icon-only row below */}
+                    <Show when={state() === 'unlocked'}>
+                      <div class="btns">
                         <button
                           disabled={busy() || offlineMode()}
                           onClick={() =>
@@ -1676,27 +1739,7 @@ const Mint: Component = () => {
                         >
                           Mint
                         </button>
-                      </Show>
-                      <button
-                        class="icon-btn"
-                        disabled={addressBusy() || offlineMode()}
-                        title={offlineMode() ? 'Offline mode is on' : 'Refresh'}
-                        onClick={() => refreshMint(mint)}
-                      >
-                        <IoRefreshSharp
-                          classList={{spin: refreshingServer() === mint.server}}
-                        />
-                      </button>
-                      <button
-                        class="icon-btn icon-btn-gap"
-                        title="Copy signing pubkey"
-                        onClick={() => copyToClipboard(mint.mintPubkey)}
-                      >
-                        <IoCopySharp />
-                      </button>
-                      <Show when={state() === 'unlocked'}>
                         <button
-                          class="icon-btn icon-btn-gap"
                           disabled={
                             offlineMode() ||
                             !hasCashRoot() ||
@@ -1717,8 +1760,28 @@ const Mint: Component = () => {
                           >
                             <IoRefreshSharp class="spin" />
                           </Show>
+                          &nbsp;Rescan
                         </button>
-                      </Show>
+                      </div>
+                    </Show>
+                    <div class="btns">
+                      <button
+                        class="icon-btn"
+                        disabled={addressBusy() || offlineMode()}
+                        title={offlineMode() ? 'Offline mode is on' : 'Refresh'}
+                        onClick={() => refreshMint(mint)}
+                      >
+                        <IoRefreshSharp
+                          classList={{spin: refreshingServer() === mint.server}}
+                        />
+                      </button>
+                      <button
+                        class="icon-btn icon-btn-gap"
+                        title="Copy signing pubkey"
+                        onClick={() => copyToClipboard(mint.mintPubkey)}
+                      >
+                        <IoCopySharp />
+                      </button>
                       <a
                         class="icon-btn icon-btn-gap"
                         title="Open this mint"

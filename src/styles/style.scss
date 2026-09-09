@@ -124,7 +124,7 @@ h2 {
 // from the left edge by its own padding, out of line with the note grid and
 // every other section below it, none of which are boxed either
 .wallet-hero {
-  margin: 0 0 24px 0;
+  margin: 0 0 12px 0;
 }
 
 // Mint - the wallet's one remaining explicit shortcut, sized up from the
@@ -1047,7 +1047,7 @@ nav {
 // their own row above .selection-toolbar (which is about acting on
 // whatever's currently selected, not how the list looks or what's picked)
 .list-controls {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .list-controls-row {
@@ -1192,10 +1192,12 @@ nav {
     background: rgba($bg, 0.95);
     padding: 8px 0;
   }
-  // symmetric icon-sized padding once the label's gone - without this,
-  // .spent-btn/.group-btn keep the base button rule's 6px 14px (built for
-  // icon+text), which reads as a thin, too-short tap target once they're
-  // icon-only; the rest already had a similarly-cramped 10px override here,
+  // symmetric icon-sized padding, so every button in these two rows ends
+  // up the same height on a small screen - without this, .search-toggle-btn/
+  // .spent-btn/.group-btn (icon-only once their label's gone) and
+  // .sort-toggle-btn (never loses its label, but still needs to match)
+  // keep the base button rule's 6px 14px, shorter than the rest here; the
+  // action row's own buttons had a similarly-cramped 10px override,
   // bumped up alongside these for the same reason
   .refresh-btn,
   .split-single-btn,
@@ -1204,8 +1206,11 @@ nav {
   .transfer-btn,
   .more-btn,
   .clear-selection-btn,
+  .search-toggle-btn,
+  .sort-toggle-btn,
   .spent-btn,
-  .group-btn {
+  .group-btn,
+  .list-more-btn {
     padding: 12px;
   }
   // the More actions panel (both the selection toolbar's and the list
@@ -1554,29 +1559,36 @@ nav {
   }
 }
 
+// a real grid instead of organic flex-wrap: a card's width should be its
+// column's width, not an arbitrary cap that leaves dead space beside a
+// lone card on a mid-width screen (see the mobile override below) - 2
+// columns is the desktop default, widening to 3 once a column has enough
+// room to comfortably fit a card's Mint/Rescan row without cramping it
 .mint-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
   gap: 21px;
+}
+
+@media (min-width: 1400px) {
+  .mint-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 .mint-card {
   display: block;
-  max-width: 320px;
   h4 {
     overflow-wrap: anywhere;
   }
 }
 
-// Mint/Refresh/Copy/Rescan/Open/mempool/Remove - too many icon buttons to
-// reliably fit .mint-card's 320px on every combination (mempool link and
-// Rescan are both conditional), so .btns's usual flex-wrap: wrap left the
-// last one (Remove) breaking onto its own line. nowrap plus a horizontal
-// scroll fallback keeps the row intact instead of ever breaking it
-.mint-actions {
-  flex-wrap: nowrap;
-  overflow-x: auto;
+@media (max-width: 700px) {
+  // one full-width column instead of two cramped ones - same reasoning as
+  // .two-columns's own mobile collapse just above
+  .mint-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .mint-pubkey {

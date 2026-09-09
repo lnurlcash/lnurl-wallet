@@ -1690,6 +1690,7 @@ const Wallet: Component = () => {
                   fallback={
                     <button
                       type="button"
+                      class="search-toggle-btn"
                       title="Search notes by mint or amount"
                       onClick={() => setShowSearch(true)}
                     >
@@ -1740,6 +1741,7 @@ const Wallet: Component = () => {
                 <div class="sort-menu" ref={el => (sortMenuRef = el)}>
                   <button
                     type="button"
+                    class="sort-toggle-btn"
                     title={`Sort by ${sortKey()} (${sortDesc() ? 'descending' : 'ascending'})`}
                     onClick={() => setShowSortMenu(v => !v)}
                   >
@@ -1813,7 +1815,7 @@ const Wallet: Component = () => {
                 <div class="more-menu" ref={el => (listMoreMenuRef = el)}>
                   <button
                     type="button"
-                    class="icon-btn"
+                    class="icon-btn list-more-btn"
                     title="More actions - rotate all, remove all spent"
                     onClick={() => setShowListMoreMenu(v => !v)}
                   >
