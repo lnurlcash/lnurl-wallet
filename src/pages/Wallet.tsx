@@ -1790,6 +1790,7 @@ const Wallet: Component = () => {
                 <Show when={spentCount() > 0}>
                   <button
                     type="button"
+                    class="spent-btn"
                     classList={{active: showSpent()}}
                     title="Spent notes are locally locked (melted, or marked by hand) - this just shows or hides them, it doesn't change anything about them"
                     onClick={() => setShowSpent(v => !v)}
@@ -1801,6 +1802,7 @@ const Wallet: Component = () => {
                 </Show>
                 <button
                   type="button"
+                  class="group-btn"
                   classList={{active: groupByMint()}}
                   title="Show notes grouped under their issuing mint instead of one flat list"
                   onClick={() => setGroupByMint(!groupByMint())}

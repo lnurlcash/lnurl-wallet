@@ -8,6 +8,11 @@ export type ScannerProps = {
   accept?: (value: string) => boolean
 }
 
+// whether this device/browser can even attempt a camera scan - used to hide
+// the scan toggle entirely rather than show it and fail on first tap
+export const canScan = (): boolean =>
+  typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+
 // Camera QR scanning: the native BarcodeDetector API when available (fast,
 // no extra decode work on the main thread), falling back to jsQR (~30kB)
 // decoding raw video frames via an off-screen canvas everywhere else -

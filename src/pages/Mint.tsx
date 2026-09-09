@@ -1662,7 +1662,7 @@ const Mint: Component = () => {
                         </button>
                       </div>
                     </Show>
-                    <div class="btns">
+                    <div class="btns mint-actions">
                       {/* only meaningful with an unlocked wallet - this
                       whole section otherwise stays usable locked/offline
                       (see the top-of-file comment), but starting a mint

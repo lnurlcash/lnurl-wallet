@@ -1,7 +1,7 @@
 import type {Component} from 'solid-js'
 import {Show, createSignal} from 'solid-js'
 import {IoScanSharp} from 'solid-icons/io'
-import Scanner from './Scanner'
+import Scanner, {canScan} from './Scanner'
 
 export type ScanToggleProps = {
   onScan: (value: string) => void
@@ -22,7 +22,7 @@ const ScanToggle: Component<ScanToggleProps> = props => {
   }
 
   return (
-    <>
+    <Show when={canScan()}>
       <Show when={showScanner()}>
         {/* forces its own full-width line via flex-wrap, so the preview
         sits above the row's icons/input instead of squeezed inline with
@@ -40,7 +40,7 @@ const ScanToggle: Component<ScanToggleProps> = props => {
       >
         <IoScanSharp />
       </button>
-    </>
+    </Show>
   )
 }
 export default ScanToggle

@@ -1192,14 +1192,32 @@ nav {
     background: rgba($bg, 0.95);
     padding: 8px 0;
   }
+  // symmetric icon-sized padding once the label's gone - without this,
+  // .spent-btn/.group-btn keep the base button rule's 6px 14px (built for
+  // icon+text), which reads as a thin, too-short tap target once they're
+  // icon-only; the rest already had a similarly-cramped 10px override here,
+  // bumped up alongside these for the same reason
   .refresh-btn,
   .split-single-btn,
   .combine-btn,
   .split-btn,
   .transfer-btn,
   .more-btn,
-  .clear-selection-btn {
-    padding: 10px;
+  .clear-selection-btn,
+  .spent-btn,
+  .group-btn {
+    padding: 12px;
+  }
+  // the More actions panel (both the selection toolbar's and the list
+  // filter's) sits near the row's right edge once labels collapse it
+  // there - left:0 (its default, fine on a wide desktop row) expands the
+  // panel rightward off the edge of a narrow screen and gets clipped.
+  // Sort's own dropdown reuses .more-menu-panel too but stays near the
+  // row's left edge, so it's excluded here - flipping it as well would
+  // just move the same cutoff to its left side instead
+  .more-menu .more-menu-panel {
+    left: auto;
+    right: 0;
   }
 }
 
@@ -1549,6 +1567,16 @@ nav {
   h4 {
     overflow-wrap: anywhere;
   }
+}
+
+// Mint/Refresh/Copy/Rescan/Open/mempool/Remove - too many icon buttons to
+// reliably fit .mint-card's 320px on every combination (mempool link and
+// Rescan are both conditional), so .btns's usual flex-wrap: wrap left the
+// last one (Remove) breaking onto its own line. nowrap plus a horizontal
+// scroll fallback keeps the row intact instead of ever breaking it
+.mint-actions {
+  flex-wrap: nowrap;
+  overflow-x: auto;
 }
 
 .mint-pubkey {
