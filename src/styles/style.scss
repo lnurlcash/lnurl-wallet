@@ -1698,6 +1698,20 @@ nav {
   z-index: 1;
 }
 
+// a dialog title sharing its row with a right-aligned action (e.g.
+// BearerCard's strip-sig toggle) - padding-right clears .dialog-close-btn's
+// own fixed top-right corner so the two never overlap
+.dialog-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-right: 34px;
+  h4 {
+    margin: 0;
+  }
+}
+
 @media (max-width: 700px) {
   // full-screen instead of a floating centered card - more screen for the
   // dialog's own content on a small viewport, and the close button (still

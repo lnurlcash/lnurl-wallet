@@ -373,6 +373,19 @@ export const withoutK1 = (
   return newUrl.toString()
 }
 
+// strips a note's own sig, if any, leaving k1/amount/everything else
+// untouched - for a holder who'd rather hand over a note that can't be
+// checked offline against a pinned mint key than have this wallet keep
+// disclosing which service issued it. Offline verification (see
+// verifyNoteSignature) already treats a missing sig as simply unverifiable,
+// never as an error, so a stripped note remains an otherwise ordinary
+// bearer note to whoever receives it.
+export const withoutSignature = (url: string): string => {
+  const newUrl = new URL(url)
+  newUrl.searchParams.delete('sig')
+  return newUrl.toString()
+}
+
 export const serverOf = (url: string): string => {
   try {
     return new URL(url).host
