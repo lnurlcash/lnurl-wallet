@@ -38,127 +38,37 @@ const Docs: Component = () => {
           >
             LUD-03
           </a>{' '}
-          withdrawRequest link whose <code>k1</code> <em>is</em> the asset:
+          withdrawRequest link whose <code>k1</code> <em>is</em> the asset -
+          whoever knows it controls the sats behind it, like a banknote. See
+          the spec linked above for the full protocol: melt, rotate, split,
+          merge, minting, and offline verification signatures.
         </p>
-        <pre>{`lnurlw://mint.example/withdraw?k1=<secret>&amount=<msat>`}</pre>
-        <p>
-          Whoever knows the <code>k1</code> controls the sats behind it - like a
-          banknote. The <code>amount</code> alongside it is just a claim by
-          whoever encoded the note, so any recipient can display a value before
-          contacting the service - it's untrusted until an online GET confirms
-          it (or a signature backs it, see below). No new endpoint, no new
-          encoding: a wallet that doesn't know LNURLcash just sees a normal
-          withdraw link and can cash it out to a BOLT-11 invoice. A GET on the
-          note's LNURL is purely <strong>informational</strong> - it reports the
-          note's authoritative value (<code>maxWithdrawable</code>) and never
-          burns anything, ignoring the URL's own <code>amount</code> claim. All
-          mutating operations go to the <code>callback</code> from that
-          response:
-        </p>
-        <pre>{`callback?k1=X&pr=<bolt11>                melt: X burned, pr (of exactly its value) paid
-callback?k1=X&h=<sha256(X')>             rotate: X burned, a note keyed by h (same value) minted
-callback?k1=X&amount=<msat>&h=..&h2=..   split: X burned, notes keyed by h (amount) + h2 (change) minted
-callback?k1=X&k1=Y&h=<sha256(Z)>         merge: all burned, one note keyed by h (the sum) minted`}</pre>
-        <p>
-          For rotate/split/merge,{' '}
-          <strong>this wallet generates the new note's secret itself</strong>,
-          never the service - a fresh random 32-byte value, disclosed only as
-          its hash (<code>h</code>, and <code>h2</code> for a split's change
-          note). The service registers the note under that hash directly, so the
-          response carries no <code>k1</code>/<code>change</code> at all, just{' '}
-          <code>{`{"status":"OK"}`}</code> (plus <code>sig</code>/
-          <code>sig2</code> if it signs - see Offline verification below). The
-          service therefore never sees, generates, or persists the raw secret
-          for these - closing the "prior holder" exposure a server-generated
-          replacement would otherwise reopen on every single rotate.
-        </p>
-        <p>
-          Melt only ever takes a single <code>k1</code> - to melt several notes
-          in one payment, merge them first. Its <code>{`{"status":"OK"}`}</code>{' '}
-          only means the payment is now on its way, not that the note is
-          confirmed spent yet: the service pays it out asynchronously and only
-          finalizes the burn once that settles, restoring the note if it fails
-          instead. The wallet locks a just-melted note as spent right away
-          rather than assume success.
-        </p>
-        <p>
-          A service <strong>MAY</strong> attach a <strong>melt proof</strong> to
-          that response: <code>pr</code> (the invoice this melt is paying,
-          echoed back) and <code>verify</code>, a LUD-21-style URL reporting
-          that outgoing payment's own settlement. Because a BOLT-11{' '}
-          <code>pr</code> commits to{' '}
-          <code>payment_hash = sha256(preimage)</code>, anyone holding both{' '}
-          <code>pr</code> and the <code>preimage</code> <code>verify</code>{' '}
-          eventually returns - not just the service - can independently confirm
-          the melt happened. When a melt returns one, the wallet polls it (same
-          cadence as its minting check) and treats a settled result as final:
-          the note, already locked as spent, is confirmed gone. Without one, the
-          note stays locked with no automatic way to learn its outcome - use
-          "Unspend anyway" on the note's card if a payment ever turns out to
-          have failed.
-        </p>
+        <p>What this wallet does beyond what the spec mandates:</p>
         <ul>
           <li>
-            <strong>Mint</strong>: a{' '}
-            <a
-              href="https://github.com/lnurl/luds/blob/luds/06.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              LUD-06
-            </a>{' '}
-            payRequest advertising <code>withdrawLink</code> mints notes. For
-            every new note, this wallet requires <code>commentAllowed: 64</code>{' '}
-            and sends the note's SHA-256 commitment as the callback{' '}
-            <code>comment</code> and identical additive <code>h</code>. With a
-            connected LNURLvault and a receipt-capable mint, the vault generates
-            and retains the secret before the invoice exists. The wallet
-            displays that invoice only after its quote commits the same hash and
-            amount, then authenticates the settled note signature against the
-            pinned mint key before confirming the device note. No secret export,
-            import, or rotate occurs. The public recovery state is saved before
-            the invoice QR appears, so a reload can safely resume. If that
-            receipt extension is unavailable, a fresh invoice instead binds a
-            seed-recoverable browser secret which is imported and rotated onto
-            the connected vault after settlement. The payment preimage is proof,
-            never the note. A mint without the mandatory comment capacity is
-            refused before any invoice is created or paid. When an invoice
-            advertises a{' '}
-            <a
-              href="https://github.com/lnurl/luds/blob/luds/21.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              LUD-21
-            </a>{' '}
-            verify URL, a "Check payment" button appears with a countdown and
-            checks automatically every 5 seconds. A settled response is bound to
-            the requested invoice; the wallet either validates the sealed
-            receipt or claims with its already held browser secret. Any returned
-            preimage remains ordinary payment proof. A mint MAY also withhold a
-            fee on minting, advertised as an extra{' '}
-            <code>Mint fees: base_msat,ppm</code> entry in the payRequest's
-            metadata - when present, this wallet shows it and requests a bigger
-            invoice so the note you end up holding still nets the amount you
-            asked for.
+            <strong>Generates every rotate/split/merge secret itself</strong>,
+            never the service - disclosed to the service only as its hash, so
+            the service is never a prior holder of a note it registers this
+            way.
           </li>
           <li>
-            <strong>Melt</strong> has the service pay a bolt11 invoice of
-            exactly the note's value - merge first to melt several at once.
+            <strong>Rotates a received note immediately</strong> after the
+            informational GET that verifies it - whoever handed it over
+            already knows the old secret, so their copy needs burning
+            regardless.
           </li>
           <li>
-            <strong>Split</strong> burns a note into two fresh ones - the amount
-            you chose and the change.
+            With a connected <strong>LNURLvault</strong> and a receipt-capable
+            mint, the vault generates and holds the secret before the invoice
+            exists; this wallet confirms the note only once the settled
+            receipt's signature checks out against the pinned mint key.
+            Without that, it falls back to a secret from its own seed-derived
+            cash ladder.
           </li>
           <li>
-            <strong>Combine</strong> merges selected same-service notes into
-            one, in a single request.
-          </li>
-          <li>
-            <strong>Receive</strong>: a scanned or pasted note is rotated
-            immediately after a hash-only informational GET verifies it. Whoever
-            handed the note over already knows the old secret, so their copy
-            needs burning out regardless of who they are.
+            Requires <code>commentAllowed: 64</code> on new mints and commits
+            the note's hash as the callback <code>comment</code>, refusing
+            mints that don't support it before any invoice is created.
           </li>
         </ul>
       </div>
@@ -167,66 +77,33 @@ callback?k1=X&k1=Y&h=<sha256(Z)>         merge: all burned, one note keyed by h 
         <h3>Offline verification</h3>
         <p>
           A bearer note is otherwise an opaque secret - an offline recipient
-          can't tell who issued it, by whom, or for how much, until they're back
-          online and can ask the service directly. A service{' '}
-          <strong>MUST</strong> close that gap by publishing a stable{' '}
-          <code>mintPubkey</code> on its withdrawRequest response and signing
-          each fresh secret's hash on rotate, split or merge (the{' '}
-          <code>sig</code>/<code>sig2</code> in that callback's response - a
-          freshly minted note has none until rotated once).
+          can't tell who issued it, by whom, or for how much, until they're
+          back online. The spec's signature scheme (see LUD-25 above) closes
+          that gap; this wallet's own handling of it:
         </p>
-        <p>
-          The key is controlled by the service. It should be the funding node
-          identity when that backend exposes compatible signing, but it may be a
-          dedicated, securely persisted secp256k1 key otherwise. A dedicated key
-          proves issuance by the pinned service, not by the Lightning node which
-          funded it. The signature uses the same digest wrapping as{' '}
-          <a
-            href="https://github.com/lnurl/luds/blob/luds/13.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            LUD-13
-          </a>{' '}
-          signs its auth seed phrase:
-        </p>
-        <pre>{`message = "LNURLcash:" || amount_msat (decimal) || ":" || h
-digest  = sha256(sha256("Lightning Signed Message:" || message))`}</pre>
-        <p>
-          <code>h</code> here is exactly <code>hex(sha256(k1))</code> - the same
-          hash this wallet already handed the service on the callback request
-          for a new note, so the service signs precisely what it was given,
-          never a secret it had to derive itself. The signature then travels
-          alongside the note's own URL as one extra query parameter, ignored by
-          wallets that don't check it:
-        </p>
-        <pre>{`lnurlw://mint.example/withdraw?k1=<secret>&amount=<msat>&sig=<hex>`}</pre>
-        <p>
-          When this wallet already knows a service's current or accepted
-          previous signing key and a note carries a <code>sig</code>, it
-          recovers the signer and compares it - a match shows as a "signed"
-          badge on the note's card, entirely offline. This only proves the note{' '}
-          <em>was issued</em> for that amount, never that it's still unspent -
-          the only definitive check is an online rotate.
-        </p>
-        <p>
-          Signing keys are pinned to the service's full origin, including its
-          scheme and port. Every accepted key lives in the{' '}
-          <A href="/mint">Trusted mints</A> section, at the bottom of the Mint
-          page. The first time it sees a brand new one - looking a mint up,
-          before minting anything from it - it asks whether to trust it;
-          declining cancels that lookup. A different key is staged for review
-          and never silently replaces the pin, since an unsigned response cannot
-          authorise its own replacement. Notes signed under a retired key stop
-          verifying offline; a refresh re-signs them under the current one. A
-          mint you already hold a bearer note from is trusted automatically
-          instead (holding funds there already implied trusting it) and can't be
-          removed from the list; anything you added yourself - by confirming a
-          lookup or typing it in directly - can be. The list travels with your{' '}
-          <A href="/settings">backup</A> file, in plain (a signing key isn't a
-          secret), but restored keys remain unconfirmed until corroborated by a
-          live lookup.
-        </p>
+        <ul>
+          <li>
+            Signing keys are <strong>pinned to a service's full origin</strong>
+            (scheme + port), tracked on the{' '}
+            <A href="/mint">Trusted mints</A> section of the Mint page. The
+            first lookup against a brand new key asks whether to trust it; a
+            later, different key is staged for review rather than silently
+            replacing the pin, since an unsigned response cannot authorise its
+            own replacement.
+          </li>
+          <li>
+            Verification tries both the spec text's signature byte order and
+            the recovery-id-leading order at least one real implementation
+            has sent, rather than hard-failing real notes over it.
+          </li>
+          <li>
+            A mint you already hold a note from is trusted automatically and
+            can't be removed; anything added by hand can be. The list travels
+            with your <A href="/settings">backup</A> in plain (a signing key
+            isn't a secret), but restored keys stay unconfirmed until a live
+            lookup corroborates them.
+          </li>
+        </ul>
       </div>
 
       <div class="docs-card">
@@ -262,7 +139,7 @@ digest  = sha256(sha256("Lightning Signed Message:" || message))`}</pre>
         <p>
           A wallet created before this scheme shipped instead derives its key
           through a LUD-05 linking keypair the wallet never actually presents to
-          any service - the Backup page's "Upgrade encryption" action re-derives
+          any service - the Settings page's "Upgrade encryption" action re-derives
           and re-encrypts everything under the simpler seed-direct key, once,
           with the seed phrase re-entered to prove it belongs to that wallet.
         </p>
@@ -271,7 +148,7 @@ digest  = sha256(sha256("Lightning Signed Message:" || message))`}</pre>
       <div class="docs-card">
         <h3>Backup</h3>
         <p>
-          The Backup page downloads a single JSON file containing{' '}
+          The Settings page downloads a single JSON file containing{' '}
           <strong>all your bearer notes exactly as stored - encrypted</strong>.
           The file never contains a plaintext secret. If your encryption key is
           password-encrypted, its ciphertext is included as well, so backup +
@@ -294,7 +171,7 @@ digest  = sha256(sha256("Lightning Signed Message:" || message))`}</pre>
         </p>
         <h3>Forget this wallet</h3>
         <p>
-          The Backup page can also wipe this wallet from the device entirely -
+          The Settings page can also wipe this wallet from the device entirely -
           the encryption key <em>and</em> every bearer note, after confirming.
           Unlike locking, this isn't undone by restoring the same seed
           afterward: the notes' ciphertext is deleted too, not just re-locked
