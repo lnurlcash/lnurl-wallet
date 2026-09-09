@@ -39,36 +39,34 @@ const Docs: Component = () => {
             LUD-03
           </a>{' '}
           withdrawRequest link whose <code>k1</code> <em>is</em> the asset -
-          whoever knows it controls the sats behind it, like a banknote. See
-          the spec linked above for the full protocol: melt, rotate, split,
-          merge, minting, and offline verification signatures.
+          whoever knows it controls the sats behind it, like a banknote. See the
+          spec linked above for the full protocol: melt, rotate, split, merge,
+          minting, and offline verification signatures.
         </p>
         <p>What this wallet does beyond what the spec mandates:</p>
         <ul>
           <li>
             <strong>Generates every rotate/split/merge secret itself</strong>,
             never the service - disclosed to the service only as its hash, so
-            the service is never a prior holder of a note it registers this
-            way.
+            the service is never a prior holder of a note it registers this way.
           </li>
           <li>
             <strong>Rotates a received note immediately</strong> after the
-            informational GET that verifies it - whoever handed it over
-            already knows the old secret, so their copy needs burning
-            regardless.
+            informational GET that verifies it - whoever handed it over already
+            knows the old secret, so their copy needs burning regardless.
           </li>
           <li>
             With a connected <strong>LNURLvault</strong> and a receipt-capable
             mint, the vault generates and holds the secret before the invoice
             exists; this wallet confirms the note only once the settled
-            receipt's signature checks out against the pinned mint key.
-            Without that, it falls back to a secret from its own seed-derived
-            cash ladder.
+            receipt's signature checks out against the pinned mint key. Without
+            that, it falls back to a secret from its own seed-derived cash
+            ladder.
           </li>
           <li>
             Requires <code>commentAllowed: 64</code> on new mints and commits
-            the note's hash as the callback <code>comment</code>, refusing
-            mints that don't support it before any invoice is created.
+            the note's hash as the callback <code>comment</code>, refusing mints
+            that don't support it before any invoice is created.
           </li>
         </ul>
       </div>
@@ -77,24 +75,25 @@ const Docs: Component = () => {
         <h3>Offline verification</h3>
         <p>
           A bearer note is otherwise an opaque secret - an offline recipient
-          can't tell who issued it, by whom, or for how much, until they're
-          back online. The spec's signature scheme (see LUD-25 above) closes
-          that gap; this wallet's own handling of it:
+          can't tell who issued it, by whom, or for how much, until they're back
+          online. The spec's signature scheme (see LUD-25 above) closes that
+          gap; this wallet's own handling of it:
         </p>
         <ul>
           <li>
             Signing keys are <strong>pinned to a service's full origin</strong>
-            (scheme + port), tracked on the{' '}
-            <A href="/mint">Trusted mints</A> section of the Mint page. The
-            first lookup against a brand new key asks whether to trust it; a
-            later, different key is staged for review rather than silently
-            replacing the pin, since an unsigned response cannot authorise its
-            own replacement.
+            (scheme + port), tracked on the <A href="/mint">
+              Trusted mints
+            </A>{' '}
+            section of the Mint page. The first lookup against a brand new key
+            asks whether to trust it; a later, different key is staged for
+            review rather than silently replacing the pin, since an unsigned
+            response cannot authorise its own replacement.
           </li>
           <li>
-            Verification tries both the spec text's signature byte order and
-            the recovery-id-leading order at least one real implementation
-            has sent, rather than hard-failing real notes over it.
+            Verification tries both the spec text's signature byte order and the
+            recovery-id-leading order at least one real implementation has sent,
+            rather than hard-failing real notes over it.
           </li>
           <li>
             A mint you already hold a note from is trusted automatically and
@@ -139,9 +138,10 @@ const Docs: Component = () => {
         <p>
           A wallet created before this scheme shipped instead derives its key
           through a LUD-05 linking keypair the wallet never actually presents to
-          any service - the Settings page's "Upgrade encryption" action re-derives
-          and re-encrypts everything under the simpler seed-direct key, once,
-          with the seed phrase re-entered to prove it belongs to that wallet.
+          any service - the Settings page's "Upgrade encryption" action
+          re-derives and re-encrypts everything under the simpler seed-direct
+          key, once, with the seed phrase re-entered to prove it belongs to that
+          wallet.
         </p>
       </div>
 
