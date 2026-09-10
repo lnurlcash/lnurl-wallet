@@ -1851,3 +1851,65 @@ nav {
     max-width: 420px;
   }
 }
+
+// ---- addons ----
+
+// the declarative addon DSL's own rendered output (see src/addons/Renderer.tsx)
+// - deliberately plain/generic since every addon shares this one stylesheet,
+// same reasoning .docs-card etc already follow
+.addon-root {
+  max-width: 480px;
+}
+
+.addon-heading {
+  font-size: 1.3em;
+  font-weight: bold;
+  margin: 0 0 8px 0;
+}
+
+.addon-subheading {
+  font-size: 1.05em;
+  font-weight: bold;
+  margin: 16px 0 4px 0;
+}
+
+.addon-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  > button {
+    margin-right: 0;
+  }
+}
+
+.addon-field {
+  min-width: 0;
+  input,
+  select {
+    display: block;
+  }
+}
+
+.addon-ticket {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 0 12px 12px 0;
+  .qrcode {
+    max-width: 140px;
+  }
+}
+
+// the raw-JSON addon builder/editor (see Settings.tsx's Addons column) -
+// wide and monospace so a manifest's structure is actually readable while
+// editing
+.addon-builder-textarea {
+  width: 100%;
+  min-height: 320px;
+  font-family: monospace;
+  font-size: 0.85em;
+  white-space: pre;
+  resize: vertical;
+}

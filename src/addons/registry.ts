@@ -1,0 +1,28 @@
+import type {Addon} from './types'
+import {raffleAddon} from './raffle/manifest'
+import {customAddonManifests} from './customAddons'
+
+// bundled addons - ship in this app's own reviewed source, not fetched
+// from anywhere. This is the one line that changes when a second bundled
+// addon exists.
+export const ADDONS: Addon[] = [raffleAddon]
+
+const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))
+export const isBundledAddon = (id: string): boolean => BUNDLED_IDS.has(id)
+
+// bundled + holder-authored custom addons (see customAddons.ts and the
+// builder on Addons.tsx), merged - a custom addon never gets its own
+// `helpers` module (that's TS code; only the fixed built-in operators/
+// verbs are available to one), and a custom addon's id can never shadow a
+// bundled one (enforced at save time in Addons.tsx, not here). This is a
+// plain function, not a cached value, so it stays reactive when called
+// directly inside JSX (see addons/README.md's note on Renderer.tsx's own
+// reactivity rule - the same "read inline, don't precompute" rule applies
+// to every consumer of this list, not just Renderer.tsx).
+export const allAddons = (): Addon[] => [
+  ...ADDONS,
+  ...customAddonManifests().map(manifest => ({manifest, helpers: {}}))
+]
+
+export const findAddon = (id: string): Addon | undefined =>
+  allAddons().find(a => a.manifest.id === id)

@@ -24,6 +24,7 @@ import Docs from './pages/Docs'
 import Vault from './pages/Vault'
 import Claim from './pages/Claim'
 import Settings from './pages/Settings'
+import AddonRun from './pages/AddonRun'
 
 const root = document.getElementById('root')
 
@@ -92,6 +93,7 @@ const cleanup = render(
       <Route path="/backup" component={() => <Navigate href="/settings" />} />
       <Route path="/docs" component={Docs} />
       <Route path="/settings" component={Settings} />
+      <Route path="/addons/:addonId" component={AddonRun} />
       <Route path="/vault" component={Vault} />
       <Route path="/claim" component={Claim} />
       <Route path="*" component={() => <h1>Page not found</h1>} />

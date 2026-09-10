@@ -31,6 +31,16 @@ import {isValidSeedPhrase} from '../keys'
 import {trustedMints} from '../trustedMints'
 import {notify, NotifyKind} from '../helpers'
 import {MIN_PASSWORD_LENGTH} from './Setup'
+import {allAddons, isBundledAddon} from '../addons/registry'
+import {enabledAddonIds, setAddonEnabled} from '../addons/enabled'
+import {addonSettingsStore} from '../addons/settingsStore'
+import {saveCustomAddon, deleteCustomAddon, isCustomAddon} from '../addons/customAddons'
+import {validateManifest} from '../addons/validate'
+import {STARTER_TEMPLATE} from '../addons/starterTemplate'
+import {ADDON_ICONS} from '../addons/icons'
+import AddonRenderer from '../addons/Renderer'
+import Dialog from '../components/Dialog'
+import type {AddonManifest} from '../addons/types'
 
 // order they appear - 'none' (Disabled) first since that's the default/off
 // state, then alphabetical by the same three currencies price.lnbits.com
@@ -63,6 +73,51 @@ const Settings: Component = () => {
   const [upgradeConfirmPassword, setUpgradeConfirmPassword] = createSignal('')
   const [upgrading, setUpgrading] = createSignal(false)
   const [confirmForget, setConfirmForget] = createSignal(false)
+  const [editingAddon, setEditingAddon] = createSignal<AddonManifest | 'new' | null>(
+    null
+  )
+  const [addonDraft, setAddonDraft] = createSignal('')
+  const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<string | null>(
+    null
+  )
+
+  const startNewAddon = () => {
+    setAddonDraft(STARTER_TEMPLATE)
+    setEditingAddon('new')
+  }
+
+  const startEditAddon = (manifest: AddonManifest) => {
+    setAddonDraft(JSON.stringify(manifest, null, 2))
+    setEditingAddon(manifest)
+  }
+
+  const cancelEditAddon = () => {
+    setEditingAddon(null)
+    setAddonDraft('')
+  }
+
+  const saveAddon = () => {
+    try {
+      const parsed: unknown = JSON.parse(addonDraft())
+      const manifest = validateManifest(parsed)
+      if (isBundledAddon(manifest.id)) {
+        throw new Error(
+          `"${manifest.id}" is a built-in addon id and can't be used for a custom one - pick a different id.`
+        )
+      }
+      const wasEditing = editingAddon()
+      if (wasEditing !== 'new' && wasEditing && wasEditing.id !== manifest.id) {
+        // renamed id on an existing custom addon - the old entry would
+        // otherwise linger alongside the new one under a different key
+        deleteCustomAddon(wasEditing.id)
+      }
+      saveCustomAddon(manifest)
+      notify(`Saved "${manifest.name}".`, NotifyKind.SUCCESS)
+      cancelEditAddon()
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    }
+  }
 
   const runUpgrade = async () => {
     if (!isValidSeedPhrase(upgradeSeed())) {
@@ -177,6 +232,8 @@ const Settings: Component = () => {
   return (
     <div id="settings" class="page">
       <h2>Settings</h2>
+      <div class="two-columns">
+        <div class="two-col">
       <div class="setup-card">
         <h4>
           <IoTimeSharp />
@@ -455,6 +512,175 @@ const Settings: Component = () => {
           </Show>
         </div>
       </Show>
+        </div>
+        <div class="two-col">
+          <h3>Addons</h3>
+          <p class="warning">
+            <strong>Alpha - new since v0.11.0.</strong> Addons can split and
+            tag your notes on your behalf. This is new, undertested code path
+            for the wallet's core note-moving logic - if you don't understand
+            what an addon's listed capabilities actually let it do, don't
+            turn it on. You can lose funds by enabling one you don't
+            understand.
+          </p>
+          <p>
+            Optional features, off by default. Each one only gets the
+            capabilities listed under it - nothing else. See{' '}
+            <a
+              href="https://github.com/lnurlcash/lnurl-wallet/blob/main/src/addons/README.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              src/addons/README.md
+            </a>{' '}
+            for how the addon system itself works, and what a custom addon's
+            manifest JSON can and can't do.
+          </p>
+
+          <For each={allAddons()}>
+            {addon => {
+              const enabled = () => enabledAddonIds().has(addon.manifest.id)
+              const custom = () => isCustomAddon(addon.manifest.id)
+              const Icon = ADDON_ICONS[addon.manifest.icon]
+              return (
+                <div class="setup-card">
+                  <h4>
+                    {Icon && <Icon />}
+                    &nbsp;{addon.manifest.name}
+                    <Show when={custom()}>
+                      <span class="bearer-pending">&nbsp;custom</span>
+                    </Show>
+                  </h4>
+                  <Show when={addon.manifest.description}>
+                    <p>{addon.manifest.description}</p>
+                  </Show>
+                  <p class="bearer-label">Can:</p>
+                  <ul>
+                    <For each={addon.manifest.permissions}>
+                      {perm => <li>{perm.reason}</li>}
+                    </For>
+                  </ul>
+                  <div class="btns">
+                    <button
+                      type="button"
+                      classList={{active: enabled()}}
+                      onClick={() => setAddonEnabled(addon.manifest.id, !enabled())}
+                    >
+                      <Show when={enabled()} fallback="Turn on">
+                        Turn off
+                      </Show>
+                    </button>
+                    <Show when={enabled()}>
+                      <A
+                        href={addon.manifest.nav?.route ?? `/addons/${addon.manifest.id}`}
+                        class="hero-btn hero-btn-primary"
+                      >
+                        Open
+                      </A>
+                    </Show>
+                    <Show when={custom()}>
+                      <button
+                        type="button"
+                        class="icon-btn icon-btn-gap"
+                        title="Edit this addon's manifest"
+                        onClick={() => startEditAddon(addon.manifest)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        class="icon-btn icon-btn-gap"
+                        title="Delete this addon"
+                        onClick={() => setConfirmDeleteAddon(addon.manifest.id)}
+                      >
+                        Delete
+                      </button>
+                    </Show>
+                  </div>
+                  <Show when={confirmDeleteAddon() === addon.manifest.id}>
+                    <p class="warning">
+                      Delete "{addon.manifest.name}"? Notes it already created
+                      keep their tags either way - this only removes the addon
+                      itself.
+                    </p>
+                    <div class="btns">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          deleteCustomAddon(addon.manifest.id)
+                          setAddonEnabled(addon.manifest.id, false)
+                          setConfirmDeleteAddon(null)
+                          notify('Addon deleted.', NotifyKind.SUCCESS)
+                        }}
+                      >
+                        Delete
+                      </button>
+                      <button type="button" onClick={() => setConfirmDeleteAddon(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </Show>
+                  {/* this addon's own settings.ui, inline - see
+                  addons/Renderer.tsx's 'settings' mode, which never wires up
+                  a verb dispatcher at all, so nothing rendered here can
+                  touch a note */}
+                  <Show when={enabled() && addon.manifest.settings}>
+                    <AddonRenderer
+                      addon={addon}
+                      mode="settings"
+                      settingsStore={addonSettingsStore(
+                        addon.manifest.id,
+                        addon.manifest.settings!.state
+                      )}
+                    />
+                  </Show>
+                </div>
+              )
+            }}
+          </For>
+
+          <div class="setup-card">
+            <h4>Build your own addon</h4>
+            <p>
+              A custom addon is JSON, not code - the same rendered-by-this-app
+              format described in the README linked above, restricted to the
+              same fixed set of components/verbs every addon gets. Nobody
+              reviews this but you.
+            </p>
+            <div class="btns">
+              <button type="button" onClick={startNewAddon}>
+                + New custom addon
+              </button>
+            </div>
+          </div>
+
+          <Show when={editingAddon()}>
+            <Dialog onClose={cancelEditAddon}>
+              <h4>
+                {editingAddon() === 'new'
+                  ? 'New custom addon'
+                  : `Edit "${(editingAddon() as AddonManifest).name}"`}
+              </h4>
+              <p class="bearer-label">Manifest JSON</p>
+              <textarea
+                class="addon-builder-textarea"
+                value={addonDraft()}
+                onInput={e => setAddonDraft(e.currentTarget.value)}
+                spellcheck={false}
+                rows={20}
+              />
+              <div class="btns">
+                <button type="button" onClick={saveAddon}>
+                  Save
+                </button>
+                <button type="button" onClick={cancelEditAddon}>
+                  Cancel
+                </button>
+              </div>
+            </Dialog>
+          </Show>
+        </div>
+      </div>
     </div>
   )
 }

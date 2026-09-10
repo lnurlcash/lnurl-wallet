@@ -1,4 +1,4 @@
-import {Show, createSignal} from 'solid-js'
+import {Show, For, createSignal} from 'solid-js'
 import {A, useNavigate} from '@solidjs/router'
 import {
   IoMenuSharp,
@@ -13,6 +13,19 @@ import {
 } from 'solid-icons/io'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
+import {allAddons} from '../addons/registry'
+import {enabledAddonIds} from '../addons/enabled'
+import {ADDON_ICONS} from '../addons/icons'
+
+// enabled addons (bundled or custom) that asked for a nav entry (see
+// addons/types.ts's AddonNavEntry) - 'left' joins Wallet/Mint/Vault
+// (.nav-links), 'right' joins Docs/Activity/Settings (.nav-persistent),
+// same as any other link there. Disabled addons contribute nothing here
+// regardless of what their manifest declares.
+const addonsWithNav = (position: 'left' | 'right') =>
+  allAddons().filter(
+    a => enabledAddonIds().has(a.manifest.id) && a.manifest.nav?.position === position
+  )
 
 const Nav = () => {
   const {state, encrypted, lock} = useWallet()
@@ -80,6 +93,22 @@ const Nav = () => {
             <IoHardwareChipSharp />
             &nbsp;Vault
           </A>
+          <Show when={state() !== 'none'}>
+            <For each={addonsWithNav('left')}>
+              {addon => {
+                const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
+                return (
+                  <A
+                    href={addon.manifest.nav!.route ?? `/addons/${addon.manifest.id}`}
+                    class="nav-link"
+                  >
+                    {Icon && <Icon />}
+                    &nbsp;{addon.manifest.nav!.label}
+                  </A>
+                )
+              }}
+            </For>
+          </Show>
         </div>
         <div class="nav-persistent">
           {/* not gated on state() === 'unlocked' - restoring a backup (now
@@ -103,11 +132,24 @@ const Nav = () => {
           </Show>
           <A
             href="/settings"
-            title="Settings - auto-lock, currency, offline mode, backup &amp; restore"
+            title="Settings - auto-lock, currency, offline mode, backup, restore &amp; addons"
           >
             <IoCogSharp />
             <span class="nav-label">&nbsp;Settings</span>
           </A>
+          <Show when={state() !== 'none'}>
+            <For each={addonsWithNav('right')}>
+              {addon => {
+                const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
+                return (
+                  <A href={addon.manifest.nav!.route ?? `/addons/${addon.manifest.id}`}>
+                    {Icon && <Icon />}
+                    <span class="nav-label">&nbsp;{addon.manifest.nav!.label}</span>
+                  </A>
+                )
+              }}
+            </For>
+          </Show>
           <Show when={state() === 'unlocked' && encrypted()}>
             <a href="#lock" title="Lock wallet" onClick={lock_action}>
               <IoLockClosedSharp />
