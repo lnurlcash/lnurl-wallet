@@ -56,18 +56,18 @@ injectable hook here if it needs one.
 
 ## File map
 
-| File            | Contents                                                          |
-| --------------- | ------------------------------------------------------------------ |
+| File             | Contents                                                             |
+| ---------------- | -------------------------------------------------------------------- |
 | `errors.ts`      | The error taxonomy (`AmbiguousMutationError`, `NoteSpentError`, ...) |
-| `urls.ts`        | LUD-01/16/17 encoding, note-URL construction/parsing, origin checks |
+| `urls.ts`        | LUD-01/16/17 encoding, note-URL construction/parsing, origin checks  |
 | `bolt11.ts`      | BOLT-11 decode (amount, payment_hash), preimage/invoice shape checks |
-| `signature.ts`   | LUD-13-style offline note-signature sign/verify, dual byte-order    |
-| `fees.ts`        | LUD-25 mint fee math (parse/apply/band-check/gross-up)              |
-| `secrets.ts`     | Injectable secret generation for rotate/split/merge                 |
-| `net.ts`         | The one network choke point + injectable pre-flight guard           |
+| `signature.ts`   | LUD-13-style offline note-signature sign/verify, dual byte-order     |
+| `fees.ts`        | LUD-25 mint fee math (parse/apply/band-check/gross-up)               |
+| `secrets.ts`     | Injectable secret generation for rotate/split/merge                  |
+| `net.ts`         | The one network choke point + injectable pre-flight guard            |
 | `request.ts`     | fetchNoteInfo, probeBurnedNote, rotate/split/merge/melt, settleNote  |
 | `mintRequest.ts` | LUD-06 payRequest, invoice request/verify, bound-mint-receipt        |
-| `index.ts`       | Public barrel - `export *` from everything above                    |
+| `index.ts`       | Public barrel - `export *` from everything above                     |
 
 ## Testing
 
