@@ -216,7 +216,7 @@ export const raffleManifest: AddonManifest = {
     },
     {verb: 'file.download', reason: 'Save the printable ticket PDF'}
   ],
-  nav: {position: 'right', icon: 'pricetags', label: 'Raffle'},
+  nav: {position: 'left', icon: 'pricetags', label: 'Raffle'},
   state: {
     runId: '',
     title: 'Lottery',

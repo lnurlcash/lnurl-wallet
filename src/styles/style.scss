@@ -374,6 +374,18 @@ a:where(.icon-btn, .link-btn) {
   );
 }
 
+// the addon builder's Form/Raw JSON/Visual toggle (Settings.tsx) lives
+// inside a Dialog, not a .setup-card - same active-state rule, different
+// selector, so those buttons actually show which view is selected
+.dialog .btns button.active {
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px $font-color;
+  background-color: rgba(
+    color.adjust($accent-base, $lightness: -10%),
+    $transparency
+  );
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1912,4 +1924,63 @@ nav {
   font-size: 0.85em;
   white-space: pre;
   resize: vertical;
+}
+
+// one permission entry in the addon builder's form view - bordered so a
+// list of several is visually separable without a table
+.addon-form-permission {
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 8px;
+  margin-top: 8px;
+}
+
+.addon-form-note {
+  opacity: 0.7;
+}
+
+// a scoped Expr/Action JSON snippet (UiBuilder.tsx's Advanced tabs) - same
+// monospace treatment as the top-level .addon-builder-textarea, just
+// shorter since it only ever holds one field's worth of JSON
+.addon-builder-textarea-small {
+  min-height: unset;
+}
+
+// the Visual tab's outliner + inspector (UiBuilder.tsx)
+.ui-builder {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ui-outliner {
+  flex: 1 1 220px;
+  min-width: 200px;
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 4px;
+}
+
+.ui-outliner-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border-radius: 3px;
+  &.selected {
+    box-shadow: inset 0 0 0 1px $font-color;
+    background-color: rgba(
+      color.adjust($accent-base, $lightness: -10%),
+      $transparency
+    );
+  }
+}
+
+.ui-inspector {
+  flex: 1 1 260px;
+  min-width: 240px;
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 8px;
 }

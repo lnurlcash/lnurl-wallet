@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {For, Show, createSignal} from 'solid-js'
+import {For, Show, Switch, Match, createSignal} from 'solid-js'
 import {A, useNavigate} from '@solidjs/router'
 import {
   IoCashSharp,
@@ -42,9 +42,16 @@ import {
 import {validateManifest} from '../addons/validate'
 import {STARTER_TEMPLATE} from '../addons/starterTemplate'
 import {ADDON_ICONS} from '../addons/icons'
+import {defaultNodeFor, isSafeUiNode} from '../addons/uiTree'
 import AddonRenderer from '../addons/Renderer'
+import UiBuilder from '../addons/UiBuilder'
 import Dialog from '../components/Dialog'
-import type {AddonManifest} from '../addons/types'
+import type {
+  AddonManifest,
+  AddonNavEntry,
+  Permission,
+  UiNode
+} from '../addons/types'
 
 // order they appear - 'none' (Disabled) first since that's the default/off
 // state, then alphabetical by the same three currencies price.lnbits.com
@@ -84,20 +91,95 @@ const Settings: Component = () => {
   const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<
     string | null
   >(null)
+  // three views onto the same addonDraft string - never a second copy of
+  // the manifest, so there's nothing for the views to fall out of sync over
+  const [editorMode, setEditorMode] = createSignal<'json' | 'form' | 'visual'>(
+    'json'
+  )
 
   const startNewAddon = () => {
     setAddonDraft(STARTER_TEMPLATE)
     setEditingAddon('new')
+    setEditorMode('json')
   }
 
   const startEditAddon = (manifest: AddonManifest) => {
     setAddonDraft(JSON.stringify(manifest, null, 2))
     setEditingAddon(manifest)
+    setEditorMode('json')
   }
 
   const cancelEditAddon = () => {
     setEditingAddon(null)
     setAddonDraft('')
+  }
+
+  // the form view's only source of truth is addonDraft itself, reparsed on
+  // every read - editing a field patches the JSON string directly rather
+  // than keeping a second, form-only copy of the manifest that could drift
+  const parsedDraft = (): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(addonDraft())
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  const patchDraft = (patch: Record<string, unknown>) => {
+    setAddonDraft(JSON.stringify({...(parsedDraft() ?? {}), ...patch}, null, 2))
+  }
+
+  const switchEditorMode = (mode: 'json' | 'form' | 'visual') => {
+    if (mode === 'form' && parsedDraft() === null) {
+      notify(
+        'Fix the JSON before switching to the form view.',
+        NotifyKind.ERROR
+      )
+      return
+    }
+    if (
+      mode === 'visual' &&
+      (parsedDraft() === null || !isSafeUiNode(parsedDraft()?.ui))
+    ) {
+      notify(
+        'Fix the JSON before switching to the visual view.',
+        NotifyKind.ERROR
+      )
+      return
+    }
+    setEditorMode(mode)
+  }
+
+  const draftPermissions = (): Permission[] => {
+    const perms = parsedDraft()?.permissions
+    return Array.isArray(perms) ? (perms as Permission[]) : []
+  }
+
+  const setDraftPermissions = (perms: Permission[]) =>
+    patchDraft({permissions: perms})
+
+  const updatePermission = (index: number, patch: Partial<Permission>) =>
+    setDraftPermissions(
+      draftPermissions().map((p, i) => (i === index ? {...p, ...patch} : p))
+    )
+
+  const addPermission = () =>
+    setDraftPermissions([...draftPermissions(), {verb: '', reason: ''}])
+
+  const removePermission = (index: number) =>
+    setDraftPermissions(draftPermissions().filter((_, i) => i !== index))
+
+  const draftNav = (): AddonNavEntry | undefined =>
+    parsedDraft()?.nav as AddonNavEntry | undefined
+
+  const setDraftNav = (nav: AddonNavEntry | undefined) => {
+    const current = {...(parsedDraft() ?? {})}
+    if (nav === undefined) delete current.nav
+    else current.nav = nav
+    setAddonDraft(JSON.stringify(current, null, 2))
   }
 
   const saveAddon = () => {
@@ -683,14 +765,240 @@ const Settings: Component = () => {
                   ? 'New custom addon'
                   : `Edit "${(editingAddon() as AddonManifest).name}"`}
               </h4>
-              <p class="bearer-label">Manifest JSON</p>
-              <textarea
-                class="addon-builder-textarea"
-                value={addonDraft()}
-                onInput={e => setAddonDraft(e.currentTarget.value)}
-                spellcheck={false}
-                rows={20}
-              />
+              <div class="btns">
+                <button
+                  type="button"
+                  classList={{active: editorMode() === 'form'}}
+                  onClick={() => switchEditorMode('form')}
+                >
+                  Form
+                </button>
+                <button
+                  type="button"
+                  classList={{active: editorMode() === 'json'}}
+                  onClick={() => switchEditorMode('json')}
+                >
+                  Raw JSON
+                </button>
+                <button
+                  type="button"
+                  classList={{active: editorMode() === 'visual'}}
+                  onClick={() => switchEditorMode('visual')}
+                >
+                  Visual
+                </button>
+              </div>
+              <Switch
+                fallback={
+                  <>
+                    <p class="bearer-label">Manifest JSON</p>
+                    <textarea
+                      class="addon-builder-textarea"
+                      value={addonDraft()}
+                      onInput={e => setAddonDraft(e.currentTarget.value)}
+                      spellcheck={false}
+                      rows={20}
+                    />
+                  </>
+                }
+              >
+                <Match when={editorMode() === 'visual'}>
+                  <p class="addon-form-note">
+                    Editing the "ui" tree only - state, settings.* and the other
+                    manifest fields stay on Form/Raw JSON.
+                  </p>
+                  <UiBuilder
+                    ui={(parsedDraft()?.ui as UiNode) ?? defaultNodeFor('View')}
+                    onChange={next => patchDraft({ui: next})}
+                  />
+                </Match>
+                <Match when={editorMode() === 'form'}>
+                  <div class="addon-form">
+                    <label>Id</label>
+                    <input
+                      type="text"
+                      value={(parsedDraft()?.id as string) ?? ''}
+                      onInput={e => patchDraft({id: e.currentTarget.value})}
+                    />
+                    <label>Name</label>
+                    <input
+                      type="text"
+                      value={(parsedDraft()?.name as string) ?? ''}
+                      onInput={e => patchDraft({name: e.currentTarget.value})}
+                    />
+                    <label>Version</label>
+                    <input
+                      type="text"
+                      value={(parsedDraft()?.version as string) ?? ''}
+                      onInput={e =>
+                        patchDraft({version: e.currentTarget.value})
+                      }
+                    />
+                    <label>Icon</label>
+                    <select
+                      value={(parsedDraft()?.icon as string) ?? ''}
+                      onChange={e => patchDraft({icon: e.currentTarget.value})}
+                    >
+                      <For each={Object.keys(ADDON_ICONS)}>
+                        {name => <option value={name}>{name}</option>}
+                      </For>
+                    </select>
+                    <label>Description</label>
+                    <input
+                      type="text"
+                      value={(parsedDraft()?.description as string) ?? ''}
+                      onInput={e =>
+                        patchDraft({description: e.currentTarget.value})
+                      }
+                    />
+
+                    <p class="bearer-label">Permissions</p>
+                    <For each={draftPermissions()}>
+                      {(perm, i) => (
+                        <div class="addon-form-permission">
+                          <label>Verb</label>
+                          <input
+                            type="text"
+                            value={perm.verb}
+                            onInput={e =>
+                              updatePermission(i(), {
+                                verb: e.currentTarget.value
+                              })
+                            }
+                          />
+                          <label>Reason (shown to the holder)</label>
+                          <input
+                            type="text"
+                            value={perm.reason}
+                            onInput={e =>
+                              updatePermission(i(), {
+                                reason: e.currentTarget.value
+                              })
+                            }
+                          />
+                          <label>Scope (optional)</label>
+                          <input
+                            type="text"
+                            value={perm.scope ?? ''}
+                            onInput={e =>
+                              updatePermission(i(), {
+                                scope: e.currentTarget.value || undefined
+                              })
+                            }
+                          />
+                          <div class="btns">
+                            <button
+                              type="button"
+                              class="icon-btn"
+                              onClick={() => removePermission(i())}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                    <div class="btns">
+                      <button type="button" onClick={addPermission}>
+                        + Add permission
+                      </button>
+                    </div>
+
+                    <p class="bearer-label">Navigation link</p>
+                    <div class="btns">
+                      <button
+                        type="button"
+                        classList={{active: draftNav() !== undefined}}
+                        onClick={() =>
+                          setDraftNav(
+                            draftNav() !== undefined
+                              ? undefined
+                              : {
+                                  position: 'left',
+                                  label: '',
+                                  icon: Object.keys(ADDON_ICONS)[0] ?? ''
+                                }
+                          )
+                        }
+                      >
+                        <Show when={draftNav() !== undefined} fallback="Add">
+                          Remove
+                        </Show>
+                      </button>
+                    </div>
+                    <Show when={draftNav()}>
+                      {nav => (
+                        <>
+                          <label>Position</label>
+                          <div class="btns">
+                            <button
+                              type="button"
+                              classList={{active: nav().position === 'left'}}
+                              onClick={() =>
+                                setDraftNav({...nav(), position: 'left'})
+                              }
+                            >
+                              Left (Wallet/Mint/Vault)
+                            </button>
+                            <button
+                              type="button"
+                              classList={{active: nav().position === 'right'}}
+                              onClick={() =>
+                                setDraftNav({...nav(), position: 'right'})
+                              }
+                            >
+                              Right (Docs/Activity/Settings)
+                            </button>
+                          </div>
+                          <label>Label</label>
+                          <input
+                            type="text"
+                            value={nav().label}
+                            onInput={e =>
+                              setDraftNav({
+                                ...nav(),
+                                label: e.currentTarget.value
+                              })
+                            }
+                          />
+                          <label>Icon</label>
+                          <select
+                            value={nav().icon}
+                            onChange={e =>
+                              setDraftNav({
+                                ...nav(),
+                                icon: e.currentTarget.value
+                              })
+                            }
+                          >
+                            <For each={Object.keys(ADDON_ICONS)}>
+                              {name => <option value={name}>{name}</option>}
+                            </For>
+                          </select>
+                          <label>
+                            Route (optional - defaults to /addons/&lt;id&gt;)
+                          </label>
+                          <input
+                            type="text"
+                            value={nav().route ?? ''}
+                            onInput={e =>
+                              setDraftNav({
+                                ...nav(),
+                                route: e.currentTarget.value || undefined
+                              })
+                            }
+                          />
+                        </>
+                      )}
+                    </Show>
+
+                    <p class="bearer-label addon-form-note">
+                      state and settings.* aren't editable here - use Raw JSON
+                      for those. ui has its own Visual tab above.
+                    </p>
+                  </div>
+                </Match>
+              </Switch>
               <div class="btns">
                 <button type="button" onClick={saveAddon}>
                   Save
