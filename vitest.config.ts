@@ -1,4 +1,4 @@
-import {defineConfig} from 'vitest/config'
+import {configDefaults, defineConfig} from 'vitest/config'
 import solidPlugin from 'vite-plugin-solid'
 import {gitVersion} from './scripts/git-version.mjs'
 
@@ -13,6 +13,10 @@ export default defineConfig({
     // the tested modules are pure crypto/codec helpers - node's own
     // WebCrypto (crypto.subtle) covers everything they need, no jsdom
     environment: 'node',
-    include: ['src/**/*.test.ts']
+    include: ['src/**/*.test.ts'],
+    // src/lib is a staged standalone package (see its own README) with its
+    // own scoped vitest.config.ts and `npm run test:lib` - excluded here so
+    // it isn't run twice under two different configs
+    exclude: [...configDefaults.exclude, 'src/lib/**']
   }
 })

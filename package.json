@@ -11,6 +11,8 @@
     "tsc": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:lib": "vitest run --config src/lib/vitest.config.ts",
+    "test:all": "npm run test && npm run test:lib",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
