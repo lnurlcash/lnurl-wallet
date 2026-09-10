@@ -43,7 +43,10 @@ describe('validateManifest', () => {
             label: 'Go',
             onClick: {
               verb: 'note.split',
-              args: {note: {var: 'sourceNote.id'}, tickets: {helper: 'plan', args: []}},
+              args: {
+                note: {var: 'sourceNote.id'},
+                tickets: {helper: 'plan', args: []}
+              },
               result: 'results'
             }
           }

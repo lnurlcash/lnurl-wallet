@@ -3,12 +3,7 @@
 // full design rationale - this file is just the shape of that data.
 
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | {[key: string]: JsonValue}
+  string | number | boolean | null | JsonValue[] | {[key: string]: JsonValue}
 
 // a small, pure, side-effect-free expression grammar (JSONLogic-shaped) - no
 // user-defined functions, no imperative loops, no way to reach JS globals,
@@ -60,8 +55,18 @@ export type Action =
 export type UiNode =
   | {type: 'View'; style?: string; children?: UiNode[]}
   | {type: 'Text'; value: Expr; style?: string}
-  | {type: 'Input'; bind: string; kind?: 'text' | 'number' | 'checkbox'; label?: string}
-  | {type: 'NotePicker'; bind: string; filter?: {spent?: boolean}; label?: string}
+  | {
+      type: 'Input'
+      bind: string
+      kind?: 'text' | 'number' | 'checkbox'
+      label?: string
+    }
+  | {
+      type: 'NotePicker'
+      bind: string
+      filter?: {spent?: boolean}
+      label?: string
+    }
   | {type: 'Button'; label: string; onClick: Action}
   | {type: 'For'; each: Expr; children: UiNode[]}
   | {type: 'Show'; when: Expr; children: UiNode[]}

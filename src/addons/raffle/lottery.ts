@@ -30,10 +30,7 @@ const tier = (count: number, amountSat: number, label = ''): PrizeTier => ({
 })
 
 export type TierPresetId =
-  | 'single-winner'
-  | 'classic-raffle'
-  | 'pyramid'
-  | 'even-split'
+  'single-winner' | 'classic-raffle' | 'pyramid' | 'even-split'
 
 const TIER_PRESET_BUILDERS: Record<TierPresetId, () => PrizeTier[]> = {
   'single-winner': () => [tier(1, 100000, 'Grand prize'), tier(49, 100)],

@@ -34,11 +34,15 @@ describe('evaluate', () => {
   })
 
   it('concatenates with cat', () => {
-    expect(evaluate({cat: [{var: 'a'}, ' of ', {var: 'b'}]}, ctx)).toBe('3 of 5')
+    expect(evaluate({cat: [{var: 'a'}, ' of ', {var: 'b'}]}, ctx)).toBe(
+      '3 of 5'
+    )
   })
 
   it('short-circuits and', () => {
-    expect(evaluate({and: [true, {gt: [{var: 'b'}, {var: 'a'}]}]}, ctx)).toBe(true)
+    expect(evaluate({and: [true, {gt: [{var: 'b'}, {var: 'a'}]}]}, ctx)).toBe(
+      true
+    )
     expect(evaluate({and: [false, {gt: [1, 0]}]}, ctx)).toBe(false)
   })
 
@@ -70,7 +74,10 @@ describe('evaluate', () => {
     // not a formal member of the Expr union (would break discriminated
     // narrowing on the operator shapes - see types.ts's own note) but a
     // real, intentional runtime case, hence the cast
-    const literal = {amountMsat: {var: 'a'}, tags: ['fixed', {var: 'b'}]} as unknown as Expr
+    const literal = {
+      amountMsat: {var: 'a'},
+      tags: ['fixed', {var: 'b'}]
+    } as unknown as Expr
     expect(evaluate(literal, ctx)).toEqual({amountMsat: 3, tags: ['fixed', 5]})
   })
 })

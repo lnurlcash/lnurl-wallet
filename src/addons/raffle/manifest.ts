@@ -1,5 +1,11 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {tierPreset, newTier, ticketCount, totalAmountSat, planTickets} from './lottery'
+import {
+  tierPreset,
+  newTier,
+  ticketCount,
+  totalAmountSat,
+  planTickets
+} from './lottery'
 import {buildTicketPdf} from './pdf'
 
 const tierRow: UiNode = {
@@ -54,7 +60,11 @@ const ui: UiNode = {
     {
       type: 'Button',
       label: 'Add tier',
-      onClick: {action: 'push', path: 'tiers', value: {helper: 'newTier', args: []}}
+      onClick: {
+        action: 'push',
+        path: 'tiers',
+        value: {helper: 'newTier', args: []}
+      }
     },
     {
       type: 'Text',
@@ -95,7 +105,10 @@ const ui: UiNode = {
             verb: 'note.split',
             args: {
               note: {var: 'sourceNote.id'},
-              tickets: {helper: 'planTickets', args: [{var: 'tiers'}, {var: 'runId'}]}
+              tickets: {
+                helper: 'planTickets',
+                args: [{var: 'tiers'}, {var: 'runId'}]
+              }
             },
             result: 'results'
           }
@@ -139,7 +152,12 @@ const ui: UiNode = {
               filename: {cat: [{var: 'title'}, '.pdf']},
               content: {
                 helper: 'buildTicketPdf',
-                args: [{var: 'title'}, {var: 'results'}, {var: 'showAmount'}, {var: 'paper'}]
+                args: [
+                  {var: 'title'},
+                  {var: 'results'},
+                  {var: 'showAmount'},
+                  {var: 'paper'}
+                ]
               }
             }
           }
@@ -183,16 +201,18 @@ export const raffleManifest: AddonManifest = {
   name: 'Raffle Tickets',
   version: '1',
   icon: 'pricetags',
-  description: 'Split a held note into prize-tiered raffle tickets and print them.',
+  description:
+    'Split a held note into prize-tiered raffle tickets and print them.',
   permissions: [
     {
       verb: 'note.query',
       scope: 'spent:false',
-      reason: "Let you pick which held note funds the prize pool"
+      reason: 'Let you pick which held note funds the prize pool'
     },
     {
       verb: 'note.split',
-      reason: "Split the chosen note into one ticket per prize, tagged as it's created"
+      reason:
+        "Split the chosen note into one ticket per prize, tagged as it's created"
     },
     {verb: 'file.download', reason: 'Save the printable ticket PDF'}
   ],

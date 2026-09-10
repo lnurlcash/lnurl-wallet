@@ -34,7 +34,11 @@ import {MIN_PASSWORD_LENGTH} from './Setup'
 import {allAddons, isBundledAddon} from '../addons/registry'
 import {enabledAddonIds, setAddonEnabled} from '../addons/enabled'
 import {addonSettingsStore} from '../addons/settingsStore'
-import {saveCustomAddon, deleteCustomAddon, isCustomAddon} from '../addons/customAddons'
+import {
+  saveCustomAddon,
+  deleteCustomAddon,
+  isCustomAddon
+} from '../addons/customAddons'
 import {validateManifest} from '../addons/validate'
 import {STARTER_TEMPLATE} from '../addons/starterTemplate'
 import {ADDON_ICONS} from '../addons/icons'
@@ -73,13 +77,13 @@ const Settings: Component = () => {
   const [upgradeConfirmPassword, setUpgradeConfirmPassword] = createSignal('')
   const [upgrading, setUpgrading] = createSignal(false)
   const [confirmForget, setConfirmForget] = createSignal(false)
-  const [editingAddon, setEditingAddon] = createSignal<AddonManifest | 'new' | null>(
-    null
-  )
+  const [editingAddon, setEditingAddon] = createSignal<
+    AddonManifest | 'new' | null
+  >(null)
   const [addonDraft, setAddonDraft] = createSignal('')
-  const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<string | null>(
-    null
-  )
+  const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<
+    string | null
+  >(null)
 
   const startNewAddon = () => {
     setAddonDraft(STARTER_TEMPLATE)
@@ -234,294 +238,304 @@ const Settings: Component = () => {
       <h2>Settings</h2>
       <div class="two-columns">
         <div class="two-col">
-      <div class="setup-card">
-        <h4>
-          <IoTimeSharp />
-          &nbsp;Auto-lock
-        </h4>
-        <p>
-          Locks the wallet after this long with no activity in the tab, with a
-          30-second warning first.
-          <Show when={!encrypted()}>
-            {' '}
-            Only takes effect once the wallet is set up with a password - an
-            unencrypted key would just silently unlock itself again anyway.
-          </Show>
-        </p>
-        <div class="btns">
-          <For each={AUTO_LOCK_OPTIONS}>
-            {option => (
-              <button
-                type="button"
-                classList={{active: autoLockMinutes() === option}}
-                onClick={() => setAutoLockMinutes(option)}
-              >
-                {AUTO_LOCK_LABEL[option]}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-      <div class="setup-card">
-        <h4>
-          <IoCashSharp />
-          &nbsp;Currency
-        </h4>
-        <p>
-          Show a fiat estimate alongside sats, using price.lnbits.com. Purely
-          cosmetic - every amount is still held and moved in sats underneath.
-        </p>
-        <div class="btns">
-          <For each={CURRENCY_OPTIONS}>
-            {option => (
-              <button
-                type="button"
-                classList={{active: currency() === option}}
-                onClick={() => setCurrency(option)}
-              >
-                {option === 'none' ? 'Disabled' : CURRENCY_LABEL[option]}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-      <div class="setup-card">
-        <h4>
-          <IoCloudOfflineSharp />
-          &nbsp;Offline mode
-        </h4>
-        <p>
-          Blocks rotate, melt, split, merge and every other request to a service
-          - notes already in the wallet stay readable, nothing new reaches the
-          network until this is off again.
-        </p>
-        <div class="btns">
-          <button
-            type="button"
-            classList={{active: offlineMode()}}
-            onClick={() => setOfflineMode(!offlineMode())}
-          >
-            <IoCloudOfflineSharp />
-            &nbsp;
-            <Show when={offlineMode()} fallback="Turn on">
-              Turn off
-            </Show>
-          </button>
-        </div>
-      </div>
-      <Show when={state() === 'unlocked'}>
-        <div class="setup-card">
-          <h4>
-            <IoDownloadSharp />
-            &nbsp;Download backup
-          </h4>
-          <p>
-            One JSON file: your {bearers().length} bearer note(s) (encrypted,
-            never plaintext) and {trustedMints().length} trusted mint(s). Notes
-            marked "on device" are just a blank mirror - recovering those needs
-            the paired vault, not this file.
-            <Show
-              when={encrypted()}
-              fallback={
-                <>
-                  {' '}
-                  Your encryption key isn't password-protected, so it's{' '}
-                  <strong>not</strong> included - restoring elsewhere needs your
-                  seed phrase.
-                </>
-              }
-            >
-              {' '}
-              Your password-encrypted key is included too, so this file plus
-              your password is enough on a new device.
-            </Show>
-          </p>
-          <div class="btns">
-            <button onClick={download}>
-              <IoDownloadSharp />
-              &nbsp;Download backup
-            </button>
-          </div>
-        </div>
-      </Show>
-      <Show when={state() === 'unlocked' && !encryptionUpgraded()}>
-        <div class="setup-card">
-          <h4>Upgrade encryption</h4>
-          <p>
-            Your notes are currently encrypted with a key derived through an
-            extra identity keypair this wallet never actually uses for anything.
-            Re-entering your seed phrase here switches to a simpler key derived
-            directly from it, and re-encrypts every note and activity entry
-            already stored under the new one. Nothing about your seed phrase or
-            your notes themselves changes - only how the encryption key is
-            derived.
-          </p>
-          <label>Your 12-word BIP39 seed phrase</label>
-          <textarea
-            rows="3"
-            placeholder="twelve words separated by spaces"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            value={upgradeSeed()}
-            onInput={e => setUpgradeSeed(e.currentTarget.value)}
-          />
-          <Show when={encrypted()}>
-            <input
-              type="password"
-              placeholder="Password to encrypt the new key"
-              autocomplete="new-password"
-              autocapitalize="off"
-              spellcheck={false}
-              value={upgradePassword()}
-              onInput={e => setUpgradePassword(e.currentTarget.value)}
-            />
-            <input
-              type="password"
-              placeholder="Confirm password"
-              autocomplete="new-password"
-              autocapitalize="off"
-              spellcheck={false}
-              value={upgradeConfirmPassword()}
-              onInput={e => setUpgradeConfirmPassword(e.currentTarget.value)}
-            />
-          </Show>
-          <div class="btns">
-            <button
-              disabled={upgrading() || !upgradeSeed().trim()}
-              onClick={runUpgrade}
-            >
-              <Show when={upgrading()} fallback={<IoShieldCheckmarkSharp />}>
-                <IoRefreshSharp class="spin" />
+          <div class="setup-card">
+            <h4>
+              <IoTimeSharp />
+              &nbsp;Auto-lock
+            </h4>
+            <p>
+              Locks the wallet after this long with no activity in the tab, with
+              a 30-second warning first.
+              <Show when={!encrypted()}>
+                {' '}
+                Only takes effect once the wallet is set up with a password - an
+                unencrypted key would just silently unlock itself again anyway.
               </Show>
-              &nbsp;Upgrade encryption
-            </button>
-          </div>
-        </div>
-      </Show>
-      <div class="setup-card">
-        <h4>
-          <IoFolderOpenSharp />
-          &nbsp;Restore backup
-        </h4>
-        <p>
-          Notes from the file merge in (duplicates skipped), but only decrypt
-          under the key they were encrypted with. <strong>Order matters</strong>
-          : restore your seed first (see <A href="/setup">Restore from seed</A>
-          ), or select this file while the device has no wallet yet, if it
-          carries its own encrypted key. Setting up a wallet here first and
-          importing after leaves the notes present but undecryptable.
-        </p>
-        <Show when={state() === 'none'}>
-          <p>
-            No wallet here yet: a backup with its own encrypted key sets one up
-            automatically; otherwise restore your seed phrase first.
-          </p>
-        </Show>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json"
-          style="display: none"
-          onChange={restore}
-        />
-        <div class="btns">
-          <button disabled={busy()} onClick={() => fileRef?.click()}>
-            <Show when={busy()} fallback={<IoFolderOpenSharp />}>
-              <IoRefreshSharp class="spin" />
-            </Show>
-            &nbsp;Select backup file
-          </button>
-        </div>
-        <Show when={keyRestored()}>
-          <p class="warning">
-            This backup's linking key is now installed. Whoever created the file
-            may know it - only continue if you trust its source; otherwise
-            forget this wallet below and set up fresh from your own seed.
-          </p>
-          <Show
-            when={encrypted()}
-            fallback={
-              <>
-                <p class="warning">
-                  This key wasn't password-encrypted, so it's now stored in
-                  plaintext. Confirm before activating it:
-                </p>
-                <div class="btns">
-                  <button onClick={activateRestoredKey}>
-                    I trust this file - activate the restored wallet
-                  </button>
-                </div>
-              </>
-            }
-          >
-            <p class="warning">
-              <A href="/wallet">Unlock the wallet</A> with the password the key
-              was encrypted with.
-            </p>
-          </Show>
-        </Show>
-        <Show when={keySkipped()}>
-          <p class="warning">
-            This device already has a wallet, so the backup's own key wasn't
-            applied - its notes won't show up here. If this isn't the right
-            wallet, forget it below (free if empty) and select the file again on
-            a wallet-less device.
-          </p>
-        </Show>
-      </div>
-      <Show when={state() !== 'none'}>
-        <div class="setup-card">
-          <h4>
-            <IoTrashSharp />
-            &nbsp;Forget this wallet
-          </h4>
-          <p class="warning">
-            Removes <strong>everything</strong> from this device - key, notes,
-            trusted mints, saved links. Restoring the same seed afterward won't
-            bring the notes back; only a backup downloaded first can.
-          </p>
-          <div class="btns">
-            <button onClick={download}>
-              <IoDownloadSharp />
-              &nbsp;Download backup first
-            </button>
-          </div>
-          <Show
-            when={confirmForget()}
-            fallback={
-              <div class="btns">
-                <button onClick={() => setConfirmForget(true)}>
-                  <IoTrashSharp />
-                  &nbsp;Forget wallet
-                </button>
-              </div>
-            }
-          >
-            <p class="warning">
-              Are you sure? This deletes the linking key and every bearer note
-              from this device - only a backup downloaded beforehand can bring
-              them back.
             </p>
             <div class="btns">
-              <button onClick={doForget}>Yes, forget everything</button>
-              <button onClick={() => setConfirmForget(false)}>Cancel</button>
+              <For each={AUTO_LOCK_OPTIONS}>
+                {option => (
+                  <button
+                    type="button"
+                    classList={{active: autoLockMinutes() === option}}
+                    onClick={() => setAutoLockMinutes(option)}
+                  >
+                    {AUTO_LOCK_LABEL[option]}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+          <div class="setup-card">
+            <h4>
+              <IoCashSharp />
+              &nbsp;Currency
+            </h4>
+            <p>
+              Show a fiat estimate alongside sats, using price.lnbits.com.
+              Purely cosmetic - every amount is still held and moved in sats
+              underneath.
+            </p>
+            <div class="btns">
+              <For each={CURRENCY_OPTIONS}>
+                {option => (
+                  <button
+                    type="button"
+                    classList={{active: currency() === option}}
+                    onClick={() => setCurrency(option)}
+                  >
+                    {option === 'none' ? 'Disabled' : CURRENCY_LABEL[option]}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+          <div class="setup-card">
+            <h4>
+              <IoCloudOfflineSharp />
+              &nbsp;Offline mode
+            </h4>
+            <p>
+              Blocks rotate, melt, split, merge and every other request to a
+              service - notes already in the wallet stay readable, nothing new
+              reaches the network until this is off again.
+            </p>
+            <div class="btns">
+              <button
+                type="button"
+                classList={{active: offlineMode()}}
+                onClick={() => setOfflineMode(!offlineMode())}
+              >
+                <IoCloudOfflineSharp />
+                &nbsp;
+                <Show when={offlineMode()} fallback="Turn on">
+                  Turn off
+                </Show>
+              </button>
+            </div>
+          </div>
+          <Show when={state() === 'unlocked'}>
+            <div class="setup-card">
+              <h4>
+                <IoDownloadSharp />
+                &nbsp;Download backup
+              </h4>
+              <p>
+                One JSON file: your {bearers().length} bearer note(s)
+                (encrypted, never plaintext) and {trustedMints().length} trusted
+                mint(s). Notes marked "on device" are just a blank mirror -
+                recovering those needs the paired vault, not this file.
+                <Show
+                  when={encrypted()}
+                  fallback={
+                    <>
+                      {' '}
+                      Your encryption key isn't password-protected, so it's{' '}
+                      <strong>not</strong> included - restoring elsewhere needs
+                      your seed phrase.
+                    </>
+                  }
+                >
+                  {' '}
+                  Your password-encrypted key is included too, so this file plus
+                  your password is enough on a new device.
+                </Show>
+              </p>
+              <div class="btns">
+                <button onClick={download}>
+                  <IoDownloadSharp />
+                  &nbsp;Download backup
+                </button>
+              </div>
             </div>
           </Show>
-        </div>
-      </Show>
+          <Show when={state() === 'unlocked' && !encryptionUpgraded()}>
+            <div class="setup-card">
+              <h4>Upgrade encryption</h4>
+              <p>
+                Your notes are currently encrypted with a key derived through an
+                extra identity keypair this wallet never actually uses for
+                anything. Re-entering your seed phrase here switches to a
+                simpler key derived directly from it, and re-encrypts every note
+                and activity entry already stored under the new one. Nothing
+                about your seed phrase or your notes themselves changes - only
+                how the encryption key is derived.
+              </p>
+              <label>Your 12-word BIP39 seed phrase</label>
+              <textarea
+                rows="3"
+                placeholder="twelve words separated by spaces"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck={false}
+                data-1p-ignore
+                data-lpignore="true"
+                value={upgradeSeed()}
+                onInput={e => setUpgradeSeed(e.currentTarget.value)}
+              />
+              <Show when={encrypted()}>
+                <input
+                  type="password"
+                  placeholder="Password to encrypt the new key"
+                  autocomplete="new-password"
+                  autocapitalize="off"
+                  spellcheck={false}
+                  value={upgradePassword()}
+                  onInput={e => setUpgradePassword(e.currentTarget.value)}
+                />
+                <input
+                  type="password"
+                  placeholder="Confirm password"
+                  autocomplete="new-password"
+                  autocapitalize="off"
+                  spellcheck={false}
+                  value={upgradeConfirmPassword()}
+                  onInput={e =>
+                    setUpgradeConfirmPassword(e.currentTarget.value)
+                  }
+                />
+              </Show>
+              <div class="btns">
+                <button
+                  disabled={upgrading() || !upgradeSeed().trim()}
+                  onClick={runUpgrade}
+                >
+                  <Show
+                    when={upgrading()}
+                    fallback={<IoShieldCheckmarkSharp />}
+                  >
+                    <IoRefreshSharp class="spin" />
+                  </Show>
+                  &nbsp;Upgrade encryption
+                </button>
+              </div>
+            </div>
+          </Show>
+          <div class="setup-card">
+            <h4>
+              <IoFolderOpenSharp />
+              &nbsp;Restore backup
+            </h4>
+            <p>
+              Notes from the file merge in (duplicates skipped), but only
+              decrypt under the key they were encrypted with.{' '}
+              <strong>Order matters</strong>: restore your seed first (see{' '}
+              <A href="/setup">Restore from seed</A>
+              ), or select this file while the device has no wallet yet, if it
+              carries its own encrypted key. Setting up a wallet here first and
+              importing after leaves the notes present but undecryptable.
+            </p>
+            <Show when={state() === 'none'}>
+              <p>
+                No wallet here yet: a backup with its own encrypted key sets one
+                up automatically; otherwise restore your seed phrase first.
+              </p>
+            </Show>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json"
+              style="display: none"
+              onChange={restore}
+            />
+            <div class="btns">
+              <button disabled={busy()} onClick={() => fileRef?.click()}>
+                <Show when={busy()} fallback={<IoFolderOpenSharp />}>
+                  <IoRefreshSharp class="spin" />
+                </Show>
+                &nbsp;Select backup file
+              </button>
+            </div>
+            <Show when={keyRestored()}>
+              <p class="warning">
+                This backup's linking key is now installed. Whoever created the
+                file may know it - only continue if you trust its source;
+                otherwise forget this wallet below and set up fresh from your
+                own seed.
+              </p>
+              <Show
+                when={encrypted()}
+                fallback={
+                  <>
+                    <p class="warning">
+                      This key wasn't password-encrypted, so it's now stored in
+                      plaintext. Confirm before activating it:
+                    </p>
+                    <div class="btns">
+                      <button onClick={activateRestoredKey}>
+                        I trust this file - activate the restored wallet
+                      </button>
+                    </div>
+                  </>
+                }
+              >
+                <p class="warning">
+                  <A href="/wallet">Unlock the wallet</A> with the password the
+                  key was encrypted with.
+                </p>
+              </Show>
+            </Show>
+            <Show when={keySkipped()}>
+              <p class="warning">
+                This device already has a wallet, so the backup's own key wasn't
+                applied - its notes won't show up here. If this isn't the right
+                wallet, forget it below (free if empty) and select the file
+                again on a wallet-less device.
+              </p>
+            </Show>
+          </div>
+          <Show when={state() !== 'none'}>
+            <div class="setup-card">
+              <h4>
+                <IoTrashSharp />
+                &nbsp;Forget this wallet
+              </h4>
+              <p class="warning">
+                Removes <strong>everything</strong> from this device - key,
+                notes, trusted mints, saved links. Restoring the same seed
+                afterward won't bring the notes back; only a backup downloaded
+                first can.
+              </p>
+              <div class="btns">
+                <button onClick={download}>
+                  <IoDownloadSharp />
+                  &nbsp;Download backup first
+                </button>
+              </div>
+              <Show
+                when={confirmForget()}
+                fallback={
+                  <div class="btns">
+                    <button onClick={() => setConfirmForget(true)}>
+                      <IoTrashSharp />
+                      &nbsp;Forget wallet
+                    </button>
+                  </div>
+                }
+              >
+                <p class="warning">
+                  Are you sure? This deletes the linking key and every bearer
+                  note from this device - only a backup downloaded beforehand
+                  can bring them back.
+                </p>
+                <div class="btns">
+                  <button onClick={doForget}>Yes, forget everything</button>
+                  <button onClick={() => setConfirmForget(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </Show>
+            </div>
+          </Show>
         </div>
         <div class="two-col">
           <h3>Addons</h3>
           <p class="warning">
-            <strong>Alpha - new since v0.11.0.</strong> Addons can split and
-            tag your notes on your behalf. This is new, undertested code path
-            for the wallet's core note-moving logic - if you don't understand
-            what an addon's listed capabilities actually let it do, don't
-            turn it on. You can lose funds by enabling one you don't
-            understand.
+            <strong>Alpha - new since v0.11.0.</strong> Addons can split and tag
+            your notes on your behalf. This is new, undertested code path for
+            the wallet's core note-moving logic - if you don't understand what
+            an addon's listed capabilities actually let it do, don't turn it on.
+            You can lose funds by enabling one you don't understand.
           </p>
           <p>
             Optional features, off by default. Each one only gets the
@@ -564,7 +578,9 @@ const Settings: Component = () => {
                     <button
                       type="button"
                       classList={{active: enabled()}}
-                      onClick={() => setAddonEnabled(addon.manifest.id, !enabled())}
+                      onClick={() =>
+                        setAddonEnabled(addon.manifest.id, !enabled())
+                      }
                     >
                       <Show when={enabled()} fallback="Turn on">
                         Turn off
@@ -572,7 +588,10 @@ const Settings: Component = () => {
                     </button>
                     <Show when={enabled()}>
                       <A
-                        href={addon.manifest.nav?.route ?? `/addons/${addon.manifest.id}`}
+                        href={
+                          addon.manifest.nav?.route ??
+                          `/addons/${addon.manifest.id}`
+                        }
                         class="hero-btn hero-btn-primary"
                       >
                         Open
@@ -615,7 +634,10 @@ const Settings: Component = () => {
                       >
                         Delete
                       </button>
-                      <button type="button" onClick={() => setConfirmDeleteAddon(null)}>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteAddon(null)}
+                      >
                         Cancel
                       </button>
                     </div>

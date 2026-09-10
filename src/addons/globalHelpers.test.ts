@@ -7,7 +7,8 @@ import type {AddonHelper} from './types'
 // (...args: never[]) signature - only evaluate() in expr.ts is meant to
 // invoke them, via the same cast used here, after resolving args from
 // plain expression data
-const call = (fn: AddonHelper, ...args: unknown[]): unknown => fn(...(args as never[]))
+const call = (fn: AddonHelper, ...args: unknown[]): unknown =>
+  fn(...(args as never[]))
 
 describe('GLOBAL_HELPERS', () => {
   it('converts sats to msat and back', () => {

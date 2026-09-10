@@ -63,7 +63,12 @@ type AddonManifest = {
   icon: string // key into icons.ts
   description?: string
   permissions: {verb: string; scope?: string; reason: string}[]
-  nav?: {position: 'left' | 'right'; label: string; icon: string; route?: string}
+  nav?: {
+    position: 'left' | 'right'
+    label: string
+    icon: string
+    route?: string
+  }
   state: Record<string, JsonValue> // page-local, in-memory, reset per visit
   ui: UiNode
   settings?: {
@@ -94,15 +99,15 @@ A fixed component vocabulary, deliberately named after Solid's own
 control-flow primitives so `Renderer.tsx` maps each node onto a real Solid
 component instead of reinventing rendering:
 
-| Type         | Purpose                                                          |
-| ------------ | ----------------------------------------------------------------- |
+| Type         | Purpose                                                            |
+| ------------ | ------------------------------------------------------------------ |
 | `View`       | a `<div>`; `style` picks a CSS class (`addon-<style>`)             |
-| `Text`       | renders one `Expr` as text                                        |
-| `Input`      | text/number/checkbox, two-way bound via `bind`                    |
-| `NotePicker` | pick a held note; binds `{id, amountSat}` - never the note's url  |
-| `Button`     | `onClick` runs one `Action`                                       |
+| `Text`       | renders one `Expr` as text                                         |
+| `Input`      | text/number/checkbox, two-way bound via `bind`                     |
+| `NotePicker` | pick a held note; binds `{id, amountSat}` - never the note's url   |
+| `Button`     | `onClick` runs one `Action`                                        |
 | `For`        | iterate an array `Expr`; `item`/`index` in scope for its children  |
-| `Show`       | render children when an `Expr` is truthy                          |
+| `Show`       | render children when an `Expr` is truthy                           |
 | `QrDisplay`  | renders an `Expr`'s value as a QR code (wraps `components/Qr.tsx`) |
 
 New components are added here, in this file, when a real need shows up -
@@ -154,7 +159,7 @@ removing an earlier item) - see `Renderer.tsx`'s `resolveExpr`.
 **If you're editing `Renderer.tsx`:** never precompute the result of
 `evaluate()`/`resolveExpr()` into a `const` before returning JSX. Solid's
 fine-grained reactivity for a JSX attribute only tracks reads that happen
-*inline, textually inside the JSX expression itself* - dereferencing a
+_inline, textually inside the JSX expression itself_ - dereferencing a
 value into a plain variable first takes a one-time snapshot that silently
 stops updating. Every existing case in `Renderer.tsx` calls
 `resolveExpr(...)` directly inside the attribute/child position for this
@@ -176,7 +181,7 @@ instead, not a bigger helper.
 
 ### Global helpers
 
-`globalHelpers.ts`'s `GLOBAL_HELPERS` are merged into *every* addon's
+`globalHelpers.ts`'s `GLOBAL_HELPERS` are merged into _every_ addon's
 helper lookup (bundled or custom), ahead of the addon's own - because the
 expression grammar has no arithmetic operators, a custom addon (which has
 no helpers of its own; see below) couldn't otherwise even convert a
@@ -206,7 +211,7 @@ addon's own `helpers`, not here.
 - **`file.download`** - saves a `Blob` via a synthetic `<a download>`, same
   pattern `storage.ts`'s backup download already uses.
 
-A verb's *implementation* lives entirely here, in trusted host code. An
+A verb's _implementation_ lives entirely here, in trusted host code. An
 addon only ever supplies plain-data arguments (a note by opaque id, a list
 of amounts) and gets plain-data results back - it cannot name or reach
 `WalletContext`, the AES key, or `DeviceContext`'s raw `client`, because
@@ -261,7 +266,7 @@ it's still just a `.txt`-shaped blob of data to copy around by hand). The
 structural guarantee holds regardless of who wrote it: the worst a pasted
 manifest can do is exactly what its own `permissions` list says, shown
 before it's ever enabled - it cannot execute anything unexpected, because
-there is nothing in it *to* execute. What it doesn't get from being pasted
+there is nothing in it _to_ execute. What it doesn't get from being pasted
 rather than bundled is review: nobody but the holder checked that its
 `permissions` list is honest, or that its logic does something worth
 enabling in the first place. Treat a pasted-in manifest exactly as
@@ -272,7 +277,7 @@ before turning it on.
 ## Distribution beyond copy/paste
 
 A holder pasting JSON by hand (above) is manual and small-scale. Actually
-*fetching* a manifest from a URL, with pin-on-first-import and
+_fetching_ a manifest from a URL, with pin-on-first-import and
 staged-review-on-change (the way `trustedMints.ts` already handles the
 identically-shaped problem for mint signing keys), is a deliberately
 separate, not-yet-built initiative - see the plan doc's "Distribution &

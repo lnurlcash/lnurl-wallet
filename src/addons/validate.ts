@@ -13,7 +13,12 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
 const isJsonValue = (v: unknown, path: string): string | null => {
-  if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+  if (
+    v === null ||
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    typeof v === 'boolean'
+  ) {
     return null
   }
   if (Array.isArray(v)) {
@@ -37,12 +42,19 @@ const isJsonValue = (v: unknown, path: string): string | null => {
 // container - each element/field is itself an Expr (see types.ts's Expr
 // doc comment on why this exists: note.split's `tickets` arg, mainly)
 const isExpr = (v: unknown, path: string): string | null => {
-  if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+  if (
+    v === null ||
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    typeof v === 'boolean'
+  ) {
     return null
   }
   if (Array.isArray(v)) return isExprArray(v, path)
-  if (!isPlainObject(v)) return `${path} must be an expression object, array, or literal`
-  if ('var' in v) return typeof v.var === 'string' ? null : `${path}.var must be a string`
+  if (!isPlainObject(v))
+    return `${path} must be an expression object, array, or literal`
+  if ('var' in v)
+    return typeof v.var === 'string' ? null : `${path}.var must be a string`
   if ('cat' in v) return isExprArray(v.cat, `${path}.cat`)
   if ('and' in v) return isExprArray(v.and, `${path}.and`)
   if ('gt' in v) return isExprPair(v.gt, `${path}.gt`)
@@ -68,7 +80,8 @@ const isExprArray = (v: unknown, path: string): string | null => {
 }
 
 const isExprPair = (v: unknown, path: string): string | null => {
-  if (!Array.isArray(v) || v.length !== 2) return `${path} must be a 2-element array`
+  if (!Array.isArray(v) || v.length !== 2)
+    return `${path} must be a 2-element array`
   return isExpr(v[0], `${path}[0]`) ?? isExpr(v[1], `${path}[1]`)
 }
 
@@ -76,7 +89,8 @@ const isAction = (v: unknown, path: string): string | null => {
   if (!isPlainObject(v)) return `${path} must be an object`
   if ('verb' in v) {
     if (typeof v.verb !== 'string') return `${path}.verb must be a string`
-    if (!(v.verb in VERBS)) return `${path}.verb references an unknown verb: ${v.verb}`
+    if (!(v.verb in VERBS))
+      return `${path}.verb references an unknown verb: ${v.verb}`
     if (!isPlainObject(v.args)) return `${path}.args must be an object`
     for (const [key, expr] of Object.entries(v.args)) {
       const err = isExpr(expr, `${path}.args.${key}`)
@@ -116,7 +130,9 @@ const isUiNode = (v: unknown, path: string): string | null => {
   }
   switch (v.type as UiNode['type']) {
     case 'View':
-      return v.children === undefined ? null : isUiNodeArray(v.children, `${path}.children`)
+      return v.children === undefined
+        ? null
+        : isUiNodeArray(v.children, `${path}.children`)
     case 'Text':
       return isExpr(v.value, `${path}.value`)
     case 'Input':
@@ -127,9 +143,15 @@ const isUiNode = (v: unknown, path: string): string | null => {
       if (typeof v.label !== 'string') return `${path}.label must be a string`
       return isAction(v.onClick, `${path}.onClick`)
     case 'For':
-      return isExpr(v.each, `${path}.each`) ?? isUiNodeArray(v.children, `${path}.children`)
+      return (
+        isExpr(v.each, `${path}.each`) ??
+        isUiNodeArray(v.children, `${path}.children`)
+      )
     case 'Show':
-      return isExpr(v.when, `${path}.when`) ?? isUiNodeArray(v.children, `${path}.children`)
+      return (
+        isExpr(v.when, `${path}.when`) ??
+        isUiNodeArray(v.children, `${path}.children`)
+      )
     case 'QrDisplay':
       return isExpr(v.value, `${path}.value`)
   }
@@ -148,7 +170,8 @@ const isPermission = (v: unknown, path: string): string | null => {
   if (!isPlainObject(v)) return `${path} must be an object`
   if (typeof v.verb !== 'string') return `${path}.verb must be a string`
   if (typeof v.reason !== 'string') return `${path}.reason must be a string`
-  if ('scope' in v && typeof v.scope !== 'string') return `${path}.scope must be a string`
+  if ('scope' in v && typeof v.scope !== 'string')
+    return `${path}.scope must be a string`
   return null
 }
 
@@ -173,7 +196,8 @@ const findManifestError = (data: unknown): string | null => {
   if (typeof data.id !== 'string' || !/^[a-z0-9-]+$/.test(data.id)) {
     return 'id must be a lowercase string using only letters, numbers and hyphens.'
   }
-  if (typeof data.name !== 'string' || !data.name.trim()) return 'name is required.'
+  if (typeof data.name !== 'string' || !data.name.trim())
+    return 'name is required.'
   if (typeof data.version !== 'string') return 'version must be a string.'
   if (typeof data.icon !== 'string') return 'icon must be a string.'
   if ('description' in data && typeof data.description !== 'string') {
@@ -191,7 +215,8 @@ const findManifestError = (data: unknown): string | null => {
     }
     if (typeof nav.label !== 'string') return 'nav.label must be a string.'
     if (typeof nav.icon !== 'string') return 'nav.icon must be a string.'
-    if ('route' in nav && typeof nav.route !== 'string') return 'nav.route must be a string.'
+    if ('route' in nav && typeof nav.route !== 'string')
+      return 'nav.route must be a string.'
   }
 
   const stateErr = isJsonValue(data.state, 'state')

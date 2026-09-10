@@ -50,7 +50,9 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
 
   const initial =
     props.mode === 'settings'
-      ? (props.settingsStore?.[0]() ?? props.addon.manifest.settings?.state ?? {})
+      ? (props.settingsStore?.[0]() ??
+        props.addon.manifest.settings?.state ??
+        {})
       : (props.initialState ?? props.addon.manifest.state)
 
   const [store, setStore] = createStore<Record<string, unknown>>(
@@ -197,7 +199,9 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
               <input
                 type="checkbox"
                 checked={Boolean(readRaw())}
-                onChange={e => writeBind(node.bind, e.currentTarget.checked, vars)}
+                onChange={e =>
+                  writeBind(node.bind, e.currentTarget.checked, vars)
+                }
               />
               {node.label ? <>&nbsp;{node.label}</> : null}
             </label>
@@ -211,7 +215,11 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
               value={readRaw() == null ? '' : String(readRaw())}
               onInput={e => {
                 const v = e.currentTarget.value
-                writeBind(node.bind, node.kind === 'number' ? Number(v) : v, vars)
+                writeBind(
+                  node.bind,
+                  node.kind === 'number' ? Number(v) : v,
+                  vars
+                )
               }}
             />
           </label>
@@ -221,7 +229,9 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
       case 'NotePicker': {
         const bearers = wallet.bearers()
         const options = bearers.filter(b =>
-          node.filter?.spent === undefined ? true : Boolean(b.spent) === node.filter.spent
+          node.filter?.spent === undefined
+            ? true
+            : Boolean(b.spent) === node.filter.spent
         )
         // the bound value is {id, amountSat} - a small opaque-enough
         // summary resolved once at selection time - never the note's real
@@ -230,7 +240,8 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
         // wallet access at all). Read lazily (see the Input case above) -
         // not precomputed - so this stays in sync if state changes some
         // other way (e.g. a future "clear form" action)
-        const readSelected = () => readBind(node.bind, vars) as {id: string} | null
+        const readSelected = () =>
+          readBind(node.bind, vars) as {id: string} | null
         return (
           <label class="addon-field">
             <Show when={node.label}>{node.label}</Show>
@@ -241,7 +252,9 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
                 const found = id ? bearers.find(b => b.id === id) : undefined
                 writeBind(
                   node.bind,
-                  found ? {id: found.id, amountSat: Math.floor(found.amount / 1000)} : null,
+                  found
+                    ? {id: found.id, amountSat: Math.floor(found.amount / 1000)}
+                    : null,
                   vars
                 )
               }}
@@ -261,7 +274,10 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
 
       case 'Button':
         return (
-          <button type="button" onClick={() => void runAction(node.onClick, vars)}>
+          <button
+            type="button"
+            onClick={() => void runAction(node.onClick, vars)}
+          >
             {node.label}
           </button>
         )
@@ -333,7 +349,9 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
   }
 
   const ui =
-    props.mode === 'settings' ? props.addon.manifest.settings?.ui : props.addon.manifest.ui
+    props.mode === 'settings'
+      ? props.addon.manifest.settings?.ui
+      : props.addon.manifest.ui
 
   return (
     <div class="addon-root">

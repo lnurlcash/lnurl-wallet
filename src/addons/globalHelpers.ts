@@ -7,9 +7,12 @@ import type {AddonHelper} from './types'
 // holder-entered sat amount into the msat note.split expects. Pure,
 // side-effect-free, same rules as any other helper.
 export const GLOBAL_HELPERS: Record<string, AddonHelper> = {
-  satsToMsat: ((sats: number) => Math.round(Number(sats) * 1000)) as AddonHelper,
-  msatToSats: ((msat: number) => Math.floor(Number(msat) / 1000)) as AddonHelper,
-  add: ((...ns: number[]) => ns.reduce((sum, n) => sum + Number(n), 0)) as AddonHelper,
+  satsToMsat: ((sats: number) =>
+    Math.round(Number(sats) * 1000)) as AddonHelper,
+  msatToSats: ((msat: number) =>
+    Math.floor(Number(msat) / 1000)) as AddonHelper,
+  add: ((...ns: number[]) =>
+    ns.reduce((sum, n) => sum + Number(n), 0)) as AddonHelper,
   sub: ((a: number, b: number) => Number(a) - Number(b)) as AddonHelper,
   mul: ((a: number, b: number) => Number(a) * Number(b)) as AddonHelper,
   div: ((a: number, b: number) => Number(a) / Number(b)) as AddonHelper,

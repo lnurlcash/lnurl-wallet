@@ -24,7 +24,9 @@ import {ADDON_ICONS} from '../addons/icons'
 // regardless of what their manifest declares.
 const addonsWithNav = (position: 'left' | 'right') =>
   allAddons().filter(
-    a => enabledAddonIds().has(a.manifest.id) && a.manifest.nav?.position === position
+    a =>
+      enabledAddonIds().has(a.manifest.id) &&
+      a.manifest.nav?.position === position
   )
 
 const Nav = () => {
@@ -99,7 +101,10 @@ const Nav = () => {
                 const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
                 return (
                   <A
-                    href={addon.manifest.nav!.route ?? `/addons/${addon.manifest.id}`}
+                    href={
+                      addon.manifest.nav!.route ??
+                      `/addons/${addon.manifest.id}`
+                    }
                     class="nav-link"
                   >
                     {Icon && <Icon />}
@@ -142,9 +147,16 @@ const Nav = () => {
               {addon => {
                 const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
                 return (
-                  <A href={addon.manifest.nav!.route ?? `/addons/${addon.manifest.id}`}>
+                  <A
+                    href={
+                      addon.manifest.nav!.route ??
+                      `/addons/${addon.manifest.id}`
+                    }
+                  >
                     {Icon && <Icon />}
-                    <span class="nav-label">&nbsp;{addon.manifest.nav!.label}</span>
+                    <span class="nav-label">
+                      &nbsp;{addon.manifest.nav!.label}
+                    </span>
                   </A>
                 )
               }}

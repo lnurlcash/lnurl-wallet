@@ -181,7 +181,15 @@ export const buildTicketPdf = async (
   const padding = CARD_PADDING_MM * MM
   const cardsPerPage = ROWS * COLUMNS
 
-  drawCoverPage(rgb, doc, config, tickets, {font, boldFont}, pageWidth, pageHeight)
+  drawCoverPage(
+    rgb,
+    doc,
+    config,
+    tickets,
+    {font, boldFont},
+    pageWidth,
+    pageHeight
+  )
 
   const ordered = [...tickets].sort((a, b) => a.index - b.index)
 
