@@ -22,6 +22,7 @@ import {
   serverOf,
   serviceOriginOf,
   toBech32Lnurl,
+  toLud17w,
   verifyNoteSignature,
   verifyNoteSignatureHash,
   withoutSignature,
@@ -85,6 +86,15 @@ const BearerCard: Component<BearerCardProps> = props => {
   // withoutSignature) - off by default, so the QR/copy keep behaving
   // exactly as before unless the holder deliberately strips it
   const [stripSignature, setStripSignature] = createSignal(false)
+  // which scheme the QR/copied note uses - bech32 (LNURL1...) is this
+  // wallet's own long-standing default (scannable, works everywhere);
+  // lnurlw:// (LUD-17) is shorter and human-readable, handy for a text
+  // message or a wallet that prefers the raw scheme link
+  const [handoverEncoding, setHandoverEncoding] = createSignal<
+    'bech32' | 'lud17'
+  >('bech32')
+  const encodeForHandover = (url: string): string =>
+    handoverEncoding() === 'lud17' ? toLud17w(url) : toBech32Lnurl(url)
 
   const k1 = () => noteK1(props.bearer.url) || ''
   const isSpent = () => !!props.bearer.spent
@@ -203,6 +213,7 @@ const BearerCard: Component<BearerCardProps> = props => {
     setRevealedUrl(null)
     setQrRevealed(false)
     setStripSignature(false)
+    setHandoverEncoding('bech32')
   }
 
   const revealDeviceNote = async () => {
@@ -412,6 +423,24 @@ const BearerCard: Component<BearerCardProps> = props => {
                 &nbsp;Offline verified
               </label>
             </div>
+            <div class="btns">
+              <button
+                type="button"
+                classList={{active: handoverEncoding() === 'bech32'}}
+                title="LNURL1... - this wallet's usual QR/copy encoding"
+                onClick={() => setHandoverEncoding('bech32')}
+              >
+                Bech32
+              </button>
+              <button
+                type="button"
+                classList={{active: handoverEncoding() === 'lud17'}}
+                title="lnurlw://... - LUD-17's shorter, human-readable scheme link"
+                onClick={() => setHandoverEncoding('lud17')}
+              >
+                lnurlw://
+              </button>
+            </div>
             <Show
               when={revealedUrl()}
               fallback={
@@ -434,7 +463,7 @@ const BearerCard: Component<BearerCardProps> = props => {
                 return (
                   <>
                     <div class="qr-wrapper">
-                      <Qr value={toBech32Lnurl(handoverUrl())} />
+                      <Qr value={encodeForHandover(handoverUrl())} />
                       <Show when={!qrRevealed()}>
                         <button
                           class="qr-overlay"
@@ -448,7 +477,7 @@ const BearerCard: Component<BearerCardProps> = props => {
                     <div class="btns">
                       <button
                         onClick={() =>
-                          copyToClipboard(toBech32Lnurl(handoverUrl()))
+                          copyToClipboard(encodeForHandover(handoverUrl()))
                         }
                       >
                         <IoCopySharp />
