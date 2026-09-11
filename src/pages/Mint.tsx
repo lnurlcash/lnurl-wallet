@@ -45,6 +45,7 @@ import {
   serviceOriginOf,
   noteEndpointOf,
   isPreimage,
+  isCk1,
   applyMintFee,
   grossUpForMintFee,
   describeMintFee,
@@ -53,8 +54,7 @@ import {
   lightningAddressUsername,
   probeBurnedNote,
   sameInvoice,
-  generateMintSecret,
-  hashK1,
+  requestMintInvoice,
   requireMintComment,
   requireBoundMintQuote,
   validateBoundMintReceipt,
@@ -541,12 +541,14 @@ const Mint: Component = () => {
     try {
       // Current LUD-25 minting requires the comment commitment. Refuse
       // before an invoice exists if the mint does not advertise enough
-      // capacity, then generate the real secret and disclose only its hash.
-      // domain the secret is derived/indexed under (see lnurlcash.ts's
-      // generateMintSecret) is the note's actual home, the withdraw
-      // endpoint - not the payRequest callback, in the unlikely case a mint
-      // ever splits those across hosts. withdrawLink is always present here
-      // because lookup rejects a payRequest that omits it.
+      // capacity, then generate the real secret (see lnurlcash.ts's
+      // requestMintInvoice - pubkey-bound when the mint accepts it, else
+      // the legacy hash-keyed one) and disclose only its public form. The
+      // domain the secret is derived/indexed under is the note's actual
+      // home, the withdraw endpoint - not the payRequest callback, in the
+      // unlikely case a mint ever splits those across hosts. withdrawLink
+      // is always present here because lookup rejects a payRequest that
+      // omits it.
       requireMintComment(info)
 
       let result: InvoiceResult | null = null
@@ -629,13 +631,17 @@ const Mint: Component = () => {
       }
 
       if (!result) {
-        const secret = generateMintSecret(mintServer)
-        result = await requestInvoice(
+        // prefers a LUD-25 Part 2 pubkey-bound output over the legacy
+        // hash-keyed one whenever the mint accepts it, with an automatic,
+        // invisible fallback otherwise - see requestMintInvoice's own
+        // comment for why trying this is always safe
+        const minted = await requestMintInvoice(
           info.callback,
           amount.grossMsat,
-          hashK1(secret)
+          mintServer
         )
-        setMintSecret(secret)
+        result = minted.result
+        setMintSecret(minted.secret)
         setDeviceMintAttempt(null)
         setInvoicedMsat(amount.netMsat)
       }
@@ -745,8 +751,8 @@ const Mint: Component = () => {
   ) => {
     const info = payRequest()
     if (!info?.withdrawLink) return
-    if (!isPreimage(noteSecret)) {
-      notify('The note secret is 64 hex characters.', NotifyKind.ERROR)
+    if (!isPreimage(noteSecret) && !isCk1(noteSecret)) {
+      notify('The note secret is malformed.', NotifyKind.ERROR)
       return
     }
     setBusy(true)
@@ -777,6 +783,46 @@ const Mint: Component = () => {
       // is more than this deserves
       const feePaidMsat = grossPaidMsat - noteInfo.maxWithdrawable
       const mintPubkey = noteInfo.mintPubkey
+
+      // LUD-25 Part 2: this note's own bearer secret already is a
+      // signature proving key ownership - none of the legacy rotate-for-
+      // a-certificate dance below applies (rotating would burn-and-
+      // reissue under a fresh LEGACY secret, silently downgrading it back
+      // to hash-keyed), and the hardware vault has not been migrated to
+      // pubkey-based notes yet (see Vault.tsx's own warning) - so this
+      // always stays browser-only, regardless of whether a device happens
+      // to be connected right now.
+      if (isCk1(noteSecret)) {
+        const url = buildNoteUrl(
+          info.withdrawLink,
+          noteSecret,
+          noteInfo.maxWithdrawable
+        )
+        await addBearer({
+          url,
+          callback: noteInfo.callback,
+          amount: noteInfo.maxWithdrawable,
+          verified: true,
+          mintPubkey
+        })
+        logActivity(
+          'mint',
+          `Minted ${msatToSats(noteInfo.maxWithdrawable)} sats from ${serverOf(url)} (pub/sig).` +
+            (feePaidMsat > 0
+              ? ` (${msatToSats(feePaidMsat)} sat mint fee.)`
+              : '') +
+            (verifyUrl() ? ` Verify: ${verifyUrl()}.` : '')
+        )
+        notify(
+          `Minted a bearer note of ${msatToSats(noteInfo.maxWithdrawable)} sats.` +
+            (feePaidMsat > 0
+              ? ` (${msatToSats(feePaidMsat)} sat mint fee.)`
+              : ''),
+          NotifyKind.SUCCESS
+        )
+        navigate('/wallet')
+        return
+      }
 
       // if a vault is connected, this note's secret is generated and held
       // there instead of in this browser - import the note secret, then

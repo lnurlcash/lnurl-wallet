@@ -2,7 +2,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {AmbiguousMintError} from './errors'
-import {decodeCs1, isCk1, decodeCk1} from './recoverableNotes'
+import {decodeCs1, isCk1, decodeCk1, encodeCp1} from './recoverableNotes'
 
 // ---- offline verification ----
 
@@ -226,6 +226,20 @@ export const recoverNoteOwnershipPubkey = (
   } catch {
     return null
   }
+}
+
+// the public commitment a wallet-generated ck1 secret names, computed
+// purely locally (no SERVICE round trip) - lets a caller that only has a
+// note's bearer secret (e.g. a wallet-initiated Part 2 mint, before the
+// note even exists yet) get the exact same cp1 value the mint's own
+// dispatch-by-shape comment handling expects, without separately tracking
+// which branch/index it came from. Null (never throws) on anything that
+// isn't actually a ck1, mirroring recoverNoteOwnershipPubkey's own
+// "unverifiable, not a crash" convention.
+export const cp1FromCk1 = (ck1: string): string | null => {
+  const signature = decodeCk1(ck1)
+  const pubkey = signature ? recoverNoteOwnershipPubkey(signature) : null
+  return pubkey ? encodeCp1(pubkey) : null
 }
 
 // LUD-25 Part 2: a cp1 output's sig/sig2 comes back as cs1<...> (bech32m)

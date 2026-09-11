@@ -1,10 +1,15 @@
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {offlineMode} from './offlineMode'
-import {nextCashSecret, requireRecoverableCashSecret} from './cashSecrets'
+import {
+  nextCashSecret,
+  requireRecoverableCashSecret,
+  requireRecoverableCashAddressSecret
+} from './cashSecrets'
 import {msatToSats} from './helpers'
 import {configureNetworkGuard} from './lib/net'
 import {configureSecretProvider} from './lib/secrets'
-import type {MintFee} from './lib'
+import {requestInvoice, hashK1, cp1FromCk1} from './lib'
+import type {MintFee, InvoiceResult} from './lib'
 
 // LUD-25 LNURLcash - bearer assets. Draft spec:
 // https://github.com/lnurl/luds/blob/lnurlcash/25.md
@@ -89,6 +94,48 @@ configureSecretProvider(generateNoteSecret)
 // persisted before the quote leaves this wallet.
 export const generateMintSecret = (domain: string): string =>
   requireRecoverableCashSecret(domain)
+
+// LUD-25 Part 2 counterpart to generateMintSecret above - a wallet-
+// initiated mint/transfer's own pubkey-bound secret (a ck1 ownership
+// signature, not a preimage), seed-recoverable the same way and for the
+// same reload-survival reason (see requireRecoverableCashAddressSecret).
+export const generateMintPubkeySecret = (domain: string): string =>
+  requireRecoverableCashAddressSecret(domain)
+
+// Requests a mint invoice, preferring a LUD-25 Part 2 pubkey-bound output
+// (comment=cp1<pk>) over the legacy hash-keyed one (comment=hashK1(secret))
+// whenever the mint accepts it - there is no capability flag to check
+// first (this protocol dispatches by value shape, never version
+// negotiation - see requestInvoice itself), so this just tries. Requesting
+// an invoice has no burn side effect either way: if the mint doesn't
+// understand a cp1 comment, no invoice is issued and nothing was paid, so
+// falling back to the legacy scheme is always safe - at most this wastes
+// one already-persisted address-branch index (harmless, see
+// nextCashAddressSecret's own comment). Every existing call site
+// (Mint.tsx, TransferDialog.tsx) already required commentAllowed >= 64
+// (requireMintComment) before reaching this point, and a cp1 value is
+// only 61 characters, so it always fits when either scheme would.
+export const requestMintInvoice = async (
+  callback: string,
+  amountMsat: number,
+  domain: string
+): Promise<{result: InvoiceResult; secret: string}> => {
+  try {
+    const secret = generateMintPubkeySecret(domain)
+    const cp1 = cp1FromCk1(secret)
+    if (cp1) {
+      const result = await requestInvoice(callback, amountMsat, cp1)
+      return {result, secret}
+    }
+  } catch {
+    // no cash root loaded, or the mint didn't accept a cp1 comment -
+    // either way, no invoice was issued and nothing was paid, so falling
+    // back to the legacy scheme below is always safe
+  }
+  const secret = generateMintSecret(domain)
+  const result = await requestInvoice(callback, amountMsat, hashK1(secret))
+  return {result, secret}
+}
 
 // fee_percent_ppm is parts-per-million - /10_000 for a percent, then trim
 // the trailing zeros toFixed leaves behind (2000 ppm -> "0.2000" -> "0.2")

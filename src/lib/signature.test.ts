@@ -7,9 +7,10 @@ import {
   verifyNoteSignatureHash,
   hashK1,
   signNoteOwnership,
-  recoverNoteOwnershipPubkey
+  recoverNoteOwnershipPubkey,
+  cp1FromCk1
 } from './signature'
-import {encodeCk1} from './recoverableNotes'
+import {encodeCk1, encodeCp1} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 
@@ -227,5 +228,20 @@ describe('recoverNoteOwnershipPubkey', () => {
   it('returns null for a malformed signature rather than throwing', () => {
     expect(recoverNoteOwnershipPubkey(new Uint8Array(10))).toBeNull()
     expect(recoverNoteOwnershipPubkey(new Uint8Array(65))).toBeNull()
+  })
+})
+
+describe('cp1FromCk1', () => {
+  it('recovers the exact cp1 a ck1 secret belongs to, purely locally', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const ck1 = encodeCk1(signNoteOwnership(secretKey))
+    expect(cp1FromCk1(ck1)).toBe(encodeCp1(pubkeyXOnly))
+  })
+
+  it('returns null for anything that is not a ck1', () => {
+    expect(cp1FromCk1('not-a-ck1')).toBeNull()
+    expect(cp1FromCk1(K1)).toBeNull()
+    expect(cp1FromCk1(encodeCp1(schnorr.utils.randomSecretKey()))).toBeNull()
   })
 })

@@ -251,3 +251,109 @@ describe('readCashSecretIndices (backup build)', () => {
     expect(cashSecrets.readCashSecretIndices()).toEqual({})
   })
 })
+
+describe('LUD-25 Part 2: wallet-initiated secrets (nextCashAddressSecret)', () => {
+  it('is null with no root set', () => {
+    expect(cashSecrets.nextCashAddressSecret('mint.example')).toBeNull()
+    expect(() =>
+      cashSecrets.requireRecoverableCashAddressSecret('mint.example')
+    ).toThrow(/seed-derived cash key/)
+  })
+
+  it('persists a recoverable secret before returning it, as a ck1 string', () => {
+    loadRoot()
+    const secret =
+      cashSecrets.requireRecoverableCashAddressSecret('mint.example')
+    expect(secret).toMatch(/^ck1/)
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(1)
+  })
+
+  it('claims and persists sequential indices per domain', () => {
+    loadRoot()
+    const first = cashSecrets.nextCashAddressSecret('mint.example')
+    const second = cashSecrets.nextCashAddressSecret('mint.example')
+    expect(first).not.toBe(second)
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(2)
+  })
+
+  it('tracks each domain independently', () => {
+    loadRoot()
+    cashSecrets.nextCashAddressSecret('a.example')
+    cashSecrets.nextCashAddressSecret('a.example')
+    cashSecrets.nextCashAddressSecret('b.example')
+    expect(cashSecrets.nextCashAddressSecretIndex('a.example')).toBe(2)
+    expect(cashSecrets.nextCashAddressSecretIndex('b.example')).toBe(1)
+  })
+
+  it('survives a fresh module load (persisted, not just in-memory)', async () => {
+    loadRoot()
+    cashSecrets.nextCashAddressSecret('mint.example')
+    cashSecrets.nextCashAddressSecret('mint.example')
+    vi.resetModules()
+    const reloaded: typeof import('./cashSecrets') =
+      await import('./cashSecrets')
+    expect(reloaded.nextCashAddressSecretIndex('mint.example')).toBe(2)
+  })
+
+  it('is a separate counter namespace from the legacy nextCashSecret, for the same domain', () => {
+    loadRoot()
+    cashSecrets.nextCashSecret('mint.example')
+    cashSecrets.nextCashSecret('mint.example')
+    cashSecrets.nextCashSecret('mint.example')
+    cashSecrets.nextCashAddressSecret('mint.example')
+    expect(cashSecrets.nextCashSecretIndex('mint.example')).toBe(3)
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(1)
+  })
+
+  it('clearCashSecretIndices also resets the address counter', () => {
+    loadRoot()
+    cashSecrets.nextCashAddressSecret('mint.example')
+    cashSecrets.clearCashSecretIndices()
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(0)
+  })
+
+  it('readCashAddressSecretIndices reflects the current counters', () => {
+    loadRoot()
+    cashSecrets.nextCashAddressSecret('mint.example')
+    expect(cashSecrets.readCashAddressSecretIndices()).toEqual({
+      'mint.example': 1
+    })
+  })
+})
+
+describe('mergeCashAddressSecretIndices (backup restore)', () => {
+  it('raises a domain counter to the incoming value', () => {
+    cashSecrets.mergeCashAddressSecretIndices({'mint.example': 5})
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(5)
+  })
+
+  it('never lowers an existing counter', () => {
+    loadRoot()
+    cashSecrets.nextCashAddressSecret('mint.example') // -> index 1
+    cashSecrets.mergeCashAddressSecretIndices({'mint.example': 0})
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(1)
+  })
+
+  it('ignores malformed entries without throwing', () => {
+    expect(() =>
+      cashSecrets.mergeCashAddressSecretIndices({
+        'mint.example': -1,
+        'other.example': 1.5
+      })
+    ).not.toThrow()
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(0)
+  })
+
+  it('no-ops on non-object input', () => {
+    expect(() =>
+      cashSecrets.mergeCashAddressSecretIndices(undefined)
+    ).not.toThrow()
+  })
+
+  it('never affects the legacy mergeCashSecretIndices counter for the same domain', () => {
+    cashSecrets.mergeCashSecretIndices({'mint.example': 3})
+    cashSecrets.mergeCashAddressSecretIndices({'mint.example': 7})
+    expect(cashSecrets.nextCashSecretIndex('mint.example')).toBe(3)
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(7)
+  })
+})

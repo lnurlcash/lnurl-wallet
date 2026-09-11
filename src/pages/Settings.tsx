@@ -671,7 +671,7 @@ const Settings: Component = () => {
             manifest JSON can and can't do.
           </p>
 
-          <div class="mint-picker">
+          <div class="addon-list">
             <For each={allAddons()}>
               {addon => {
                 const enabled = () => enabledAddonIds().has(addon.manifest.id)

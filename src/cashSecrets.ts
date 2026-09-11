@@ -1,7 +1,8 @@
 import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {lud05PathSuffix} from './keys'
-import {deriveNoteSecretKey, type Cx1} from './lib/recoverableNotes'
+import {deriveNoteSecretKey, encodeCk1, type Cx1} from './lib/recoverableNotes'
+import {signNoteOwnership} from './lib/signature'
 
 // LUD-25 Seed-recoverable note secrets: deterministic secrets for the notes
 // this wallet mints/rotates/splits/merges, derived from the seed instead of
@@ -42,11 +43,17 @@ export const hasCashRoot = (): boolean => cashRoot !== null
 // crafted backup (see mergeCashSecretIndices) can populate this object with
 // arbitrary string keys without ever touching Object.prototype.
 const STORAGE_KEY = 'lnurlcash_cash_indices'
+// LUD-25 Part 2: a wallet-initiated mint/transfer's own "next index" on the
+// same address branch cashAddressSecretAtIndex below already derives (see
+// nextCashAddressSecret) - a separate namespace from STORAGE_KEY's legacy
+// counter, since the two schemes walk different HD branches for the same
+// domain and have nothing to share or collide over.
+const ADDRESS_STORAGE_KEY = 'lnurlcash_cash_address_indices'
 type Indices = Record<string, number>
 
-const readIndices = (): Indices => {
+const readIndices = (key: string): Indices => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return Object.create(null)
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null)
@@ -63,14 +70,18 @@ const readIndices = (): Indices => {
   }
 }
 
-const writeIndices = (indices: Indices): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(indices))
+const writeIndices = (key: string, indices: Indices): void => {
+  localStorage.setItem(key, JSON.stringify(indices))
 }
 
-export const readCashSecretIndices = (): Indices => readIndices()
+export const readCashSecretIndices = (): Indices => readIndices(STORAGE_KEY)
+
+export const readCashAddressSecretIndices = (): Indices =>
+  readIndices(ADDRESS_STORAGE_KEY)
 
 export const clearCashSecretIndices = (): void => {
   localStorage.removeItem(STORAGE_KEY)
+  localStorage.removeItem(ADDRESS_STORAGE_KEY)
 }
 
 // the domain-bound subtree both cashSecretAtIndex and a future from-seed
@@ -149,7 +160,7 @@ export const cashAddressSecretAtIndex = (
 }
 
 export const nextCashSecretIndex = (domain: string): number =>
-  readIndices()[domain] ?? 0
+  readIndices(STORAGE_KEY)[domain] ?? 0
 
 // claims the next index for `domain`, persists the advance, and returns the
 // secret at it - null whenever no cash root is loaded, in which case the
@@ -158,9 +169,9 @@ export const nextCashSecret = (domain: string): string | null => {
   const i = nextCashSecretIndex(domain)
   const secret = cashSecretAtIndex(domain, i)
   if (secret === null) return null
-  const indices = readIndices()
+  const indices = readIndices(STORAGE_KEY)
   indices[domain] = i + 1
-  writeIndices(indices)
+  writeIndices(STORAGE_KEY, indices)
   return secret
 }
 
@@ -179,6 +190,42 @@ export const requireRecoverableCashSecret = (domain: string): string => {
   return secret
 }
 
+// LUD-25 Part 2 counterpart to nextCashSecretIndex/nextCashSecret above -
+// same per-SERVICE "next index" convention, just walked over
+// cashAddressSecretAtIndex (m/139'/1'/domain) instead of the legacy
+// m/139'/0 branch, and returned as this note's actual bearer secret (a
+// ck1 ownership signature - see signNoteOwnership) rather than a raw
+// preimage. A wallet-INITIATED mint/transfer reaching for a pubkey-bound
+// output uses this; it is otherwise unrelated to (and never shares an
+// index with) a registered address's mint-auto-derived notes on the same
+// branch - the mint's own claim_next_index already skips past any index
+// this wallet has already used, on either side, so there is nothing to
+// coordinate here.
+export const nextCashAddressSecretIndex = (domain: string): number =>
+  readIndices(ADDRESS_STORAGE_KEY)[domain] ?? 0
+
+export const nextCashAddressSecret = (domain: string): string | null => {
+  const i = nextCashAddressSecretIndex(domain)
+  const secretKey = cashAddressSecretAtIndex(domain, i)
+  if (secretKey === null) return null
+  const indices = readIndices(ADDRESS_STORAGE_KEY)
+  indices[domain] = i + 1
+  writeIndices(ADDRESS_STORAGE_KEY, indices)
+  return encodeCk1(signNoteOwnership(secretKey))
+}
+
+// same reload-survival reasoning as requireRecoverableCashSecret above -
+// a wallet-initiated Part 2 mint/transfer quote is a payable promise too
+export const requireRecoverableCashAddressSecret = (domain: string): string => {
+  const secret = nextCashAddressSecret(domain)
+  if (secret === null) {
+    throw new Error(
+      'This wallet cannot safely create a mint invoice until its seed-derived cash key is unlocked. Restore or re-enter the wallet seed first.'
+    )
+  }
+  return secret
+}
+
 // merges a backup's per-SERVICE counters in - never decreases one (that
 // would risk re-deriving and reusing an index this device, or the backup's
 // own device, already generated a secret at), and simply ignores anything
@@ -186,9 +233,9 @@ export const requireRecoverableCashSecret = (domain: string): string => {
 // able to jam this wallet's future note generation, only at worst leave a
 // domain's counter lower than it could be (harmless - the next generated
 // secret just costs one extra derivation, never a collision)
-export const mergeCashSecretIndices = (incoming: unknown): void => {
+const mergeIndicesInto = (key: string, incoming: unknown): void => {
   if (typeof incoming !== 'object' || incoming === null) return
-  const current = readIndices()
+  const current = readIndices(key)
   let changed = false
   for (const [domain, value] of Object.entries(incoming)) {
     if (
@@ -207,5 +254,11 @@ export const mergeCashSecretIndices = (incoming: unknown): void => {
       changed = true
     }
   }
-  if (changed) writeIndices(current)
+  if (changed) writeIndices(key, current)
 }
+
+export const mergeCashSecretIndices = (incoming: unknown): void =>
+  mergeIndicesInto(STORAGE_KEY, incoming)
+
+export const mergeCashAddressSecretIndices = (incoming: unknown): void =>
+  mergeIndicesInto(ADDRESS_STORAGE_KEY, incoming)

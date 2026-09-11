@@ -1703,6 +1703,28 @@ nav {
   margin-top: 10px;
 }
 
+// Settings > Addons - one full-width row per addon rather than
+// .mint-picker's wrapping inline chips (a holder's whole addon list reads
+// better top-to-bottom than as a chip cloud), reusing .mint-picker-entry's
+// same button group per row. margin-bottom matches .setup-card's own, so
+// whatever follows (the "Build your own addon" card) doesn't sit flush
+// against the last row.
+.addon-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 24px;
+  .mint-picker-entry {
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba($font-color, 0.15);
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+}
+
 // ---- dialog ----
 
 // higher than nav's z-index: 2/3 (see below) so a dialog opened from any

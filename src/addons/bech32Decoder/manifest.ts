@@ -39,14 +39,21 @@ const encodeLnurl = (value: unknown): string | null => {
   return looksLikeUrl(stripped) ? toBech32Lnurl(stripped) : null
 }
 
-// A pasted lnurlcash bearer note URL (k1 + amount, see src/lib/urls.ts) -
-// same shape this wallet's own bearers are stored as, but detected from
-// plain pasted text rather than something already held. noteK1/
-// noteDeclaredAmount are both null-safe on a non-URL/malformed string, so
-// this never throws.
+// A pasted lnurlcash bearer note URL (see src/lib/urls.ts) - same shape
+// this wallet's own bearers are stored as, but detected from plain pasted
+// text rather than something already held. `amount` is only this wallet's
+// own convention when it builds a note url (buildNoteUrl) - plenty of
+// real note urls carry just k1 (+ sig), no declared amount - so k1 alone
+// is the actual required field; amount/sig only disambiguate it from some
+// other k1-bearing LNURL (e.g. LNURL-auth's own callback) that isn't a
+// note at all. noteK1/noteDeclaredAmount/noteSignature are all null-safe
+// on a non-URL/malformed string, so this never throws.
 const looksLikeNoteUrl = (value: unknown): boolean => {
   const stripped = stripScheme(value)
-  return noteK1(stripped) !== null && noteDeclaredAmount(stripped) !== null
+  return (
+    noteK1(stripped) !== null &&
+    (noteDeclaredAmount(stripped) !== null || noteSignature(stripped) !== null)
+  )
 }
 
 const noteKindDisplay = (value: unknown): string => {
@@ -60,7 +67,7 @@ const noteKindDisplay = (value: unknown): string => {
 const noteAmountDisplay = (value: unknown): string => {
   const msat = noteDeclaredAmount(stripScheme(value))
   return msat === null
-    ? '-'
+    ? 'not declared in this url'
     : `${Math.floor(msat / 1000).toLocaleString()} sats`
 }
 

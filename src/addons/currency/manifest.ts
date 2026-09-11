@@ -51,6 +51,18 @@ const formatSats = (sats: unknown): string => {
   return Number.isFinite(n) ? `${Math.round(n).toLocaleString()} sats` : '-'
 }
 
+// the raw feed price (1 BTC in the selected currency), same rates() value
+// satsToFiatAmount/fiatToSatsAmount both already divide/multiply through -
+// shown as-is so a holder can sanity-check the rate this calculator is
+// actually using right now, not just its outputs
+const currentRateDisplay = (code: unknown): string => {
+  const r = rates()
+  if (!r || !isFiatCode(code)) return '-'
+  return `1 BTC = ${SYMBOL[code]}${r[code].toLocaleString(undefined, {
+    maximumFractionDigits: 2
+  })}`
+}
+
 const currencyManifest: AddonManifest = {
   id: 'currency-converter',
   name: 'Currency Converter',
@@ -107,6 +119,10 @@ const currencyManifest: AddonManifest = {
             ]
           },
           {
+            type: 'Text',
+            value: {helper: 'currentRateDisplay', args: [{var: 'currency'}]}
+          },
+          {
             type: 'Input',
             bind: 'sats',
             kind: 'number',
@@ -156,7 +172,8 @@ const currencyHelpers: Record<string, AddonHelper> = {
   satsToFiatAmount: satsToFiatAmount as AddonHelper,
   fiatToSatsAmount: fiatToSatsAmount as AddonHelper,
   formatFiatAmount: formatFiatAmount as AddonHelper,
-  formatSats: formatSats as AddonHelper
+  formatSats: formatSats as AddonHelper,
+  currentRateDisplay: currentRateDisplay as AddonHelper
 }
 
 export const currencyAddon: Addon = {
