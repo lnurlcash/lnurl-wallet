@@ -1448,7 +1448,8 @@ nav {
 .bearer-signed,
 .bearer-spent,
 .bearer-device,
-.bearer-sunset {
+.bearer-sunset,
+.bearer-plain {
   display: inline-flex;
   align-items: center;
   font-size: 0.8em;
@@ -1459,6 +1460,14 @@ nav {
 
 .bearer-pending {
   color: #e4c567;
+}
+
+// LUD-25 Part 1's legacy hash-keyed scheme, as opposed to Part 2's pubkey/
+// signature-bound one (see BearerCard.tsx's isCk1 check) - purely
+// descriptive, not a warning (a plain-secret note is exactly as spendable
+// as any other), so muted rather than colored like the status pills above
+.bearer-plain {
+  opacity: 0.6;
 }
 
 .bearer-signed {

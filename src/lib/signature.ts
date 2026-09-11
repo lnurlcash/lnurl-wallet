@@ -2,7 +2,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {AmbiguousMintError} from './errors'
-import {decodeCs1, isCk1, decodeCk1, encodeCp1} from './recoverableNotes'
+import {decodeCs1, isCs1, isCk1, decodeCk1, encodeCp1} from './recoverableNotes'
 
 // ---- offline verification ----
 
@@ -62,11 +62,24 @@ const noteSignatureDigest = (k1: string, amountMsat: number): Uint8Array =>
 // just yields an unrelated pubkey that won't match mintPubkey) and means a
 // note verifies correctly regardless of which convention its issuer
 // followed.
+// `signature` may be plain hex OR a cs1-encoded certificate - SERVICE's
+// own choice at disclosure time (see requireMutationSignature, which now
+// preserves whichever one it actually sent rather than normalizing it
+// away), dispatched by shape here at the one place that actually needs
+// raw bytes, same convention as every other dual-mode field in this kit.
+const normalizeSignatureHex = (signature: string): string | null => {
+  if (NOTE_SIGNATURE_PATTERN.test(signature)) return signature.toLowerCase()
+  const decoded = decodeCs1(signature)
+  return decoded ? bytesToHex(decoded) : null
+}
+
 const verifyNoteSignatureDigest = (
   digest: Uint8Array,
-  signatureHex: string,
+  signature: string,
   mintPubkeyHex: string
 ): boolean => {
+  const signatureHex = normalizeSignatureHex(signature)
+  if (!signatureHex) return false
   let wireSig: Uint8Array
   try {
     wireSig = hexToBytes(signatureHex)
@@ -242,11 +255,13 @@ export const cp1FromCk1 = (ck1: string): string | null => {
   return pubkey ? encodeCp1(pubkey) : null
 }
 
-// LUD-25 Part 2: a cp1 output's sig/sig2 comes back as cs1<...> (bech32m)
-// instead of plain hex - decoded to hex here, at the one choke point every
-// mutation's signature passes through, so every downstream consumer
-// (stored on the bearer's own url, verifyNoteSignatureHash) keeps working
-// against plain hex regardless of which way SERVICE actually encoded it.
+// LUD-25 Part 2: a cp1 output's sig/sig2 may come back as cs1<...>
+// (bech32m) instead of plain hex - preserved exactly as SERVICE disclosed
+// it (never normalized to hex here), so the note's own stored URL/sig
+// matches the wire value byte-for-byte, same "keep the original shape"
+// convention every other dual-mode field in this kit already follows.
+// verifyNoteSignatureDigest (via normalizeSignatureHex) is the one place
+// that actually needs raw bytes, and accepts either shape transparently.
 export const requireMutationSignature = (
   body: any,
   field: 'sig' | 'sig2'
@@ -256,8 +271,7 @@ export const requireMutationSignature = (
     if (NOTE_SIGNATURE_PATTERN.test(signature)) {
       return signature.toLowerCase()
     }
-    const decoded = decodeCs1(signature)
-    if (decoded) return bytesToHex(decoded)
+    if (isCs1(signature)) return signature.trim()
   }
   // The SERVICE has already answered OK, so callers must preserve the fresh
   // output secret even though the response is non-conformant.  Reuse the

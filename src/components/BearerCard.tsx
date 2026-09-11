@@ -24,7 +24,8 @@ import {
   toBech32Lnurl,
   verifyNoteSignature,
   verifyNoteSignatureHash,
-  withoutSignature
+  withoutSignature,
+  isCk1
 } from '../lnurlcash'
 import {
   deviceExportForHandoff,
@@ -291,6 +292,20 @@ const BearerCard: Component<BearerCardProps> = props => {
               >
                 <IoShieldCheckmarkSharp />
                 &nbsp;signed
+              </span>
+            </Show>
+            {/* LUD-25 Part 1's legacy hash preimage, as opposed to Part 2's
+            pubkey/signature-bound k1 (see cashAddressBranch/the Address
+            page) - k1() is '' for a device-backed bearer (no raw k1 kept
+            in browser storage), which isCk1('') correctly reads as false;
+            gated on a non-empty k1 too so a device note doesn't wrongly
+            claim a scheme this wallet can't actually see from here */}
+            <Show when={k1() && !isCk1(k1())}>
+              <span
+                class="bearer-plain"
+                title="This note's own secret is a legacy hash preimage (LUD-25 Part 1), not a Part 2 pubkey/signature"
+              >
+                plain secret
               </span>
             </Show>
             <Show when={props.bearer.deviceId}>

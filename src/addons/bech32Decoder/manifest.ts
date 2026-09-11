@@ -1,3 +1,4 @@
+import {bytesToHex} from '@noble/hashes/utils.js'
 import type {Addon, AddonHelper, AddonManifest} from '../types'
 import {
   isBech32Lnurl,
@@ -13,6 +14,12 @@ import {
   decodeBolt11AmountMsat,
   decodeBolt11PaymentHash
 } from '../../lnurlcash'
+
+// LUD-01's own fixed human-readable part - both directions of this addon's
+// bech32 codec (src/lib/urls.ts's toBech32Lnurl/fromBech32Lnurl) always use
+// this exact tag, never anything else, so it's a constant rather than
+// something decoded per input.
+const LNURL_HRP = 'lnurl'
 
 // A pure text transform, nothing more - no verb/permission needed at all,
 // same reasoning as the currency converter: this never touches a note, a
@@ -37,6 +44,22 @@ const looksLikeUrl = (value: unknown): boolean =>
 const encodeLnurl = (value: unknown): string | null => {
   const stripped = stripScheme(value)
   return looksLikeUrl(stripped) ? toBech32Lnurl(stripped) : null
+}
+
+// the actual bech32 payload either direction carries is nothing more than
+// the URL's own UTF-8 bytes (see toBech32Lnurl/fromBech32Lnurl) - shown as
+// hex so the raw bytes behind the bech32 text are visible, not just the
+// human-readable URL/tag either side of it
+const decodedUrlBytesDisplay = (value: unknown): string => {
+  const url = decodeLnurl(value)
+  return url ? bytesToHex(new TextEncoder().encode(url)) : '-'
+}
+
+const encodedUrlBytesDisplay = (value: unknown): string => {
+  const stripped = stripScheme(value)
+  return looksLikeUrl(stripped)
+    ? bytesToHex(new TextEncoder().encode(stripped))
+    : '-'
 }
 
 // A pasted lnurlcash bearer note URL (see src/lib/urls.ts) - same shape
@@ -73,6 +96,9 @@ const noteAmountDisplay = (value: unknown): string => {
 
 const noteK1Display = (value: unknown): string =>
   noteK1(stripScheme(value)) ?? '-'
+
+const noteSigDisplay = (value: unknown): string =>
+  noteSignature(stripScheme(value)) ?? 'not attached'
 
 const noteOriginDisplay = (value: unknown): string => {
   try {
@@ -165,7 +191,20 @@ const bech32DecoderManifest: AddonManifest = {
         when: {helper: 'isDecodable', args: [{var: 'input'}]},
         children: [
           {type: 'Text', value: 'Decoded URL', style: 'subheading'},
-          {type: 'Text', value: {helper: 'decodeLnurl', args: [{var: 'input'}]}}
+          {
+            type: 'Text',
+            value: {helper: 'decodeLnurl', args: [{var: 'input'}]}
+          },
+          {type: 'Text', value: `Tag (HRP): ${LNURL_HRP}`},
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Bytes: ',
+                {helper: 'decodedUrlBytesDisplay', args: [{var: 'input'}]}
+              ]
+            }
+          }
         ]
       },
       {
@@ -190,6 +229,12 @@ const bech32DecoderManifest: AddonManifest = {
             type: 'Text',
             value: {
               cat: ['k1: ', {helper: 'noteK1Display', args: [{var: 'input'}]}]
+            }
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: ['sig: ', {helper: 'noteSigDisplay', args: [{var: 'input'}]}]
             }
           },
           {
@@ -254,7 +299,20 @@ const bech32DecoderManifest: AddonManifest = {
         when: {helper: 'looksLikeUrl', args: [{var: 'input'}]},
         children: [
           {type: 'Text', value: 'Bech32-encoded LNURL', style: 'subheading'},
-          {type: 'Text', value: {helper: 'encodeLnurl', args: [{var: 'input'}]}}
+          {
+            type: 'Text',
+            value: {helper: 'encodeLnurl', args: [{var: 'input'}]}
+          },
+          {type: 'Text', value: `Tag (HRP): ${LNURL_HRP}`},
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Bytes: ',
+                {helper: 'encodedUrlBytesDisplay', args: [{var: 'input'}]}
+              ]
+            }
+          }
         ]
       },
       {
@@ -293,10 +351,13 @@ const bech32DecoderHelpers: Record<string, AddonHelper> = {
   decodeLnurl: decodeLnurl as AddonHelper,
   looksLikeUrl: looksLikeUrl as AddonHelper,
   encodeLnurl: encodeLnurl as AddonHelper,
+  decodedUrlBytesDisplay: decodedUrlBytesDisplay as AddonHelper,
+  encodedUrlBytesDisplay: encodedUrlBytesDisplay as AddonHelper,
   looksLikeNoteUrl: looksLikeNoteUrl as AddonHelper,
   noteKindDisplay: noteKindDisplay as AddonHelper,
   noteAmountDisplay: noteAmountDisplay as AddonHelper,
   noteK1Display: noteK1Display as AddonHelper,
+  noteSigDisplay: noteSigDisplay as AddonHelper,
   noteOriginDisplay: noteOriginDisplay as AddonHelper,
   noteVerifiedDisplay: noteVerifiedDisplay as AddonHelper,
   isBolt11Value: isBolt11Value as AddonHelper,

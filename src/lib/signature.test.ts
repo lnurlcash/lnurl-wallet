@@ -10,7 +10,7 @@ import {
   recoverNoteOwnershipPubkey,
   cp1FromCk1
 } from './signature'
-import {encodeCk1, encodeCp1} from './recoverableNotes'
+import {encodeCk1, encodeCp1, encodeCs1} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 
@@ -100,6 +100,28 @@ describe('offline signature verification', () => {
     expect(
       verifyNoteSignature(K1, 1000, 'ab'.repeat(10), 'ab'.repeat(33))
     ).toBe(false)
+  })
+
+  it('verifies a cs1-encoded signature exactly the same as its hex form', () => {
+    // SERVICE may disclose sig/sig2 as cs1<...> (bech32m) instead of plain
+    // hex (see requireMutationSignature, which now preserves whichever
+    // shape SERVICE actually sent rather than normalizing it away) -
+    // verification must accept either transparently, dispatched by shape
+    const priv = secp256k1.utils.randomSecretKey()
+    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
+    const amountMsat = 21000
+    const sigHex = signAsMint(priv, K1, amountMsat)
+    const sigCs1 = encodeCs1(hexToBytes(sigHex))
+
+    expect(verifyNoteSignature(K1, amountMsat, sigCs1, pubHex)).toBe(true)
+    expect(
+      verifyNoteSignatureHash(hashK1(K1), amountMsat, sigCs1, pubHex)
+    ).toBe(true)
+    // still correctly rejects a cs1 signature that doesn't actually match
+    const otherPub = bytesToHex(
+      secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
+    )
+    expect(verifyNoteSignature(K1, amountMsat, sigCs1, otherPub)).toBe(false)
   })
 
   it('rejects a malformed k1 without throwing', () => {

@@ -1,6 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
-import {bytesToHex} from '@noble/hashes/utils.js'
 import {
   fetchNoteInfo,
   fetchNoteInfoByPubkey,
@@ -250,7 +249,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
     )
   })
 
-  it('normalizes a cs1-encoded signature to plain hex', async () => {
+  it('preserves a cs1-encoded signature exactly as SERVICE sent it', async () => {
     const cert = encodeCs1(new Uint8Array(65).fill(0xab))
     vi.stubGlobal(
       'fetch',
@@ -264,7 +263,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
       K1,
       'b'.repeat(64)
     )
-    expect(result.signature).toBe(bytesToHex(new Uint8Array(65).fill(0xab)))
+    expect(result.signature).toBe(cert)
   })
 })
 
