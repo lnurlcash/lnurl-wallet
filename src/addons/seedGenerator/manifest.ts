@@ -1,0 +1,181 @@
+import {HARDENED_OFFSET, type HDKey} from '@scure/bip32'
+import {schnorr} from '@noble/curves/secp256k1.js'
+import {bytesToHex} from '@noble/hashes/utils.js'
+import type {Addon, AddonHelper, AddonManifest} from '../types'
+import {
+  generateSeedPhrase,
+  isValidSeedPhrase,
+  deriveLud25CashRootNode,
+  lud05PathSuffix
+} from '../../keys'
+import {deriveNoteSecretKey, encodeCx1} from '../../lnurlcash'
+
+// A throwaway-seed sandbox for exploring LUD-25 Part 2's own derivation
+// (see cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex) without
+// touching this wallet's real seed at all - "Generate new seed" makes a
+// fresh BIP39 mnemonic entirely in the browser, held only in this addon's
+// own page-local state (see AddonRun.tsx/Renderer.tsx's 'run' mode - never
+// persisted, gone the moment this page is left or reloaded), and every
+// derivation below is a pure function of (that ephemeral seed, a typed-in
+// mint domain) - never cashSecrets.ts's own module-level wallet state.
+// Reimplements the same small amount of path-walking cashSecrets.ts's
+// addressDomainNode does (rather than importing it) specifically so this
+// can never be confused with, or accidentally reach, the real unlocked
+// cash root.
+const KEYPAIR_COUNT = 10
+
+const trimmedString = (value: unknown): string => String(value ?? '').trim()
+
+// mirrors cashSecrets.ts's own addressDomainNode (m/139'/1'/d1/d2/d3/d4) -
+// see this file's own header comment for why it's reimplemented here
+// rather than imported
+const addressDomainNode = (cashRoot: HDKey, domain: string): HDKey | null => {
+  const addressRoot = cashRoot.deriveChild(1 + HARDENED_OFFSET) // m/139'/1'
+  const hashingNode = addressRoot.deriveChild(0)
+  if (!hashingNode.privateKey) return null
+  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
+  let node = addressRoot
+  for (const index of suffix) node = node.deriveChild(index)
+  return node
+}
+
+const branchFor = (seedPhrase: unknown, domain: unknown): HDKey | null => {
+  const seed = trimmedString(seedPhrase)
+  const d = trimmedString(domain)
+  if (!seed || !d || !isValidSeedPhrase(seed)) return null
+  return addressDomainNode(deriveLud25CashRootNode(seed), d)
+}
+
+const xpubDisplay = (seedPhrase: unknown, domain: unknown): string => {
+  const node = branchFor(seedPhrase, domain)
+  if (!node?.publicKey || !node.chainCode) return '-'
+  return encodeCx1(node.publicKey.slice(1), node.chainCode)
+}
+
+export type SeedKeypairRow = {index: number; pubkey: string; privkey: string}
+
+const keypairsForSeed = (
+  seedPhrase: unknown,
+  domain: unknown
+): SeedKeypairRow[] => {
+  const node = branchFor(seedPhrase, domain)
+  if (!node?.privateKey || !node.chainCode) return []
+  const rows: SeedKeypairRow[] = []
+  for (let i = 0; i < KEYPAIR_COUNT; i++) {
+    const privkey = deriveNoteSecretKey(node.privateKey, node.chainCode, i)
+    rows.push({
+      index: i,
+      pubkey: bytesToHex(schnorr.getPublicKey(privkey)),
+      privkey: bytesToHex(privkey)
+    })
+  }
+  return rows
+}
+
+const seedGeneratorManifest: AddonManifest = {
+  id: 'seed-generator',
+  name: 'Seed Generator',
+  version: '1',
+  icon: 'key',
+  description:
+    "Generates a fresh, ephemeral seed phrase (never connected to this wallet's own seed) and derives the first 10 LUD-25 Part 2 keypairs plus the watch-only branch export (cx1) for any mint domain you type in - for exploring the derivation, not for holding real funds.",
+  permissions: [],
+  nav: {position: 'right', icon: 'key', label: 'Seeds'},
+  state: {
+    seedPhrase: '',
+    mintDomain: 'mint.lnurlcash.com'
+  },
+  ui: {
+    type: 'View',
+    children: [
+      {type: 'Text', value: 'Seed Generator', style: 'heading'},
+      {
+        type: 'Text',
+        value:
+          "Ephemeral - generated fresh in your browser, held only on this page, and never connected to this wallet's real seed. Reloading or leaving this page discards it. Never send real funds to keys shown here."
+      },
+      {
+        type: 'Button',
+        label: 'Generate new seed',
+        onClick: {
+          action: 'set',
+          path: 'seedPhrase',
+          value: {helper: 'generateSeedPhrase', args: []}
+        }
+      },
+      {
+        type: 'Show',
+        when: {gt: [{helper: 'stringLength', args: [{var: 'seedPhrase'}]}, 0]},
+        children: [
+          {
+            type: 'Text',
+            value: {cat: ['Seed: ', {var: 'seedPhrase'}]},
+            style: 'subheading'
+          },
+          {
+            type: 'Input',
+            bind: 'mintDomain',
+            label: 'Mint domain (e.g. mint.lnurlcash.com)'
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'xpub (watch-only branch export, cx1): ',
+                {
+                  helper: 'xpubDisplay',
+                  args: [{var: 'seedPhrase'}, {var: 'mintDomain'}]
+                }
+              ]
+            }
+          },
+          {type: 'Text', value: 'First 10 keypairs', style: 'subheading'},
+          {
+            type: 'For',
+            each: {
+              helper: 'keypairsForSeed',
+              args: [{var: 'seedPhrase'}, {var: 'mintDomain'}]
+            },
+            children: [
+              {
+                type: 'Text',
+                value: {
+                  cat: [
+                    '#',
+                    {var: 'item.index'},
+                    ' pub:  ',
+                    {var: 'item.pubkey'}
+                  ]
+                }
+              },
+              {
+                type: 'Text',
+                value: {
+                  cat: [
+                    '#',
+                    {var: 'item.index'},
+                    ' priv: ',
+                    {var: 'item.privkey'}
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+
+const seedGeneratorHelpers: Record<string, AddonHelper> = {
+  generateSeedPhrase: generateSeedPhrase as AddonHelper,
+  xpubDisplay: xpubDisplay as AddonHelper,
+  keypairsForSeed: keypairsForSeed as AddonHelper,
+  stringLength: ((value: unknown) =>
+    String(value ?? '').trim().length) as AddonHelper
+}
+
+export const seedGeneratorAddon: Addon = {
+  manifest: seedGeneratorManifest,
+  helpers: seedGeneratorHelpers
+}

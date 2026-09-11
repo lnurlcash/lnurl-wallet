@@ -3,7 +3,7 @@ import type {Bearer} from '../storage'
 import type {WalletContextType} from '../WalletContext'
 import {parseLabelTags} from '../noteTags'
 import {serverOf} from '../lnurlcash'
-import {msatToSats} from '../helpers'
+import {msatToSats, copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
@@ -124,6 +124,14 @@ export const VERBS: Record<string, VerbHandler> = {
     } finally {
       URL.revokeObjectURL(url)
     }
+    return null
+  },
+
+  // same clipboard helper (and success/failure toast) every other copy
+  // button in this wallet already uses - a UI convenience with no note/
+  // secret/wallet-state access at all, same reasoning as file.download
+  'clipboard.copy': async args => {
+    await copyToClipboard(String(args.text ?? ''))
     return null
   }
 }

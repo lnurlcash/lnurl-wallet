@@ -2,7 +2,8 @@ import type {Component} from 'solid-js'
 import {
   IoPricetagsSharp,
   IoSwapHorizontalSharp,
-  IoCodeSlashSharp
+  IoCodeSlashSharp,
+  IoKeySharp
 } from 'solid-icons/io'
 
 // manifests reference an icon by name, never a component - keeps a
@@ -11,5 +12,6 @@ import {
 export const ADDON_ICONS: Record<string, Component> = {
   pricetags: IoPricetagsSharp,
   swap: IoSwapHorizontalSharp,
-  code: IoCodeSlashSharp
+  code: IoCodeSlashSharp,
+  key: IoKeySharp
 }
