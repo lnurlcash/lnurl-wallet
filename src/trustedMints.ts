@@ -135,7 +135,17 @@ const normalizeOrigin = (value: string): string | null => {
 }
 
 const readStored = (): TrustedMint[] => {
-  const raw = localStorage.getItem(STORAGE_KEY)
+  // same tolerance every other wallet-state module's own readStored already
+  // has (cashSecrets.ts, currency.ts, offlineMode.ts) - this module gets
+  // pulled in by anything that reads a mint's trust state, including a
+  // bundled addon's helper file that may end up imported by a plain Node
+  // unit test with no localStorage global at all
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(STORAGE_KEY)
+  } catch {
+    return []
+  }
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)

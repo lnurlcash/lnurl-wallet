@@ -2,7 +2,7 @@ import type {DeviceClient} from '../device'
 import type {Bearer} from '../storage'
 import type {WalletContextType} from '../WalletContext'
 import {parseLabelTags} from '../noteTags'
-import {serverOf} from '../lnurlcash'
+import {serverOf, resolveLnurlInput, lnurlFetch} from '../lnurlcash'
 import {msatToSats, copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 
@@ -133,5 +133,27 @@ export const VERBS: Record<string, VerbHandler> = {
   'clipboard.copy': async args => {
     await copyToClipboard(String(args.text ?? ''))
     return null
+  },
+
+  // LNURL Tools addon: resolves arbitrary LNURL-ish input (bech32, LUD-17
+  // scheme, Lightning Address, plain https) and fetches it - the exact
+  // same resolveLnurlInput/lnurlFetch this wallet's own Mint/Receive flows
+  // already use, so it inherits the same SSRF allowlist (isAllowedServiceUrl)
+  // and offline-mode guard for free. A read-only informational GET with no
+  // note/secret/wallet-state access - this never mutates anything the
+  // service tracks, only asks it what it is.
+  'lnurl.fetch': async args => {
+    const input = String(args.input ?? '').trim()
+    if (!input) {
+      throw new Error('Enter an LNURL, Lightning Address, or URL first.')
+    }
+    const url = resolveLnurlInput(input)
+    if (!url) {
+      throw new Error(
+        'Not a recognizable LNURL, Lightning Address, lightning: URI, or https:// URL.'
+      )
+    }
+    const body = await lnurlFetch(url)
+    return {url, body}
   }
 }

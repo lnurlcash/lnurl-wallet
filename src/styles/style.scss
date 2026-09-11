@@ -1948,6 +1948,38 @@ nav {
   margin: 16px 0 4px 0;
 }
 
+// the Seed Generator addon's own seed-phrase display - deliberately more
+// prominent than a plain Text row (a holder needs to actually notice and
+// read/copy this, not skim past it like ordinary body text)
+.addon-seed-block {
+  display: block;
+  font-family: monospace;
+  font-size: 1.05em;
+  font-weight: bold;
+  word-break: break-word;
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  background-color: rgba($font-color, 0.05);
+}
+
+// LNURL Tools addon's fetched-response display (formatted summary and raw
+// JSON dump alike) - pre-wrap keeps both the summary's own newlines and
+// the JSON dump's indentation intact while still wrapping long lines,
+// unlike a plain Text row which collapses whitespace entirely
+.addon-response-block {
+  display: block;
+  font-family: monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 10px 12px;
+  margin: 4px 0 12px 0;
+}
+
 .addon-row {
   display: flex;
   flex-wrap: wrap;
