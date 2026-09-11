@@ -1,5 +1,6 @@
 import {bech32} from '@scure/base'
 import {isPreimage} from './bolt11'
+import {isCk1} from './recoverableNotes'
 
 // LUD-25 LNURLcash - bearer assets. Draft spec:
 // https://github.com/lnurl/luds/blob/lnurlcash/25.md
@@ -262,15 +263,22 @@ export const noteSignature = (url: string): string | null => {
   }
 }
 
+// a well-formed note secret: either a legacy 32-byte hex preimage, or a
+// LUD-25 Part 2 ck1 recoverable-signature secret (see
+// src/lib/recoverableNotes.ts) - dispatched on the string's own shape, same as
+// every other Part 1/Part 2 dual-mode field in this codebase (no version
+// flag). A k1 that's neither would crash sha256-based hashing (isPreimage's
+// own reason for existing) or ecrecover later, so it's rejected at the door
+// either way.
+export const isValidK1 = (value: string): boolean =>
+  isPreimage(value) || isCk1(value)
+
 // input only qualifies as a bearer note if it resolves to a URL carrying a
-// well-formed k1 - 32 bytes hex, the same shape isPreimage (bolt11.ts)
-// enforces (a k1 that isn't hex would crash sha256-based hashing later,
-// e.g. in offline signature verification during render, so it's rejected
-// at the door)
+// well-formed k1 (see isValidK1)
 export const resolveNoteInput = (value: string): string | null => {
   const url = resolveLnurlInput(value)
   const k1 = url ? noteK1(url) : null
-  if (!url || !k1 || !isPreimage(k1)) return null
+  if (!url || !k1 || !isValidK1(k1)) return null
   return url
 }
 

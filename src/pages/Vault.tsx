@@ -201,6 +201,19 @@ const Vault: Component = () => {
   return (
     <div id="vault" class="page">
       <h2>LNURLvault</h2>
+      {/* LUD-25 Part 2 (recoverable-signature/pubkey-keyed notes - see
+      src/lib/recoverableNotes.ts) is deliberately browser-only for now: it
+      needs the device firmware to derive a note's own keypair and sign the
+      fixed ck1 ownership message itself, which no vault firmware does yet.
+      A device-backed note's own secret never even reaches the browser, so
+      this can't be bridged from this side - shown regardless of connection
+      state, since it's true whether or not one is currently paired. */}
+      <p class="warning">
+        This vault has not been migrated to LUD-25 Part 2's pubkey-based notes
+        yet - it only generates and holds legacy hash-keyed secrets. Addresses
+        page registrations and any other pubkey-keyed notes stay browser-only
+        for now; keep using this device for its existing note types.
+      </p>
       {/* the pairing call to action has to go once a vault is paired -
           left standing next to "No notes on this device yet" it reads as
           "you still have not paired", on a page that just did */}

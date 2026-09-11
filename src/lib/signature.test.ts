@@ -1,8 +1,15 @@
 import {describe, expect, it} from 'vitest'
-import {secp256k1} from '@noble/curves/secp256k1.js'
+import {secp256k1, schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {verifyNoteSignature, verifyNoteSignatureHash, hashK1} from './signature'
+import {
+  verifyNoteSignature,
+  verifyNoteSignatureHash,
+  hashK1,
+  signNoteOwnership,
+  recoverNoteOwnershipPubkey
+} from './signature'
+import {encodeCk1} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 
@@ -104,5 +111,121 @@ describe('offline signature verification', () => {
     expect(verifyNoteSignature('a'.repeat(63), 1000, sigHex, pubHex)).toBe(
       false
     )
+  })
+})
+
+describe('signNoteOwnership (LUD-25 Part 2, ck1)', () => {
+  // independently recomputes the fixed digest signNoteOwnership signs -
+  // deliberately not importing any internal helper, so this test would
+  // actually fail if the digest construction ever silently drifted
+  const fixedDigest = (): Uint8Array => {
+    const message = utf8ToBytes('LNURLcash')
+    return sha256(
+      sha256(
+        new Uint8Array([
+          ...utf8ToBytes('Lightning Signed Message:'),
+          ...message
+        ])
+      )
+    )
+  }
+
+  it("produces a signature that recovers to the signer's own x-only pubkey", () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const sig = signNoteOwnership(secretKey)
+    expect(sig).toHaveLength(65)
+
+    // sig is wire format (r||s||recid, trailing) - @noble/curves'
+    // recoverPublicKey expects recid-leading for raw bytes (the same
+    // reason verifyNoteSignatureDigest itself reorders before calling it),
+    // so reorder back before recovering
+    const recidLeading = new Uint8Array([sig[64]!, ...sig.subarray(0, 64)])
+    const recovered = secp256k1.recoverPublicKey(recidLeading, fixedDigest(), {
+      prehash: false
+    })
+    // recoverPublicKey gives a full compressed point - the x-only note id
+    // is everything after the 02/03 prefix byte, same as the mint's own
+    // recover_note_pubkey (PublicKey.format(compressed=True)[1:])
+    expect(bytesToHex(recovered.subarray(1))).toBe(bytesToHex(pubkeyXOnly))
+  })
+
+  it('is deterministic for the same secret key', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    expect(bytesToHex(signNoteOwnership(secretKey))).toBe(
+      bytesToHex(signNoteOwnership(secretKey))
+    )
+  })
+
+  it('produces a different signature for a different secret key', () => {
+    const a = signNoteOwnership(schnorr.utils.randomSecretKey())
+    const b = signNoteOwnership(schnorr.utils.randomSecretKey())
+    expect(bytesToHex(a)).not.toBe(bytesToHex(b))
+  })
+})
+
+describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
+  // cs1's message is LNURLcash:<amount>:<hex(pk)>, pk hex used directly, no
+  // hashing - see mintRequest.test.ts's own signAsMintForId, same shape
+  const signAsMintForId = (
+    priv: Uint8Array,
+    idHex: string,
+    amountMsat: number
+  ): string => {
+    const message = utf8ToBytes(`LNURLcash:${amountMsat}:${idHex}`)
+    const digest = sha256(
+      sha256(
+        new Uint8Array([
+          ...utf8ToBytes('Lightning Signed Message:'),
+          ...message
+        ])
+      )
+    )
+    const libSig = secp256k1.sign(digest, priv, {
+      format: 'recovered',
+      prehash: false
+    })
+    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
+  }
+
+  it('verifies a cp1 note (k1=ck1<sig>) against its recovered pubkey', () => {
+    const mintPriv = secp256k1.utils.randomSecretKey()
+    const mintPubHex = bytesToHex(secp256k1.getPublicKey(mintPriv, true))
+    const noteSecretKey = schnorr.utils.randomSecretKey()
+    const notePubkeyHex = bytesToHex(schnorr.getPublicKey(noteSecretKey))
+    const amountMsat = 21000
+    const ck1 = encodeCk1(signNoteOwnership(noteSecretKey))
+    const cs1Sig = signAsMintForId(mintPriv, notePubkeyHex, amountMsat)
+
+    expect(verifyNoteSignature(ck1, amountMsat, cs1Sig, mintPubHex)).toBe(true)
+    expect(verifyNoteSignature(ck1, amountMsat + 1, cs1Sig, mintPubHex)).toBe(
+      false
+    )
+    const otherPub = bytesToHex(
+      secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
+    )
+    expect(verifyNoteSignature(ck1, amountMsat, cs1Sig, otherPub)).toBe(false)
+  })
+
+  it('rejects a malformed ck1 without throwing', () => {
+    expect(
+      verifyNoteSignature('ck1garbage', 1000, 'ab'.repeat(65), 'ab'.repeat(33))
+    ).toBe(false)
+  })
+})
+
+describe('recoverNoteOwnershipPubkey', () => {
+  it('recovers the exact pubkey a wallet-produced ck1 belongs to', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const sig = signNoteOwnership(secretKey)
+    expect(bytesToHex(recoverNoteOwnershipPubkey(sig)!)).toBe(
+      bytesToHex(pubkeyXOnly)
+    )
+  })
+
+  it('returns null for a malformed signature rather than throwing', () => {
+    expect(recoverNoteOwnershipPubkey(new Uint8Array(10))).toBeNull()
+    expect(recoverNoteOwnershipPubkey(new Uint8Array(65))).toBeNull()
   })
 })

@@ -3,6 +3,8 @@ import type {MintFee} from './fees'
 import {parseMintFee, withinMintFeeBand} from './fees'
 import {verifyNoteSignatureHash} from './signature'
 import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
+import {isCp1, decodeCp1, isCs1, decodeCs1} from './recoverableNotes'
+import {bytesToHex} from '@noble/hashes/utils.js'
 
 // ---- minting via LUD-06 payRequest ----
 
@@ -55,14 +57,34 @@ export type BoundMintCommitment = {
   signature?: string
 }
 
+// This bound-mint-receipt extension's own `h`/`sig` fields name the same
+// kind of thing LUD-25 Part 2's p1/p2/sig do elsewhere - either a legacy
+// hex32 value or a bech32m one (cp1/cs1 respectively) - normalized to
+// plain hex here, at the boundary, so everything downstream (equality
+// checks, verifyNoteSignatureHash) works uniformly regardless of which
+// the mint actually sent.
+const normalizeNoteId = (value: string): string | null => {
+  const trimmed = value.trim().toLowerCase()
+  if (/^[0-9a-f]{64}$/.test(trimmed)) return trimmed
+  const decoded = decodeCp1(trimmed)
+  return decoded ? bytesToHex(decoded) : null
+}
+
+const normalizeSignature = (value: string): string | null => {
+  if (/^[0-9a-f]{130}$/i.test(value)) return value.toLowerCase()
+  const decoded = decodeCs1(value)
+  return decoded ? bytesToHex(decoded) : null
+}
+
 const parseBoundMintCommitment = (
   value: unknown
 ): BoundMintCommitment | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
+  if (typeof raw.h !== 'string') return undefined
+  const h = normalizeNoteId(raw.h)
   if (
-    typeof raw.h !== 'string' ||
-    !/^[0-9a-fA-F]{64}$/.test(raw.h) ||
+    h === null ||
     typeof raw.amount !== 'number' ||
     !Number.isSafeInteger(raw.amount) ||
     raw.amount <= 0 ||
@@ -70,10 +92,16 @@ const parseBoundMintCommitment = (
   ) {
     return undefined
   }
+  let signature: string | undefined
+  if (typeof raw.sig === 'string') {
+    const normalized = normalizeSignature(raw.sig)
+    if (normalized === null) return undefined
+    signature = normalized
+  }
   return {
-    h: raw.h.toLowerCase(),
+    h,
     amountMsat: raw.amount,
-    ...(typeof raw.sig === 'string' ? {signature: raw.sig} : {})
+    ...(signature !== undefined ? {signature} : {})
   }
 }
 
@@ -92,9 +120,17 @@ export type InvoiceResult = {
   mint?: BoundMintCommitment
 }
 
-// `outputHash` names a current LUD-25 mint output. It is sent as the
-// mandatory LUD-12 comment and repeated as the additive `h` extension. The
-// parameter is omitted for ordinary Lightning payments.
+// `outputHash` names a current LUD-25 mint output - either a legacy hash
+// (sent as the mandatory LUD-12 comment, and repeated as the additive `h`
+// extension - `/p/cb` itself only ever reads `comment`; `h` is this
+// wallet's own long-standing redundant belt-and-braces, harmless either
+// way) or, per Part 2's Wallet-side ownership proofs, a `cp1<pk>` public
+// key sent as `comment` alone (the mint's `/p/cb` has no separate `p`
+// param - unlike the informational GET/mutation callback, minting never
+// had a second field to alias). The parameter is omitted entirely for an
+// ordinary Lightning payment, or for minting to a cx1-registered address
+// via its own callback (which already carries `?username=`) and letting
+// the mint auto-derive the next key itself.
 export const requestInvoice = async (
   payCallback: string,
   amountMsat: number,
@@ -103,14 +139,17 @@ export const requestInvoice = async (
   const cbUrl = new URL(payCallback)
   cbUrl.searchParams.set('amount', String(amountMsat))
   if (outputHash !== undefined) {
-    if (!isPreimage(outputHash)) {
+    const value = outputHash.trim().toLowerCase()
+    if (isCp1(value)) {
+      cbUrl.searchParams.set('comment', value)
+    } else if (isPreimage(value)) {
+      cbUrl.searchParams.set('comment', value)
+      cbUrl.searchParams.set('h', value)
+    } else {
       throw new Error(
-        'An output hash must be 32 bytes of hex - no invoice was requested.'
+        'An output hash must be 32 bytes of hex, or a cp1 pubkey - no invoice was requested.'
       )
     }
-    const h = outputHash.trim().toLowerCase()
-    cbUrl.searchParams.set('comment', h)
-    cbUrl.searchParams.set('h', h)
   }
   const body = await lnurlFetch(cbUrl)
   if (typeof body?.pr !== 'string') {
@@ -171,8 +210,8 @@ export const requireBoundMintQuote = (
   grossMsat: number,
   fee?: MintFee
 ): BoundMintCommitment => {
-  const h = expectedH.trim().toLowerCase()
-  if (!isPreimage(h)) throw new Error('The expected mint output is malformed.')
+  const h = normalizeNoteId(expectedH)
+  if (h === null) throw new Error('The expected mint output is malformed.')
   const commitment = invoice.mint
   if (!invoice.mintToHash || !invoice.verify || !commitment) {
     throw new Error(
@@ -210,10 +249,12 @@ export const validateBoundMintReceipt = (
   if (!sameInvoice(invoice.pr, verification.pr)) {
     throw new Error('The settlement receipt names a different invoice.')
   }
+  const expectedNormalized = normalizeNoteId(expectedH)
   const receipt = verification.mint
   if (
     !receipt ||
-    receipt.h !== expectedH.trim().toLowerCase() ||
+    expectedNormalized === null ||
+    receipt.h !== expectedNormalized ||
     receipt.amountMsat !== expectedAmountMsat
   ) {
     throw new Error('The settlement receipt does not match the mint quote.')

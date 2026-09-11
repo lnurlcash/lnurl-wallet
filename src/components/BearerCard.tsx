@@ -152,6 +152,8 @@ const BearerCard: Component<BearerCardProps> = props => {
       getTrustedMintPubkey(origin) ??
       (isMintUnconfirmed(origin) ? null : (props.bearer.mintPubkey ?? null))
     if (!sig || !mintPubkey) return false
+    // verifyNoteSignature itself dispatches on k1's own shape (legacy
+    // preimage vs LUD-25 Part 2 ck1 signature) - see signature.ts
     return props.bearer.deviceHash
       ? verifyNoteSignatureHash(
           props.bearer.deviceHash,

@@ -3,7 +3,8 @@ import {
   MINT_PUBKEY_PATTERN,
   hashK1,
   parseMintKey,
-  requireMutationSignature
+  requireMutationSignature,
+  recoverNoteOwnershipPubkey
 } from './signature'
 import {
   AmbiguousMintError,
@@ -16,6 +17,7 @@ import {
 } from './errors'
 import {generateSecret} from './secrets'
 import {lnurlFetch} from './net'
+import {isCk1, isCp1, decodeCk1, encodeCp1} from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -47,6 +49,31 @@ const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   return {...body, ...parseMintKey(body)} as HashWithdrawRequestInfo
 }
 
+// the informational GET's note-reference field: bare `h`/`p` (never
+// `p1`/`p2` - that renaming is /w/cb's own, a different endpoint, see
+// callbackRequest's siblings below). `h` is still the legacy field name
+// SERVICE aliases forever, so a plain hash keeps using it unchanged
+// (works on every mint, old or new); `p` is LUD-25 Part 2's canonical name
+// for a cp1 pubkey commitment, meaningful only to a Part-2-aware mint
+// anyway - there's no compatibility reason to send a cp1 value under the
+// old name.
+const requestNoteInfoByField = async (
+  url: string,
+  field: 'h' | 'p',
+  value: string
+): Promise<HashWithdrawRequestInfo> => {
+  const lookupUrl = new URL(url)
+  lookupUrl.searchParams.delete('k1')
+  lookupUrl.searchParams.delete('amount')
+  lookupUrl.searchParams.delete('sig')
+  lookupUrl.searchParams.set(field, value)
+  const body = await lnurlFetch(lookupUrl)
+  if (body.k1 !== undefined) {
+    throw new Error('SERVICE returned k1 in a hash-only lookup response.')
+  }
+  return parseNoteLookupBody(body)
+}
+
 const requestNoteInfoByHash = async (
   url: string,
   h: string
@@ -54,16 +81,17 @@ const requestNoteInfoByHash = async (
   if (!/^[0-9a-f]{64}$/i.test(h)) {
     throw new Error('A note hash must be 32 bytes of hex.')
   }
-  const hashUrl = new URL(url)
-  hashUrl.searchParams.delete('k1')
-  hashUrl.searchParams.delete('amount')
-  hashUrl.searchParams.delete('sig')
-  hashUrl.searchParams.set('h', h.toLowerCase())
-  const body = await lnurlFetch(hashUrl)
-  if (body.k1 !== undefined) {
-    throw new Error('SERVICE returned k1 in a hash-only lookup response.')
+  return requestNoteInfoByField(url, 'h', h.toLowerCase())
+}
+
+const requestNoteInfoByPubkey = async (
+  url: string,
+  cp1Value: string
+): Promise<HashWithdrawRequestInfo> => {
+  if (!isCp1(cp1Value)) {
+    throw new Error('A note pubkey must be a valid cp1 value.')
   }
-  return parseNoteLookupBody(body)
+  return requestNoteInfoByField(url, 'p', cp1Value)
 }
 
 // For device-held notes the companion already has h in public recovery
@@ -75,6 +103,22 @@ export const fetchNoteInfoByHash = async (
 ): Promise<HashWithdrawRequestInfo> => {
   try {
     return await requestNoteInfoByHash(url, h)
+  } catch (err) {
+    throw classifyNoteError(err as Error)
+  }
+}
+
+// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a cp1 note up by
+// its public commitment, never its ck1 secret. The one piece a recovery
+// scan (deriving pk_0, pk_1, ... off a registered cx1 branch) needs: each
+// probe is exactly this call, never anything that could redeem the note it
+// finds.
+export const fetchNoteInfoByPubkey = async (
+  url: string,
+  cp1Value: string
+): Promise<HashWithdrawRequestInfo> => {
+  try {
+    return await requestNoteInfoByPubkey(url, cp1Value)
   } catch (err) {
     throw classifyNoteError(err as Error)
   }
@@ -97,6 +141,29 @@ export const fetchNoteInfo = async (
   const queried = requireNoteK1(url)
   const rawUrl = new URL(url)
   rawUrl.searchParams.delete('sig')
+
+  // LUD-25 Part 2: a ck1 note is looked up by its PUBLIC commitment
+  // (p=cp1<pk>), recovered locally from the ck1 signature itself - never
+  // by sending the ck1 secret to an informational GET, for the same
+  // privacy reason a legacy note is looked up by hash rather than raw k1.
+  // No raw-k1-style compatibility fallback exists for this path: a mint
+  // that doesn't understand cp1/p at all doesn't support this note kind
+  // regardless of field name.
+  if (isCk1(queried)) {
+    const signatureBytes = decodeCk1(queried)
+    const pubkey = signatureBytes
+      ? recoverNoteOwnershipPubkey(signatureBytes)
+      : null
+    if (!pubkey) {
+      throw new Error("This note's ck1 secret is malformed.")
+    }
+    const info = await fetchNoteInfoByPubkey(
+      rawUrl.toString(),
+      encodeCp1(pubkey)
+    )
+    return {...info, k1: queried}
+  }
+
   try {
     const info = await requestNoteInfoByHash(rawUrl.toString(), hashK1(queried))
     return {...info, k1: queried}
@@ -333,6 +400,24 @@ export const meltNote = async (
 
 export type HashedMutationResult = {signature: string}
 
+// LUD-25 Part 2 renamed /w/cb's h/h2 to p1/p2 - h/h2 are still accepted
+// forever as the old names (SERVICE aliases them), so a plain hash keeps
+// being sent that way unchanged; a cp1 pubkey commitment is sent as
+// p1/p2 instead, the current canonical name and the only one a Part-2
+// mint is guaranteed to recognize anyway. Dispatched per-field by the
+// value's own shape, same as every other dual-mode field in this module -
+// never a version flag.
+const OUTPUT_FIELD_NAMES: Record<'1' | '2', {legacy: string; current: string}> =
+  {
+    '1': {legacy: 'h', current: 'p1'},
+    '2': {legacy: 'h2', current: 'p2'}
+  }
+
+const outputFieldName = (value: string, suffix: '1' | '2'): string =>
+  isCp1(value)
+    ? OUTPUT_FIELD_NAMES[suffix].current
+    : OUTPUT_FIELD_NAMES[suffix].legacy
+
 export const rotateNoteWithHash = async (
   callback: string,
   k1: string,
@@ -340,7 +425,7 @@ export const rotateNoteWithHash = async (
 ): Promise<HashedMutationResult> => {
   const body = await callbackRequest(callback, [
     ['k1', k1],
-    ['h', h]
+    [outputFieldName(h, '1'), h]
   ])
   return {signature: requireMutationSignature(body, 'sig')}
 }
@@ -360,8 +445,8 @@ export const splitNoteWithHash = async (
   const body = await callbackRequest(callback, [
     ...k1s.map((k1): [string, string] => ['k1', k1]),
     ['amount', String(amountMsat)],
-    ['h', h],
-    ['h2', h2]
+    [outputFieldName(h, '1'), h],
+    [outputFieldName(h2, '2'), h2]
   ])
   return {
     signature: requireMutationSignature(body, 'sig'),
@@ -376,7 +461,7 @@ export const mergeNotesWithHash = async (
 ): Promise<HashedMutationResult> => {
   const body = await callbackRequest(callback, [
     ...k1s.map((k1): [string, string] => ['k1', k1]),
-    ['h', h]
+    [outputFieldName(h, '1'), h]
   ])
   return {signature: requireMutationSignature(body, 'sig')}
 }
