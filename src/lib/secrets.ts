@@ -32,3 +32,25 @@ export const configureSecretProvider = (provider: SecretProvider): void => {
 // meant to be called directly by an application (call configureSecretProvider
 // instead, once, at startup)
 export const generateSecret = (domain: string): string => secretProvider(domain)
+
+// LUD-25 Part 2 counterpart to SecretProvider above - a ck1 ownership
+// signature rather than a preimage, for a host that wants rotate/split/
+// merge to be able to REISSUE a pubkey-bound output too (see
+// request.ts's own use of this: it never downgrades an already pub/sig
+// note back to a legacy one just because it got rotated). Returns null
+// (never throws) whenever a pubkey-bound secret can't be produced right
+// now - unconfigured (a host that hasn't wired up Part 2 at all, the
+// default), or the underlying seed-derived key isn't currently available -
+// callers fall back to the legacy provider in either case.
+export type PubkeySecretProvider = (domain: string) => string | null
+
+let pubkeySecretProvider: PubkeySecretProvider = () => null
+
+export const configurePubkeySecretProvider = (
+  provider: PubkeySecretProvider
+): void => {
+  pubkeySecretProvider = provider
+}
+
+export const generatePubkeySecret = (domain: string): string | null =>
+  pubkeySecretProvider(domain)

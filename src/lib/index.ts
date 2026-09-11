@@ -15,4 +15,9 @@ export * from './request'
 export * from './mintRequest'
 export * from './addresses'
 export * from './recoverableNotes'
-export {configureSecretProvider, type SecretProvider} from './secrets'
+export {
+  configureSecretProvider,
+  type SecretProvider,
+  configurePubkeySecretProvider,
+  type PubkeySecretProvider
+} from './secrets'

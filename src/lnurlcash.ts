@@ -8,7 +8,12 @@ import {
 import {msatToSats} from './helpers'
 import {configureNetworkGuard} from './lib/net'
 import {configureSecretProvider} from './lib/secrets'
-import {requestInvoice, hashK1, cp1FromCk1} from './lib'
+import {
+  requestInvoice,
+  hashK1,
+  cp1FromCk1,
+  configurePubkeySecretProvider
+} from './lib'
 import type {MintFee, InvoiceResult} from './lib'
 
 // LUD-25 LNURLcash - bearer assets. Draft spec:
@@ -101,6 +106,21 @@ export const generateMintSecret = (domain: string): string =>
 // same reload-survival reason (see requireRecoverableCashAddressSecret).
 export const generateMintPubkeySecret = (domain: string): string =>
   requireRecoverableCashAddressSecret(domain)
+
+// Wires generateMintPubkeySecret into src/lib's rotateNote/splitNote/
+// mergeNotes (see configurePubkeySecretProvider) so a note that already
+// is pub/sig-bound stays that way across a rotate/refresh/split/merge,
+// instead of always coming back as a fresh legacy preimage - never throws
+// (the seed-derived key can be unavailable, same as generateNoteSecret's
+// own fallback story), which is exactly what tells src/lib to fall back to
+// its ordinary legacy provider instead.
+configurePubkeySecretProvider(domain => {
+  try {
+    return generateMintPubkeySecret(domain)
+  } catch {
+    return null
+  }
+})
 
 // Requests a mint invoice, preferring a LUD-25 Part 2 pubkey-bound output
 // (comment=cp1<pk>) over the legacy hash-keyed one (comment=hashK1(secret))

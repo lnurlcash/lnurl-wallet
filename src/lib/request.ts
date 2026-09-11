@@ -4,7 +4,8 @@ import {
   hashK1,
   parseMintKey,
   requireMutationSignature,
-  recoverNoteOwnershipPubkey
+  recoverNoteOwnershipPubkey,
+  cp1FromCk1
 } from './signature'
 import {
   AmbiguousMintError,
@@ -15,7 +16,7 @@ import {
   ServiceError,
   classifyNoteError
 } from './errors'
-import {generateSecret} from './secrets'
+import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
 import {isCk1, isCp1, decodeCk1, encodeCp1} from './recoverableNotes'
 
@@ -468,6 +469,43 @@ export const mergeNotesWithHash = async (
 
 export type RotateResult = {k1: string; signature: string}
 
+// LUD-25 Part 2: an output whose OWN k1 is already ck1-shaped proves key
+// ownership already - reissuing it as a legacy preimage on every rotate/
+// split/merge would silently downgrade it back to Part 1 forever (a pub/
+// sig note that never survives its first refresh). `preferPubkey` names
+// whether the note(s) feeding this mutation were themselves ck1-shaped;
+// generatePubkeySecret returning null (no Part 2 provider configured, or
+// the seed-derived key isn't available right now) always falls back to
+// the ordinary legacy provider, same as an application that never wired
+// Part 2 up at all - this never throws on its own.
+const generateOutputSecret = (
+  domain: string,
+  preferPubkey: boolean
+): string => {
+  if (preferPubkey) {
+    const pubkeySecret = generatePubkeySecret(domain)
+    if (pubkeySecret) return pubkeySecret
+  }
+  return generateSecret(domain)
+}
+
+// the value actually disclosed to SERVICE for a freshly generated output -
+// outputFieldName below picks the matching field name (p1/h1, p2/h2) from
+// this same shape
+const disclosedValue = (secret: string): string => {
+  if (isCk1(secret)) {
+    const cp1 = cp1FromCk1(secret)
+    // generateOutputSecret only ever returns a pubkey secret from a
+    // configured provider that is itself trusted to hand back a real ck1
+    // (see PubkeySecretProvider's own contract) - unreachable in practice,
+    // but a malformed one must fail loudly rather than silently disclose
+    // nothing (which would tell SERVICE to key the note by no value at all)
+    if (!cp1) throw new Error('Generated an invalid pubkey secret.')
+    return cp1
+  }
+  return hashK1(secret)
+}
+
 // rotate: burn k1, get a fresh secret of the same value - closes the window
 // in which any previous holder (or logged URL) could redeem the note. Also
 // how a wallet obtains a compact, offline-verifiable copy of a note that
@@ -480,9 +518,9 @@ export const rotateNote = async (
   callback: string,
   k1: string
 ): Promise<RotateResult> => {
-  const newK1 = generateSecret(serverOf(callback))
+  const newK1 = generateOutputSecret(serverOf(callback), isCk1(k1))
   try {
-    const result = await rotateNoteWithHash(callback, k1, hashK1(newK1))
+    const result = await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
     return {k1: newK1, signature: result.signature}
   } catch (err) {
     // the request may have landed - the fresh secret is then the only copy
@@ -505,22 +543,27 @@ export type SplitResult = {
 // note worth `amountMsat` and one carrying the remainder of their combined
 // value - both secrets wallet-generated per LUD-25 (see rotateNote),
 // disclosed as h/h2. Splitting several notes at once needs no prior merge:
-// this burns all of them in a single request, same as mergeNotes does
+// this burns all of them in a single request, same as mergeNotes does.
+// Both outputs prefer a pubkey-bound secret only when EVERY input already
+// is one - a mixed batch (at least one legacy input) keeps the existing,
+// safe default rather than guessing which side of the split "owns" the
+// upgrade.
 export const splitNote = async (
   callback: string,
   k1s: string[],
   amountMsat: number
 ): Promise<SplitResult> => {
   const domain = serverOf(callback)
-  const newK1 = generateSecret(domain)
-  const changeK1 = generateSecret(domain)
+  const preferPubkey = k1s.every(isCk1)
+  const newK1 = generateOutputSecret(domain, preferPubkey)
+  const changeK1 = generateOutputSecret(domain, preferPubkey)
   try {
     const result = await splitNoteWithHash(
       callback,
       k1s,
       amountMsat,
-      hashK1(newK1),
-      hashK1(changeK1)
+      disclosedValue(newK1),
+      disclosedValue(changeK1)
     )
     return {
       k1: newK1,
@@ -542,14 +585,19 @@ export const splitNote = async (
 }
 
 // merge: burn all given notes, mint one worth their sum - wallet-generated
-// secret per LUD-25 (see rotateNote), disclosed as h
+// secret per LUD-25 (see rotateNote), disclosed as h. Same all-or-nothing
+// pubkey preference as splitNote above.
 export const mergeNotes = async (
   callback: string,
   k1s: string[]
 ): Promise<RotateResult> => {
-  const newK1 = generateSecret(serverOf(callback))
+  const newK1 = generateOutputSecret(serverOf(callback), k1s.every(isCk1))
   try {
-    const result = await mergeNotesWithHash(callback, k1s, hashK1(newK1))
+    const result = await mergeNotesWithHash(
+      callback,
+      k1s,
+      disclosedValue(newK1)
+    )
     return {k1: newK1, signature: result.signature}
   } catch (err) {
     // the request may have landed - the fresh secret is then the only copy
