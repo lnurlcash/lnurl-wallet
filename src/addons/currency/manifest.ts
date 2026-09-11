@@ -1,5 +1,10 @@
-import type {Addon, AddonHelper, AddonManifest} from '../types'
+import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {rates} from '../../currency'
+
+// quick-fill denominations for the fiat amount field - round, common price
+// points rather than round sat counts (100-1000 sats is trivial; $10-$1000
+// is the actual range someone converting a price would reach for)
+const QUICK_FIAT_AMOUNTS = [10, 50, 100, 200, 500, 1000]
 
 // A calculator, not a wallet action - reuses the wallet's own already-
 // running price feed (currency.ts, Settings > Currency) rather than
@@ -149,6 +154,15 @@ const currencyManifest: AddonManifest = {
             label: 'Amount (in the currency picked above)'
           },
           {
+            type: 'View',
+            style: 'row',
+            children: QUICK_FIAT_AMOUNTS.map(amount => ({
+              type: 'Button',
+              label: String(amount),
+              onClick: {action: 'set', path: 'fiatAmount', value: amount}
+            }))
+          },
+          {
             type: 'Text',
             value: {
               helper: 'formatSats',
@@ -160,6 +174,23 @@ const currencyManifest: AddonManifest = {
               ]
             },
             style: 'subheading'
+          },
+          {
+            type: 'Button',
+            label: 'Copy sats (unformatted)',
+            onClick: {
+              verb: 'clipboard.copy',
+              args: {
+                text: {
+                  cat: [
+                    {
+                      helper: 'fiatToSatsAmount',
+                      args: [{var: 'fiatAmount'}, {var: 'currency'}]
+                    }
+                  ]
+                }
+              }
+            }
           }
         ]
       }
