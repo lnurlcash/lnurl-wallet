@@ -25,6 +25,7 @@ const WITHDRAW_CALLBACK = `https://${SERVER}/w/cb`
 let recovery: typeof import('./recovery')
 let cashSecrets: typeof import('./cashSecrets')
 let keys: typeof import('./keys')
+let gapLimit: typeof import('./gapLimit')
 
 beforeEach(async () => {
   store.clear()
@@ -32,6 +33,7 @@ beforeEach(async () => {
   recovery = await import('./recovery')
   cashSecrets = await import('./cashSecrets')
   keys = await import('./keys')
+  gapLimit = await import('./gapLimit')
   cashSecrets.setCashRoot(keys.deriveLud25CashRootNode(SEED))
 })
 
@@ -120,11 +122,11 @@ describe('scanMintForNotes', () => {
   it("a spent index doesn't count toward the gap, but yields nothing", async () => {
     vi.stubGlobal(
       'fetch',
-      fakeMint(0, recovery.RECOVERY_GAP_LIMIT) as unknown as typeof fetch
+      fakeMint(0, gapLimit.gapLimit()) as unknown as typeof fetch
     )
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)
-    expect(result.highestUsedIndex).toBe(recovery.RECOVERY_GAP_LIMIT)
+    expect(result.highestUsedIndex).toBe(gapLimit.gapLimit())
   })
 
   it('a mint with nothing outstanding stops at the gap limit and finds nothing', async () => {

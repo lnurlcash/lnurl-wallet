@@ -84,6 +84,20 @@ const Nav = () => {
             <IoAddCircleSharp />
             &nbsp;Mint
           </A>
+          {/* claiming/checking a registered username needs this wallet's
+          own seed-derived key branch (see cashSecrets.ts's
+          cashAddressBranch) - gated the same as Wallet, unlike Mint/Vault
+          below, since a device with no wallet has no branch to claim with */}
+          <Show when={state() !== 'none'}>
+            <A
+              href="/address"
+              class="nav-link"
+              title="Claim a username at a trusted mint"
+            >
+              <IoAtCircleSharp />
+              &nbsp;Address
+            </A>
+          </Show>
           <A
             href="/vault"
             class="nav-link"
@@ -96,20 +110,6 @@ const Nav = () => {
             <IoHardwareChipSharp />
             &nbsp;Vault
           </A>
-          {/* claiming/checking a registered username needs this wallet's
-          own seed-derived key branch (see cashSecrets.ts's
-          cashAddressBranch) - gated the same as Wallet, unlike Mint/Vault
-          above, since a device with no wallet has no branch to claim with */}
-          <Show when={state() !== 'none'}>
-            <A
-              href="/addresses"
-              class="nav-link"
-              title="Claim a username at a trusted mint"
-            >
-              <IoAtCircleSharp />
-              &nbsp;Addresses
-            </A>
-          </Show>
           <Show when={state() !== 'none'}>
             <For each={addonsWithNav('left')}>
               {addon => {

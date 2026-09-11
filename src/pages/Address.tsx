@@ -29,7 +29,7 @@ import {scanRegisteredAddress} from '../addressRecovery'
 // itself is first-come-first-served and proves nothing (cx1 is watch-only -
 // it can never spend), so a squatted name only ever costs the real owner a
 // name, never funds - see addresses.ts's own comment.
-const Addresses: Component = () => {
+const Address: Component = () => {
   const {state, bearers, addBearer, logActivity} = useWallet()
   const [selectedServer, setSelectedServer] = createSignal<string | null>(null)
   const [username, setUsername] = createSignal('')
@@ -102,8 +102,8 @@ const Addresses: Component = () => {
   }
 
   return (
-    <div id="addresses" class="page">
-      <h2>Addresses</h2>
+    <div id="address" class="page">
+      <h2>Address</h2>
       <p>
         Claim a username at a trusted mint so it can be paid directly as{' '}
         <code>username@mint</code>. Once claimed, paying it needs no note
@@ -220,4 +220,4 @@ const Addresses: Component = () => {
     </div>
   )
 }
-export default Addresses
+export default Address

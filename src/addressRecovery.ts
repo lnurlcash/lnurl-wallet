@@ -10,6 +10,7 @@ import {
   encodeCk1,
   signNoteOwnership
 } from './lnurlcash'
+import {gapLimit} from './gapLimit'
 import type {Bearer} from './storage'
 import type {NewBearer} from './WalletContext'
 
@@ -102,6 +103,7 @@ export const scanRegisteredAddress = async (
   let highestIndex: number | null = null
   try {
     const results = await scanForAddressNotes(withdrawUrl, branch, {
+      gapLimit: gapLimit(),
       onFound: result => {
         highestIndex = result.index
       }

@@ -9,7 +9,8 @@ import {
   IoTrashSharp,
   IoFolderOpenSharp,
   IoRefreshSharp,
-  IoShieldCheckmarkSharp
+  IoShieldCheckmarkSharp,
+  IoSearchSharp
 } from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
@@ -22,6 +23,12 @@ import {
   AUTO_LOCK_OPTIONS,
   AUTO_LOCK_LABEL
 } from '../autoLock'
+import {
+  gapLimit,
+  setGapLimit,
+  GAP_LIMIT_OPTIONS,
+  GAP_LIMIT_LABEL
+} from '../gapLimit'
 import {
   applyBackup,
   MAX_BACKUP_FILE_BYTES,
@@ -343,6 +350,33 @@ const Settings: Component = () => {
                     onClick={() => setAutoLockMinutes(option)}
                   >
                     {AUTO_LOCK_LABEL[option]}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+          <div class="setup-card">
+            <h4>
+              <IoSearchSharp />
+              &nbsp;Recovery scan gap limit
+            </h4>
+            <p>
+              How many consecutive unused indices to check before giving up on a
+              mint or registered address (Setup's "Recover notes", and the
+              Address page's "Check for new notes") - the same gap-limit
+              convention HD wallets use for address recovery. Higher finds notes
+              further out at the cost of more requests per empty mint; lower
+              finishes faster but could miss a note past a long unused stretch.
+            </p>
+            <div class="btns">
+              <For each={GAP_LIMIT_OPTIONS}>
+                {option => (
+                  <button
+                    type="button"
+                    classList={{active: gapLimit() === option}}
+                    onClick={() => setGapLimit(option)}
+                  >
+                    {GAP_LIMIT_LABEL[option]}
                   </button>
                 )}
               </For>

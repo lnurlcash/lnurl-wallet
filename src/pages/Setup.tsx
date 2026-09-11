@@ -8,7 +8,8 @@ import {generateSeedPhrase, isValidSeedPhrase} from '../keys'
 import {notify, NotifyKind, msatToSats} from '../helpers'
 import {resolveMintInput} from '../lnurlcash'
 import {PUBLIC_MINTS} from '../trustedMints'
-import {scanMintForNotes, RECOVERY_GAP_LIMIT} from '../recovery'
+import {scanMintForNotes} from '../recovery'
+import {gapLimit} from '../gapLimit'
 import {mergeCashSecretIndices} from '../cashSecrets'
 
 type Tab = 'create' | 'restore'
@@ -401,10 +402,11 @@ const MintRecovery: Component<{onDone: () => void}> = props => {
           merged by a seed-aware version of this wallet - not ones simply
           received from someone else, and not ones minted while offline or with
           an older version that predates this feature. Each mint is checked
-          index by index until {RECOVERY_GAP_LIMIT} in a row turn up nothing,
-          the same gap-limit convention HD wallets already use for address
-          recovery. Pick every mint you remember using; nothing is lost by
-          skipping one now, the same seed can scan it again later.
+          index by index until {gapLimit()} in a row turn up nothing, the same
+          gap-limit convention HD wallets already use for address recovery
+          (configurable under Settings &gt; Recovery scan gap limit). Pick every
+          mint you remember using; nothing is lost by skipping one now, the same
+          seed can scan it again later.
         </p>
         <label>Public mints</label>
         <div class="form-item">

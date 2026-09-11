@@ -9,6 +9,7 @@ import {
   NoteSpentError,
   NoteUnknownError
 } from './lnurlcash'
+import {gapLimit} from './gapLimit'
 import type {Bearer} from './storage'
 
 // LUD-25 "Seed-recoverable note secrets" recovery: cashSecrets.ts already
@@ -30,12 +31,6 @@ import type {Bearer} from './storage'
 // with - nothing here recovers a note minted while unlocked without a cash
 // root loaded (falls back to plain randomness, see
 // lnurlcash.ts's generateNoteSecret) or one accepted from a third party.
-
-// same order of magnitude as the common BIP44 gap limit for address
-// recovery this mirrors - large enough that a few skipped/failed mints
-// along the way don't cut a real scan short, small enough that an empty
-// mint doesn't hang the holder's restore for hundreds of requests
-export const RECOVERY_GAP_LIMIT = 20
 
 export type RecoveredNote = {
   url: string
@@ -114,7 +109,8 @@ export const scanMintForNotes = async (
   let highestUsedIndex: number | null = null
   let consecutiveUnknown = 0
   let index = 0
-  while (consecutiveUnknown < RECOVERY_GAP_LIMIT) {
+  const limit = gapLimit()
+  while (consecutiveUnknown < limit) {
     const secret = cashSecretAtIndex(server, index)
     if (!secret) {
       return {

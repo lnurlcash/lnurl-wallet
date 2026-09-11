@@ -210,7 +210,7 @@ const Vault: Component = () => {
       state, since it's true whether or not one is currently paired. */}
       <p class="warning">
         This vault has not been migrated to LUD-25 Part 2's pubkey-based notes
-        yet - it only generates and holds legacy hash-keyed secrets. Addresses
+        yet - it only generates and holds legacy hash-keyed secrets. Address
         page registrations and any other pubkey-keyed notes stay browser-only
         for now; keep using this device for its existing note types.
       </p>

@@ -23,7 +23,7 @@ import Activity from './pages/Activity'
 import Docs from './pages/Docs'
 import Vault from './pages/Vault'
 import Claim from './pages/Claim'
-import Addresses from './pages/Addresses'
+import Address from './pages/Address'
 import Settings from './pages/Settings'
 import AddonRun from './pages/AddonRun'
 
@@ -97,7 +97,7 @@ const cleanup = render(
       <Route path="/addons/:addonId" component={AddonRun} />
       <Route path="/vault" component={Vault} />
       <Route path="/claim" component={Claim} />
-      <Route path="/addresses" component={Addresses} />
+      <Route path="/address" component={Address} />
       <Route path="*" component={() => <h1>Page not found</h1>} />
     </HashRouter>
   ),
