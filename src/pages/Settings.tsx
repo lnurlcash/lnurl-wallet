@@ -658,8 +658,8 @@ const Settings: Component = () => {
           <h3>Addons</h3>
           <p>
             Optional features, off by default. Each one only gets the
-            capabilities listed under its own name button below - nothing
-            else. See{' '}
+            capabilities listed under its own name button below - nothing else.
+            See{' '}
             <a
               href="https://github.com/lnurlcash/lnurl-wallet/blob/main/src/addons/README.md"
               target="_blank"
@@ -759,9 +759,9 @@ const Settings: Component = () => {
               return (
                 <div class="setup-card">
                   <p class="warning">
-                    Delete "{target()?.manifest.name}"? Notes it already
-                    created keep their tags either way - this only removes
-                    the addon itself.
+                    Delete "{target()?.manifest.name}"? Notes it already created
+                    keep their tags either way - this only removes the addon
+                    itself.
                   </p>
                   <div class="btns">
                     <button
@@ -813,7 +813,9 @@ const Settings: Component = () => {
                       <p class="bearer-label">Can:</p>
                       <Show
                         when={found.manifest.permissions.length > 0}
-                        fallback={<p>Nothing beyond reading its own settings.</p>}
+                        fallback={
+                          <p>Nothing beyond reading its own settings.</p>
+                        }
                       >
                         <ul>
                           <For each={found.manifest.permissions}>

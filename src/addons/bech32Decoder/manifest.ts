@@ -59,10 +59,13 @@ const noteKindDisplay = (value: unknown): string => {
 
 const noteAmountDisplay = (value: unknown): string => {
   const msat = noteDeclaredAmount(stripScheme(value))
-  return msat === null ? '-' : `${Math.floor(msat / 1000).toLocaleString()} sats`
+  return msat === null
+    ? '-'
+    : `${Math.floor(msat / 1000).toLocaleString()} sats`
 }
 
-const noteK1Display = (value: unknown): string => noteK1(stripScheme(value)) ?? '-'
+const noteK1Display = (value: unknown): string =>
+  noteK1(stripScheme(value)) ?? '-'
 
 const noteOriginDisplay = (value: unknown): string => {
   try {
@@ -94,7 +97,7 @@ const noteVerifiedDisplay = (value: unknown, mintPubkey: unknown): string => {
   }
   return verifyNoteSignature(k1, amount, sig, key)
     ? 'Verified - signature matches the mint key entered above.'
-    : "NOT verified - signature does not match the mint key entered above."
+    : 'NOT verified - signature does not match the mint key entered above.'
 }
 
 const isBolt11Value = (value: unknown): boolean =>
@@ -124,7 +127,8 @@ const bolt11AmountDisplay = (value: unknown): string => {
 }
 
 const bolt11HashDisplay = (value: unknown): string =>
-  decodeBolt11PaymentHash(stripScheme(value)) ?? 'Could not decode payment hash.'
+  decodeBolt11PaymentHash(stripScheme(value)) ??
+  'Could not decode payment hash.'
 
 const bech32DecoderManifest: AddonManifest = {
   id: 'bech32-decoder',
@@ -146,7 +150,8 @@ const bech32DecoderManifest: AddonManifest = {
       {
         type: 'Input',
         bind: 'input',
-        label: 'LNURL, lightning: URI, note URL, bolt11 invoice, or a plain https:// URL'
+        label:
+          'LNURL, lightning: URI, note URL, bolt11 invoice, or a plain https:// URL'
       },
       {
         type: 'Show',
@@ -168,7 +173,10 @@ const bech32DecoderManifest: AddonManifest = {
           {
             type: 'Text',
             value: {
-              cat: ['Amount: ', {helper: 'noteAmountDisplay', args: [{var: 'input'}]}]
+              cat: [
+                'Amount: ',
+                {helper: 'noteAmountDisplay', args: [{var: 'input'}]}
+              ]
             }
           },
           {
@@ -180,7 +188,10 @@ const bech32DecoderManifest: AddonManifest = {
           {
             type: 'Text',
             value: {
-              cat: ['Mint: ', {helper: 'noteOriginDisplay', args: [{var: 'input'}]}]
+              cat: [
+                'Mint: ',
+                {helper: 'noteOriginDisplay', args: [{var: 'input'}]}
+              ]
             }
           },
           {
@@ -205,13 +216,19 @@ const bech32DecoderManifest: AddonManifest = {
           {
             type: 'Text',
             value: {
-              cat: ['Network: ', {helper: 'bolt11NetworkDisplay', args: [{var: 'input'}]}]
+              cat: [
+                'Network: ',
+                {helper: 'bolt11NetworkDisplay', args: [{var: 'input'}]}
+              ]
             }
           },
           {
             type: 'Text',
             value: {
-              cat: ['Amount: ', {helper: 'bolt11AmountDisplay', args: [{var: 'input'}]}]
+              cat: [
+                'Amount: ',
+                {helper: 'bolt11AmountDisplay', args: [{var: 'input'}]}
+              ]
             }
           },
           {
