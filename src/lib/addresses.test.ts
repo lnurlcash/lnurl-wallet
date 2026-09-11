@@ -139,6 +139,44 @@ describe('scanForAddressNotes', () => {
     expect(calls).toBe(2)
   })
 
+  it('skips an already-spent index and keeps scanning past it', async () => {
+    // index 0 was already spent, index 2 is a still-unspent note behind it
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      const p = request.searchParams.get('p')!
+      if (p === encodeCp1(pubkeyAt(0))) {
+        return {
+          json: async () => ({status: 'ERROR', reason: 'Note already spent.'})
+        } as Response
+      }
+      if (p === encodeCp1(pubkeyAt(2))) {
+        return {
+          json: async () => ({
+            tag: 'withdrawRequest',
+            callback: 'https://mint.example.com/w/cb',
+            minWithdrawable: 1000,
+            maxWithdrawable: 1000,
+            mintPubkey: MINT_KEY
+          })
+        } as Response
+      }
+      return {
+        json: async () => ({status: 'ERROR', reason: 'Unknown note.'})
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const results = await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      {gapLimit: 3}
+    )
+    // the spent note at 0 is never returned as something to recover, but
+    // it also must not have counted toward (or reset past) the gap limit
+    // in a way that hides the real note at 2
+    expect(results.map(r => r.index)).toEqual([2])
+  })
+
   it('propagates an unexpected error rather than silently truncating the scan', async () => {
     vi.stubGlobal(
       'fetch',

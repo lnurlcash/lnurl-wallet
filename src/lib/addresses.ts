@@ -11,7 +11,12 @@
 // it never grants spending), so registerUsername below reflects only this
 // mint's shape, not a spec-mandated one.
 import {lnurlFetch} from './net'
-import {ServiceError, NoteUnknownError, classifyNoteError} from './errors'
+import {
+  ServiceError,
+  NoteUnknownError,
+  NoteSpentError,
+  classifyNoteError
+} from './errors'
 import {fetchNoteInfoByPubkey, type HashWithdrawRequestInfo} from './request'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 
@@ -93,6 +98,18 @@ export const scanForAddressNotes = async (
       }
       if (err instanceof NoteUnknownError) {
         consecutiveUnknown++
+        index++
+        continue
+      }
+      // an already-spent index is still proof this branch is in active
+      // use (the mint DID mint something there at some point) - unlike an
+      // unknown index, it must reset the gap counter rather than count
+      // toward it, and it must never abort the scan the way a genuine
+      // transport/protocol error below does: an earlier note this holder
+      // already received and spent must not hide a later, still-unspent
+      // one sitting at a higher index right behind it.
+      if (err instanceof NoteSpentError) {
+        consecutiveUnknown = 0
         index++
         continue
       }
