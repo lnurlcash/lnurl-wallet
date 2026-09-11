@@ -119,6 +119,41 @@ describe('scanMintForNotes', () => {
     expect(result.highestUsedIndex).toBe(0)
   })
 
+  it('attaches an already-disclosed offline-verification sig immediately, no separate rotate needed', async () => {
+    const sig = 'ab'.repeat(65)
+    const liveSecret = cashSecrets.cashSecretAtIndex(SERVER, 0)!
+    vi.stubGlobal('fetch', ((input: string | URL) => {
+      const url = new URL(input.toString())
+      if (url.pathname === '/.well-known/lnurlp/mint') {
+        return jsonResponse({
+          tag: 'payRequest',
+          callback: `https://${SERVER}/pay/cb`,
+          minSendable: 1000,
+          maxSendable: 100_000_000,
+          metadata: '[]',
+          withdrawLink: `https://${SERVER}/w`
+        })
+      }
+      if (url.pathname === '/w') {
+        if (url.searchParams.get('h') === sha256Hex(liveSecret)) {
+          return jsonResponse({
+            tag: 'withdrawRequest',
+            callback: WITHDRAW_CALLBACK,
+            mintPubkey: MINT_PUBKEY,
+            minWithdrawable: 21000,
+            maxWithdrawable: 21000,
+            sig
+          })
+        }
+        return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
+      }
+      return jsonResponse({status: 'ERROR', reason: 'not found'})
+    }) as unknown as typeof fetch)
+    const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
+    expect(result.recovered).toHaveLength(1)
+    expect(new URL(result.recovered[0].url).searchParams.get('sig')).toBe(sig)
+  })
+
   it("a spent index doesn't count toward the gap, but yields nothing", async () => {
     vi.stubGlobal(
       'fetch',

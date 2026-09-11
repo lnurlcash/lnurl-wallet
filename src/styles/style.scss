@@ -652,6 +652,25 @@ pre {
     max-width: none;
   }
 }
+
+// BearerCard's unveil dialog - the encoding picker needs its own
+// bottom margin since it sits right above the QR/"Reveal" button instead
+// of another .btns row (the base .btns rule only ever adds space above
+// itself, never below)
+.handover-encoding-btns {
+  margin-bottom: 10px;
+}
+
+// the offline-verified opt-in sits directly under the QR it affects,
+// right-aligned under the same width the QR box itself uses rather than
+// the full dialog - reads as "a note about this QR", not a standalone row
+.qr-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 400px;
+  margin: 6px auto 0;
+}
 @media (max-width: 700px) {
   .qr-wrapper {
     max-width: 100%;
@@ -1791,6 +1810,19 @@ nav {
     font-size: 0.9em;
     white-space: nowrap;
     cursor: pointer;
+  }
+}
+
+// BearerCard's unveil dialog - now sits in its own .qr-toggle-row below
+// the QR rather than here, but keeps this same inline/pointer shape
+.strip-sig-toggle {
+  display: flex;
+  align-items: center;
+  font-size: 0.9em;
+  white-space: nowrap;
+  cursor: pointer;
+  input:disabled {
+    cursor: not-allowed;
   }
 }
 

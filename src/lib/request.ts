@@ -1,6 +1,7 @@
 import {requireNoteK1, serverOf, withNewK1} from './urls'
 import {
   MINT_PUBKEY_PATTERN,
+  NOTE_SIGNATURE_PATTERN,
   hashK1,
   parseMintKey,
   requireMutationSignature,
@@ -18,7 +19,7 @@ import {
 } from './errors'
 import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
-import {isCk1, isCp1, decodeCk1, encodeCp1} from './recoverableNotes'
+import {isCk1, isCp1, isCs1, decodeCk1, encodeCp1} from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -28,9 +29,24 @@ export type WithdrawRequestInfo = {
   maxWithdrawable: number
   defaultDescription?: string
   mintPubkey: string
+  // LUD-25 Part 2 Offline verification: SERVICE MAY include this on the
+  // plain informational GET itself now (not just a k1=ck1 lookup, and not
+  // only after an explicit rotate) - a note that already has one needs no
+  // rotate/refresh just to become offline-verifiable. Validated the same
+  // way requireMutationSignature validates a mutation's own sig (hex or
+  // cs1, preserved exactly as disclosed) - never trusted un-normalized off
+  // the wire, and simply absent (not a malformed placeholder) if SERVICE
+  // didn't send a recognizable one.
+  sig?: string
 }
 
 export type HashWithdrawRequestInfo = Omit<WithdrawRequestInfo, 'k1'>
+
+const parseOptionalSig = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined
+  if (NOTE_SIGNATURE_PATTERN.test(value)) return value.toLowerCase()
+  return isCs1(value) ? value.trim() : undefined
+}
 
 const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   if (
@@ -47,7 +63,16 @@ const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   ) {
     throw new Error('Not a withdrawRequest (unexpected response).')
   }
-  return {...body, ...parseMintKey(body)} as HashWithdrawRequestInfo
+  // body's own (untyped, unvalidated) sig is deliberately excluded from the
+  // spread below and only ever reintroduced via parseOptionalSig - a
+  // malformed one must never leak through unnormalized
+  const {sig: _rawSig, ...rest} = body
+  const sig = parseOptionalSig(body.sig)
+  return {
+    ...rest,
+    ...parseMintKey(body),
+    ...(sig !== undefined ? {sig} : {})
+  } as HashWithdrawRequestInfo
 }
 
 // the informational GET's note-reference field: bare `h`/`p` (never
