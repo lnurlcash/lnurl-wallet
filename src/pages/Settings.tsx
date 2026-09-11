@@ -10,7 +10,9 @@ import {
   IoFolderOpenSharp,
   IoRefreshSharp,
   IoShieldCheckmarkSharp,
-  IoSearchSharp
+  IoSearchSharp,
+  IoInformationCircleSharp,
+  IoCogSharp
 } from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
@@ -98,6 +100,14 @@ const Settings: Component = () => {
   const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<
     string | null
   >(null)
+  // which addon's info/settings dialog is open, by id - null for neither.
+  // Separate signals since a holder could reasonably want to check an
+  // addon's own settings without re-reading its blurb first, and closing
+  // one should never also close the other.
+  const [infoAddonId, setInfoAddonId] = createSignal<string | null>(null)
+  const [settingsAddonId, setSettingsAddonId] = createSignal<string | null>(
+    null
+  )
   // three views onto the same addonDraft string - never a second copy of
   // the manifest, so there's nothing for the views to fall out of sync over
   const [editorMode, setEditorMode] = createSignal<'json' | 'form' | 'visual'>(
@@ -646,16 +656,10 @@ const Settings: Component = () => {
         </div>
         <div class="two-col">
           <h3>Addons</h3>
-          <p class="warning">
-            <strong>Alpha - new since v0.11.0.</strong> Addons can split and tag
-            your notes on your behalf. This is new, undertested code path for
-            the wallet's core note-moving logic - if you don't understand what
-            an addon's listed capabilities actually let it do, don't turn it on.
-            You can lose funds by enabling one you don't understand.
-          </p>
           <p>
             Optional features, off by default. Each one only gets the
-            capabilities listed under it - nothing else. See{' '}
+            capabilities listed under its own name button below - nothing
+            else. See{' '}
             <a
               href="https://github.com/lnurlcash/lnurl-wallet/blob/main/src/addons/README.md"
               target="_blank"
@@ -667,33 +671,28 @@ const Settings: Component = () => {
             manifest JSON can and can't do.
           </p>
 
-          <For each={allAddons()}>
-            {addon => {
-              const enabled = () => enabledAddonIds().has(addon.manifest.id)
-              const custom = () => isCustomAddon(addon.manifest.id)
-              const Icon = ADDON_ICONS[addon.manifest.icon]
-              return (
-                <div class="setup-card">
-                  <h4>
-                    {Icon && <Icon />}
-                    &nbsp;{addon.manifest.name}
-                    <Show when={custom()}>
-                      <span class="bearer-pending">&nbsp;custom</span>
-                    </Show>
-                  </h4>
-                  <Show when={addon.manifest.description}>
-                    <p>{addon.manifest.description}</p>
-                  </Show>
-                  <p class="bearer-label">Can:</p>
-                  <ul>
-                    <For each={addon.manifest.permissions}>
-                      {perm => <li>{perm.reason}</li>}
-                    </For>
-                  </ul>
-                  <div class="btns">
+          <div class="mint-picker">
+            <For each={allAddons()}>
+              {addon => {
+                const enabled = () => enabledAddonIds().has(addon.manifest.id)
+                const custom = () => isCustomAddon(addon.manifest.id)
+                const Icon = ADDON_ICONS[addon.manifest.icon]
+                return (
+                  <span class="mint-picker-entry">
                     <button
                       type="button"
+                      title={addon.manifest.description || addon.manifest.name}
+                      onClick={() => setInfoAddonId(addon.manifest.id)}
+                    >
+                      {Icon && <Icon />}
+                      &nbsp;{addon.manifest.name}
+                      <Show when={custom()}>&nbsp;(custom)</Show>
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn"
                       classList={{active: enabled()}}
+                      title={enabled() ? 'Turn off' : 'Turn on'}
                       onClick={() =>
                         setAddonEnabled(addon.manifest.id, !enabled())
                       }
@@ -708,15 +707,26 @@ const Settings: Component = () => {
                           addon.manifest.nav?.route ??
                           `/addons/${addon.manifest.id}`
                         }
-                        class="hero-btn hero-btn-primary"
+                        class="icon-btn"
+                        title="Open this addon"
                       >
                         Open
                       </A>
                     </Show>
+                    <Show when={enabled() && addon.manifest.settings}>
+                      <button
+                        type="button"
+                        class="icon-btn"
+                        title="Addon settings"
+                        onClick={() => setSettingsAddonId(addon.manifest.id)}
+                      >
+                        <IoCogSharp />
+                      </button>
+                    </Show>
                     <Show when={custom()}>
                       <button
                         type="button"
-                        class="icon-btn icon-btn-gap"
+                        class="icon-btn"
                         title="Edit this addon's manifest"
                         onClick={() => startEditAddon(addon.manifest)}
                       >
@@ -724,58 +734,122 @@ const Settings: Component = () => {
                       </button>
                       <button
                         type="button"
-                        class="icon-btn icon-btn-gap"
+                        class="icon-btn"
                         title="Delete this addon"
                         onClick={() => setConfirmDeleteAddon(addon.manifest.id)}
                       >
-                        Delete
+                        <IoTrashSharp />
                       </button>
                     </Show>
+                  </span>
+                )
+              }}
+            </For>
+          </div>
+
+          {/* keyed: these all gate on an addon id that can change from one
+          truthy value straight to another (clicking a different addon's
+          Info/Settings/Delete without closing the previous one first) - a
+          non-keyed Show only re-runs its children on a truthy/falsy flip
+          (see AddonRun.tsx's own fix for this exact bug), which would leave
+          the PREVIOUS addon's dialog content on screen under the new id */}
+          <Show when={confirmDeleteAddon()} keyed>
+            {id => {
+              const target = () => allAddons().find(a => a.manifest.id === id)
+              return (
+                <div class="setup-card">
+                  <p class="warning">
+                    Delete "{target()?.manifest.name}"? Notes it already
+                    created keep their tags either way - this only removes
+                    the addon itself.
+                  </p>
+                  <div class="btns">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        deleteCustomAddon(id)
+                        setAddonEnabled(id, false)
+                        setConfirmDeleteAddon(null)
+                        notify('Addon deleted.', NotifyKind.SUCCESS)
+                      }}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteAddon(null)}
+                    >
+                      Cancel
+                    </button>
                   </div>
-                  <Show when={confirmDeleteAddon() === addon.manifest.id}>
-                    <p class="warning">
-                      Delete "{addon.manifest.name}"? Notes it already created
-                      keep their tags either way - this only removes the addon
-                      itself.
-                    </p>
-                    <div class="btns">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          deleteCustomAddon(addon.manifest.id)
-                          setAddonEnabled(addon.manifest.id, false)
-                          setConfirmDeleteAddon(null)
-                          notify('Addon deleted.', NotifyKind.SUCCESS)
-                        }}
-                      >
-                        Delete
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteAddon(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </Show>
-                  {/* this addon's own settings.ui, inline - see
-                  addons/Renderer.tsx's 'settings' mode, which never wires up
-                  a verb dispatcher at all, so nothing rendered here can
-                  touch a note */}
-                  <Show when={enabled() && addon.manifest.settings}>
-                    <AddonRenderer
-                      addon={addon}
-                      mode="settings"
-                      settingsStore={addonSettingsStore(
-                        addon.manifest.id,
-                        addon.manifest.settings!.state
-                      )}
-                    />
-                  </Show>
                 </div>
               )
             }}
-          </For>
+          </Show>
+
+          <Show when={infoAddonId()} keyed>
+            {id => (
+              <Show when={allAddons().find(a => a.manifest.id === id)} keyed>
+                {found => {
+                  const Icon = ADDON_ICONS[found.manifest.icon]
+                  return (
+                    <Dialog onClose={() => setInfoAddonId(null)}>
+                      <h4>
+                        {Icon && <Icon />}
+                        &nbsp;{found.manifest.name}
+                        <Show when={isCustomAddon(found.manifest.id)}>
+                          <span class="bearer-pending">&nbsp;custom</span>
+                        </Show>
+                      </h4>
+                      <p class="bearer-label">
+                        v{found.manifest.version}
+                        {isBundledAddon(found.manifest.id)
+                          ? ' - bundled'
+                          : ' - custom'}
+                      </p>
+                      <Show when={found.manifest.description}>
+                        <p>{found.manifest.description}</p>
+                      </Show>
+                      <p class="bearer-label">Can:</p>
+                      <Show
+                        when={found.manifest.permissions.length > 0}
+                        fallback={<p>Nothing beyond reading its own settings.</p>}
+                      >
+                        <ul>
+                          <For each={found.manifest.permissions}>
+                            {perm => <li>{perm.reason}</li>}
+                          </For>
+                        </ul>
+                      </Show>
+                    </Dialog>
+                  )
+                }}
+              </Show>
+            )}
+          </Show>
+
+          {/* this addon's own settings.ui - see addons/Renderer.tsx's
+          'settings' mode, which never wires up a verb dispatcher at all, so
+          nothing rendered here can touch a note */}
+          <Show when={settingsAddonId()} keyed>
+            {id => (
+              <Show when={allAddons().find(a => a.manifest.id === id)} keyed>
+                {found => (
+                  <Dialog onClose={() => setSettingsAddonId(null)}>
+                    <h4>{found.manifest.name} settings</h4>
+                    <AddonRenderer
+                      addon={found}
+                      mode="settings"
+                      settingsStore={addonSettingsStore(
+                        found.manifest.id,
+                        found.manifest.settings!.state
+                      )}
+                    />
+                  </Dialog>
+                )}
+              </Show>
+            )}
+          </Show>
 
           <div class="setup-card">
             <h4>Build your own addon</h4>

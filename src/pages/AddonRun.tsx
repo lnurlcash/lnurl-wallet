@@ -19,8 +19,18 @@ const AddonRun: Component = () => {
 
   return (
     <div id="addon-run" class="page">
+      {/* keyed: switching between two ENABLED addons never flips this
+      Show's truthiness (addon() is truthy the whole time, just a
+      different addon), and a non-keyed Show only re-invokes its children
+      callback on a truthy/falsy transition (see solid-js's own Show
+      source) - keyed compares the addon VALUE itself instead, so
+      navigating from one addon's page straight to another's actually
+      swaps `found`, and everything below (including RunAddon's one-time
+      initialState seeding) gets a fresh mount instead of silently
+      running the previous addon */}
       <Show
         when={addon()}
+        keyed
         fallback={
           <div class="setup-card">
             <p>That addon doesn't exist.</p>
@@ -32,10 +42,10 @@ const AddonRun: Component = () => {
       >
         {found => (
           <Show
-            when={enabledAddonIds().has(found().manifest.id)}
+            when={enabledAddonIds().has(found.manifest.id)}
             fallback={
               <div class="setup-card">
-                <p>{found().manifest.name} is turned off.</p>
+                <p>{found.manifest.name} is turned off.</p>
                 <A href="/settings" class="hero-btn hero-btn-primary">
                   Turn it on
                 </A>
@@ -43,7 +53,7 @@ const AddonRun: Component = () => {
             }
           >
             <RequireWallet>
-              <RunAddon addon={found()} />
+              <RunAddon addon={found} />
             </RequireWallet>
           </Show>
         )}

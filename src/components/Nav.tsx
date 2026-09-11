@@ -150,13 +150,9 @@ const Nav = () => {
               <span class="nav-label">&nbsp;Activity</span>
             </A>
           </Show>
-          <A
-            href="/settings"
-            title="Settings - auto-lock, currency, offline mode, backup, restore &amp; addons"
-          >
-            <IoCogSharp />
-            <span class="nav-label">&nbsp;Settings</span>
-          </A>
+          {/* addons sit left of Settings - Settings stays the outermost
+          (rightmost) page link, a fixed landmark regardless of how many
+          right-side addons are enabled */}
           <Show when={state() !== 'none'}>
             <For each={addonsWithNav('right')}>
               {addon => {
@@ -177,6 +173,13 @@ const Nav = () => {
               }}
             </For>
           </Show>
+          <A
+            href="/settings"
+            title="Settings - auto-lock, currency, offline mode, backup, restore &amp; addons"
+          >
+            <IoCogSharp />
+            <span class="nav-label">&nbsp;Settings</span>
+          </A>
           <Show when={state() === 'unlocked' && encrypted()}>
             <a href="#lock" title="Lock wallet" onClick={lock_action}>
               <IoLockClosedSharp />
