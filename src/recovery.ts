@@ -4,6 +4,7 @@ import {
   fetchPayRequest,
   fetchNoteInfo,
   buildNoteUrl,
+  withNewK1,
   serverOf,
   noteK1,
   NoteSpentError,
@@ -131,7 +132,12 @@ export const scanMintForNotes = async (
       )
       if (!alreadyHeld) {
         recovered.push({
-          url: buildNoteUrl(withdrawLink, secret, note.maxWithdrawable),
+          // SERVICE may already disclose this note's offline-verification
+          // sig on the plain informational GET (see WithdrawRequestInfo's
+          // own comment) - attached immediately if present, so a recovered
+          // note doesn't need a separate rotate/refresh afterward just to
+          // become offline-verifiable
+          url: withNewK1(withdrawLink, secret, note.maxWithdrawable, note.sig),
           callback: note.callback,
           amount: note.maxWithdrawable,
           verified: true,

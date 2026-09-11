@@ -5,7 +5,7 @@ import {
   fromLud17,
   serverOf,
   noteK1,
-  buildNoteUrl,
+  withNewK1,
   scanForAddressNotes,
   encodeCk1,
   signNoteOwnership
@@ -115,7 +115,15 @@ export const scanRegisteredAddress = async (
       // unlocked again picks this index right back up
       if (!secretKey) continue
       const ck1 = encodeCk1(signNoteOwnership(secretKey))
-      const url = buildNoteUrl(withdrawUrl, ck1, result.info.maxWithdrawable)
+      // attach an already-disclosed offline-verification sig immediately
+      // (see WithdrawRequestInfo's own comment) rather than requiring a
+      // separate rotate/refresh afterward just to obtain one
+      const url = withNewK1(
+        withdrawUrl,
+        ck1,
+        result.info.maxWithdrawable,
+        result.info.sig
+      )
       const alreadyHeld = existing.some(
         b => serverOf(b.url) === serverOf(url) && noteK1(b.url) === ck1
       )

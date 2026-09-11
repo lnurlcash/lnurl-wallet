@@ -1,4 +1,3 @@
-import {bytesToHex} from '@noble/hashes/utils.js'
 import type {Addon, AddonHelper, AddonManifest} from '../types'
 import {
   isBech32Lnurl,
@@ -38,6 +37,30 @@ const isDecodable = (value: unknown): boolean =>
 const decodeLnurl = (value: unknown): string | null =>
   fromBech32Lnurl(stripScheme(value))
 
+// splits the DECODED url's own query params out individually, same fields
+// (and same null-safe helpers) as the pasted-note-url detector below -
+// a decoded LNURL is quite often a bearer note itself (k1/amount/sig), so
+// this reads them straight off it rather than making a holder re-paste the
+// already-decoded URL back into the input to see them
+const decodedNoteK1Display = (value: unknown): string => {
+  const url = decodeLnurl(value)
+  return url ? (noteK1(url) ?? 'not present') : '-'
+}
+
+const decodedNoteAmountDisplay = (value: unknown): string => {
+  const url = decodeLnurl(value)
+  if (!url) return '-'
+  const msat = noteDeclaredAmount(url)
+  return msat === null
+    ? 'not present'
+    : `${Math.floor(msat / 1000).toLocaleString()} sats`
+}
+
+const decodedNoteSigDisplay = (value: unknown): string => {
+  const url = decodeLnurl(value)
+  return url ? (noteSignature(url) ?? 'not present') : '-'
+}
+
 const looksLikeUrl = (value: unknown): boolean =>
   /^https?:\/\//i.test(stripScheme(value))
 
@@ -48,18 +71,22 @@ const encodeLnurl = (value: unknown): string | null => {
 
 // the actual bech32 payload either direction carries is nothing more than
 // the URL's own UTF-8 bytes (see toBech32Lnurl/fromBech32Lnurl) - shown as
-// hex so the raw bytes behind the bech32 text are visible, not just the
-// human-readable URL/tag either side of it
-const decodedUrlBytesDisplay = (value: unknown): string => {
+// a byte count (not the bytes themselves) so a holder can sanity-check the
+// payload size behind the bech32 text, e.g. against a service's own
+// length limits, without a hex dump adding noise for what's otherwise
+// already shown as the plain URL right above it
+const decodedUrlByteSize = (value: unknown): string => {
   const url = decodeLnurl(value)
-  return url ? bytesToHex(new TextEncoder().encode(url)) : '-'
+  if (!url) return '-'
+  const n = new TextEncoder().encode(url).length
+  return `${n} byte${n === 1 ? '' : 's'}`
 }
 
-const encodedUrlBytesDisplay = (value: unknown): string => {
+const encodedUrlByteSize = (value: unknown): string => {
   const stripped = stripScheme(value)
-  return looksLikeUrl(stripped)
-    ? bytesToHex(new TextEncoder().encode(stripped))
-    : '-'
+  if (!looksLikeUrl(stripped)) return '-'
+  const n = new TextEncoder().encode(stripped).length
+  return `${n} byte${n === 1 ? '' : 's'}`
 }
 
 // A pasted lnurlcash bearer note URL (see src/lib/urls.ts) - same shape
@@ -200,8 +227,35 @@ const bech32DecoderManifest: AddonManifest = {
             type: 'Text',
             value: {
               cat: [
-                'Bytes: ',
-                {helper: 'decodedUrlBytesDisplay', args: [{var: 'input'}]}
+                'Payload size: ',
+                {helper: 'decodedUrlByteSize', args: [{var: 'input'}]}
+              ]
+            }
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'k1: ',
+                {helper: 'decodedNoteK1Display', args: [{var: 'input'}]}
+              ]
+            }
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'amount: ',
+                {helper: 'decodedNoteAmountDisplay', args: [{var: 'input'}]}
+              ]
+            }
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'sig: ',
+                {helper: 'decodedNoteSigDisplay', args: [{var: 'input'}]}
               ]
             }
           }
@@ -308,8 +362,8 @@ const bech32DecoderManifest: AddonManifest = {
             type: 'Text',
             value: {
               cat: [
-                'Bytes: ',
-                {helper: 'encodedUrlBytesDisplay', args: [{var: 'input'}]}
+                'Payload size: ',
+                {helper: 'encodedUrlByteSize', args: [{var: 'input'}]}
               ]
             }
           }
@@ -351,8 +405,11 @@ const bech32DecoderHelpers: Record<string, AddonHelper> = {
   decodeLnurl: decodeLnurl as AddonHelper,
   looksLikeUrl: looksLikeUrl as AddonHelper,
   encodeLnurl: encodeLnurl as AddonHelper,
-  decodedUrlBytesDisplay: decodedUrlBytesDisplay as AddonHelper,
-  encodedUrlBytesDisplay: encodedUrlBytesDisplay as AddonHelper,
+  decodedUrlByteSize: decodedUrlByteSize as AddonHelper,
+  decodedNoteK1Display: decodedNoteK1Display as AddonHelper,
+  decodedNoteAmountDisplay: decodedNoteAmountDisplay as AddonHelper,
+  decodedNoteSigDisplay: decodedNoteSigDisplay as AddonHelper,
+  encodedUrlByteSize: encodedUrlByteSize as AddonHelper,
   looksLikeNoteUrl: looksLikeNoteUrl as AddonHelper,
   noteKindDisplay: noteKindDisplay as AddonHelper,
   noteAmountDisplay: noteAmountDisplay as AddonHelper,

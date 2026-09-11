@@ -6,6 +6,7 @@ import {
   encodeCp1,
   decodeCk1,
   noteK1,
+  noteSignature,
   recoverNoteOwnershipPubkey
 } from './lnurlcash'
 
@@ -47,7 +48,7 @@ const jsonResponse = (body: unknown) =>
 // indices on the address branch cashAddressBranch(SERVER) actually derives -
 // mirrors recovery.test.ts's own fakeMint shape, adapted for p=cp1<pk>
 // instead of h=sha256(k1)
-const fakeMint = (liveIndices: number[]) => {
+const fakeMint = (liveIndices: number[], sig?: string) => {
   const branch = cashSecrets.cashAddressBranch(SERVER)!
   const liveCp1 = new Set(
     liveIndices.map(i =>
@@ -74,7 +75,8 @@ const fakeMint = (liveIndices: number[]) => {
           callback: `${SERVER}/w/cb`,
           mintPubkey: MINT_PUBKEY,
           minWithdrawable: 21000,
-          maxWithdrawable: 21000
+          maxWithdrawable: 21000,
+          ...(sig ? {sig} : {})
         })
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
@@ -101,6 +103,14 @@ describe('scanRegisteredAddress', () => {
     expect(k1.startsWith('ck1')).toBe(true)
     const recoveredPk = recoverNoteOwnershipPubkey(decodeCk1(k1)!)
     expect(bytesToHex(recoveredPk!)).toBe(expectedPk)
+  })
+
+  it('attaches an already-disclosed offline-verification sig immediately', async () => {
+    const sig = 'ab'.repeat(65)
+    vi.stubGlobal('fetch', fakeMint([0], sig) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.recovered).toHaveLength(1)
+    expect(noteSignature(result.recovered[0]!.url)).toBe(sig)
   })
 
   it('does not re-recover a note already held', async () => {

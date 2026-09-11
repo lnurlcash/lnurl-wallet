@@ -267,6 +267,93 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   })
 })
 
+describe('WithdrawRequestInfo.sig: informational GET may already disclose one', () => {
+  it('captures a hex sig from the plain informational GET', async () => {
+    const sig = 'ab'.repeat(65)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'withdrawRequest',
+              callback: 'https://mint.example.com/w/cb',
+              minWithdrawable: 21000,
+              maxWithdrawable: 21000,
+              mintPubkey: MINT_KEY,
+              sig
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchNoteInfo(NOTE_URL)
+    expect(info.sig).toBe(sig)
+  })
+
+  it('captures a cs1-encoded sig, preserved exactly as disclosed', async () => {
+    const cert = encodeCs1(new Uint8Array(65).fill(0xcd))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'withdrawRequest',
+              callback: 'https://mint.example.com/w/cb',
+              minWithdrawable: 21000,
+              maxWithdrawable: 21000,
+              mintPubkey: MINT_KEY,
+              sig: cert
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchNoteInfo(NOTE_URL)
+    expect(info.sig).toBe(cert)
+  })
+
+  it('leaves sig undefined rather than leaking a malformed one through', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'withdrawRequest',
+              callback: 'https://mint.example.com/w/cb',
+              minWithdrawable: 21000,
+              maxWithdrawable: 21000,
+              mintPubkey: MINT_KEY,
+              sig: 'not-a-real-signature'
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchNoteInfo(NOTE_URL)
+    expect(info.sig).toBeUndefined()
+  })
+
+  it('leaves sig undefined when SERVICE does not disclose one at all', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'withdrawRequest',
+              callback: 'https://mint.example.com/w/cb',
+              minWithdrawable: 21000,
+              maxWithdrawable: 21000,
+              mintPubkey: MINT_KEY
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchNoteInfo(NOTE_URL)
+    expect(info.sig).toBeUndefined()
+  })
+})
+
 describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgrade', () => {
   const secretKey = schnorr.utils.randomSecretKey()
   const ck1 = encodeCk1(signNoteOwnership(secretKey))

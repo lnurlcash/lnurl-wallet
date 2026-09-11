@@ -411,19 +411,8 @@ const BearerCard: Component<BearerCardProps> = props => {
           <Dialog onClose={cancelUnveil}>
             <div class="dialog-title-row">
               <h4>Hand over {msatToSats(props.bearer.amount)} sats</h4>
-              <label
-                class="strip-sig-toggle"
-                title="Unchecking this strips the sig from the QR/copied note before handing it over, so it can no longer be checked offline against the issuing mint's pinned key"
-              >
-                <input
-                  type="checkbox"
-                  checked={!stripSignature()}
-                  onChange={e => setStripSignature(!e.currentTarget.checked)}
-                />
-                &nbsp;Offline verified
-              </label>
             </div>
-            <div class="btns">
+            <div class="btns handover-encoding-btns">
               <button
                 type="button"
                 classList={{active: handoverEncoding() === 'bech32'}}
@@ -458,8 +447,14 @@ const BearerCard: Component<BearerCardProps> = props => {
               }
             >
               {url => {
+                // moot (and disabled below) once there's no sig to strip
+                // in the first place - a note that was never offline-
+                // verified stays that way regardless of this toggle
+                const hasOfflineSig = () => !!noteSignature(url())
                 const handoverUrl = () =>
-                  stripSignature() ? withoutSignature(url()) : url()
+                  stripSignature() || !hasOfflineSig()
+                    ? withoutSignature(url())
+                    : url()
                 return (
                   <>
                     <div class="qr-wrapper">
@@ -473,6 +468,26 @@ const BearerCard: Component<BearerCardProps> = props => {
                           <IoEyeSharp />
                         </button>
                       </Show>
+                    </div>
+                    <div class="qr-toggle-row">
+                      <label
+                        class="strip-sig-toggle"
+                        title={
+                          hasOfflineSig()
+                            ? "Unchecking this strips the sig from the QR/copied note before handing it over, so it can no longer be checked offline against the issuing mint's pinned key"
+                            : 'This note has no offline-verification sig to include'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={!hasOfflineSig()}
+                          checked={hasOfflineSig() && !stripSignature()}
+                          onChange={e =>
+                            setStripSignature(!e.currentTarget.checked)
+                          }
+                        />
+                        &nbsp;Offline verified
+                      </label>
                     </div>
                     <div class="btns">
                       <button
