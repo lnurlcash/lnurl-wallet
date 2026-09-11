@@ -1,11 +1,12 @@
 import type {Addon} from './types'
 import {raffleAddon} from './raffle/manifest'
+import {currencyAddon} from './currency/manifest'
+import {bech32DecoderAddon} from './bech32Decoder/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
-// from anywhere. This is the one line that changes when a second bundled
-// addon exists.
-export const ADDONS: Addon[] = [raffleAddon]
+// from anywhere.
+export const ADDONS: Addon[] = [raffleAddon, currencyAddon, bech32DecoderAddon]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))
 export const isBundledAddon = (id: string): boolean => BUNDLED_IDS.has(id)

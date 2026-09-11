@@ -1,0 +1,165 @@
+import type {Addon, AddonHelper, AddonManifest} from '../types'
+import {rates} from '../../currency'
+
+// A calculator, not a wallet action - reuses the wallet's own already-
+// running price feed (currency.ts, Settings > Currency) rather than
+// fetching anything itself: rates() already holds usd/eur/gbp together
+// once ANY currency is selected there, regardless of which one is picked
+// for the global fiat-estimate display, so this addon's own currency
+// picker (below) is independent of that display preference - it only
+// needs polling to be active at all. No verb/permission is needed at all:
+// this never touches a note, a secret, or a network request of its own.
+type FiatCode = 'usd' | 'eur' | 'gbp'
+
+const SYMBOL: Record<FiatCode, string> = {usd: '$', eur: '€', gbp: '£'}
+
+const isFiatCode = (code: unknown): code is FiatCode =>
+  code === 'usd' || code === 'eur' || code === 'gbp'
+
+const ratesAvailable = (): boolean => rates() !== null
+
+const satsToFiatAmount = (sats: unknown, code: unknown): number | null => {
+  const r = rates()
+  if (!r || !isFiatCode(code)) return null
+  const n = Number(sats)
+  return Number.isFinite(n) ? (n / 100_000_000) * r[code] : null
+}
+
+const fiatToSatsAmount = (amount: unknown, code: unknown): number | null => {
+  const r = rates()
+  if (!r || !isFiatCode(code)) return null
+  const n = Number(amount)
+  return Number.isFinite(n) ? Math.round((n / r[code]) * 100_000_000) : null
+}
+
+const formatFiatAmount = (amount: unknown, code: unknown): string => {
+  if (
+    typeof amount !== 'number' ||
+    !Number.isFinite(amount) ||
+    !isFiatCode(code)
+  ) {
+    return '-'
+  }
+  return `${SYMBOL[code]}${amount.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`
+}
+
+const formatSats = (sats: unknown): string => {
+  const n = Number(sats)
+  return Number.isFinite(n) ? `${Math.round(n).toLocaleString()} sats` : '-'
+}
+
+const currencyManifest: AddonManifest = {
+  id: 'currency-converter',
+  name: 'Currency Converter',
+  version: '1',
+  icon: 'swap',
+  description:
+    'Convert between sats and USD/EUR/GBP using price.lnurlcash.com - the same feed as Settings > Currency.',
+  permissions: [],
+  nav: {position: 'right', icon: 'swap', label: 'Convert'},
+  state: {
+    currency: 'usd',
+    sats: 100000,
+    fiatAmount: 10
+  },
+  ui: {
+    type: 'View',
+    children: [
+      {type: 'Text', value: 'Currency Converter', style: 'heading'},
+      {
+        type: 'Show',
+        when: {helper: 'not', args: [{helper: 'ratesAvailable', args: []}]},
+        children: [
+          {
+            type: 'Text',
+            value:
+              'No live rate yet - pick a currency under Settings > Currency first (this addon reuses that same feed).'
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {helper: 'ratesAvailable', args: []},
+        children: [
+          {type: 'Text', value: 'Convert to', style: 'subheading'},
+          {
+            type: 'View',
+            style: 'row',
+            children: [
+              {
+                type: 'Button',
+                label: 'USD',
+                onClick: {action: 'set', path: 'currency', value: 'usd'}
+              },
+              {
+                type: 'Button',
+                label: 'EUR',
+                onClick: {action: 'set', path: 'currency', value: 'eur'}
+              },
+              {
+                type: 'Button',
+                label: 'GBP',
+                onClick: {action: 'set', path: 'currency', value: 'gbp'}
+              }
+            ]
+          },
+          {
+            type: 'Input',
+            bind: 'sats',
+            kind: 'number',
+            label: 'Sats'
+          },
+          {
+            type: 'Text',
+            value: {
+              helper: 'formatFiatAmount',
+              args: [
+                {
+                  helper: 'satsToFiatAmount',
+                  args: [{var: 'sats'}, {var: 'currency'}]
+                },
+                {var: 'currency'}
+              ]
+            },
+            style: 'subheading'
+          },
+          {
+            type: 'Input',
+            bind: 'fiatAmount',
+            kind: 'number',
+            label: 'Amount (in the currency picked above)'
+          },
+          {
+            type: 'Text',
+            value: {
+              helper: 'formatSats',
+              args: [
+                {
+                  helper: 'fiatToSatsAmount',
+                  args: [{var: 'fiatAmount'}, {var: 'currency'}]
+                }
+              ]
+            },
+            style: 'subheading'
+          }
+        ]
+      }
+    ]
+  }
+}
+
+const currencyHelpers: Record<string, AddonHelper> = {
+  ratesAvailable: ratesAvailable as AddonHelper,
+  satsToFiatAmount: satsToFiatAmount as AddonHelper,
+  fiatToSatsAmount: fiatToSatsAmount as AddonHelper,
+  formatFiatAmount: formatFiatAmount as AddonHelper,
+  formatSats: formatSats as AddonHelper
+}
+
+export const currencyAddon: Addon = {
+  manifest: currencyManifest,
+  helpers: currencyHelpers
+}

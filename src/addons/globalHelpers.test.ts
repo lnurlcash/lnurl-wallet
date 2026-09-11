@@ -27,4 +27,12 @@ describe('GLOBAL_HELPERS', () => {
     expect(call(GLOBAL_HELPERS.div!, 9, 3)).toBe(3)
     expect(call(GLOBAL_HELPERS.round!, 4.6)).toBe(5)
   })
+
+  it('negates a value to a plain boolean', () => {
+    expect(call(GLOBAL_HELPERS.not!, true)).toBe(false)
+    expect(call(GLOBAL_HELPERS.not!, false)).toBe(true)
+    expect(call(GLOBAL_HELPERS.not!, null)).toBe(true)
+    expect(call(GLOBAL_HELPERS.not!, 0)).toBe(true)
+    expect(call(GLOBAL_HELPERS.not!, 'x')).toBe(false)
+  })
 })
