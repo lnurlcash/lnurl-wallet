@@ -78,17 +78,7 @@ const RunAddon: Component<{addon: Addon}> = props => {
     ...settings()
   }
   return (
-    <>
-      <p class="bearer-label">
-        Alpha feature (since v0.11.0) - see <A href="/settings">Settings</A> for
-        what this can and can't do.
-      </p>
-      <AddonRenderer
-        addon={props.addon}
-        mode="run"
-        initialState={initialState}
-      />
-    </>
+    <AddonRenderer addon={props.addon} mode="run" initialState={initialState} />
   )
 }
 

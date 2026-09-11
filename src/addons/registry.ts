@@ -3,6 +3,7 @@ import {raffleAddon} from './raffle/manifest'
 import {currencyAddon} from './currency/manifest'
 import {bech32DecoderAddon} from './bech32Decoder/manifest'
 import {seedGeneratorAddon} from './seedGenerator/manifest'
+import {lnurlToolsAddon} from './lnurlTools/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
@@ -11,7 +12,8 @@ export const ADDONS: Addon[] = [
   raffleAddon,
   currencyAddon,
   bech32DecoderAddon,
-  seedGeneratorAddon
+  seedGeneratorAddon,
+  lnurlToolsAddon
 ]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))
