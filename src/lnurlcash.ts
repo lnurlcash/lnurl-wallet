@@ -6,7 +6,8 @@ import {
   requireRecoverableCashAddressSecret
 } from './cashSecrets'
 import {msatToSats} from './helpers'
-import {configureNetworkGuard} from './lib/net'
+import {configureNetworkGuard, configureTransport} from './lib/net'
+import {fetchServiceResponse, isServiceOffline} from './serviceTransport'
 import {configureSecretProvider} from './lib/secrets'
 import {
   requestInvoice,
@@ -61,7 +62,7 @@ export * from './lib'
 // src/lib's functions make - see offlineMode.ts's own comment on why this
 // needs to be the one choke point every request goes through
 configureNetworkGuard(() => {
-  if (offlineMode()) {
+  if (offlineMode() || isServiceOffline()) {
     throw new Error(
       'Offline mode is on - turn it off in the nav to reach a service.'
     )
@@ -92,6 +93,10 @@ export const generateNoteSecret = (domain: string): string =>
   bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
 
 configureSecretProvider(generateNoteSecret)
+
+// a napplet reaches the SERVICE through its shell (see serviceTransport.ts);
+// the standalone webwallet keeps plain fetch
+configureTransport(fetchServiceResponse)
 
 // New mint invoices and cross-mint transfers must survive a reload after
 // payment. Unlike an ordinary mutation output, they cannot safely use the

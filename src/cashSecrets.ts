@@ -88,12 +88,15 @@ export const clearCashSecretIndices = (): void => {
 // recovery scan hang their per-index children off - null whenever no cash
 // root is loaded (locked, or a wallet that hasn't re-entered its seed since
 // this feature shipped)
-const domainNode = (domain: string): HDKey | null => {
-  if (!cashRoot) return null
-  const hashingNode = cashRoot.deriveChild(0)
+const domainNode = (
+  domain: string,
+  root: HDKey | null = cashRoot
+): HDKey | null => {
+  if (!root) return null
+  const hashingNode = root.deriveChild(0)
   if (!hashingNode.privateKey) return null
   const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = cashRoot
+  let node = root
   for (const index of suffix) node = node.deriveChild(index)
   return node
 }
@@ -157,6 +160,21 @@ export const cashAddressSecretAtIndex = (
   const node = addressDomainNode(domain)
   if (!node?.privateKey || !node.chainCode) return null
   return deriveNoteSecretKey(node.privateKey, node.chainCode, index)
+}
+
+/** Derive the same LUD-25 secret without global state or browser storage. */
+export const cashSecretFromRoot = (
+  root: HDKey,
+  domain: string,
+  index: number
+): string => {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= HARDENED_OFFSET)
+    throw new Error('Invalid cash index.')
+  const key = domainNode(domain, root)?.deriveChild(
+    index + HARDENED_OFFSET
+  ).privateKey
+  if (!key) throw new Error('Cannot derive cash secret.')
+  return bytesToHex(key)
 }
 
 export const nextCashSecretIndex = (domain: string): number =>

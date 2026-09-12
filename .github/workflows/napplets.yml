@@ -1,0 +1,33 @@
+name: Verify napplets
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run tsc
+      - run: npm test
+      - run: npm run build:napplet
+      - run: npm run build:notes
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:napplet:browser
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lnurlcash-napplets
+          include-hidden-files: true
+          path: |
+            dist-napplet/
+            dist-notes/
