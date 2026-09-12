@@ -4,9 +4,30 @@ import {
   newTier,
   ticketCount,
   totalAmountSat,
-  planTickets
+  planTickets,
+  pricePerTicketSat,
+  type PrizeTier
 } from './lottery'
 import {buildTicketPdf} from './pdf'
+
+// wraps lottery.ts's own pricePerTicketSat for display - a plain '-' when
+// there's nothing sensible to show yet (no tickets, or a >=100% fee that
+// would make gross-up meaningless) rather than NaN/Infinity leaking into
+// the UI
+const priceDisplay = (
+  tiers: unknown,
+  marginPercent: unknown,
+  feeBaseSat: unknown,
+  feePercent: unknown
+): string => {
+  const price = pricePerTicketSat(
+    tiers as PrizeTier[],
+    Number(marginPercent) || 0,
+    Number(feeBaseSat) || 0,
+    Number(feePercent) || 0
+  )
+  return price === null ? '-' : `${price.toLocaleString()} sats`
+}
 
 const tierRow: UiNode = {
   type: 'View',
@@ -74,6 +95,49 @@ const ui: UiNode = {
           ' tickets · ',
           {helper: 'totalAmountSat', args: [{var: 'tiers'}]},
           ' sat total'
+        ]
+      }
+    },
+    {type: 'Text', value: 'Ticket price', style: 'subheading'},
+    {
+      type: 'View',
+      style: 'row',
+      children: [
+        {
+          type: 'Input',
+          bind: 'marginPercent',
+          kind: 'number',
+          label: 'Your margin %'
+        },
+        {
+          type: 'Input',
+          bind: 'feeBaseSat',
+          kind: 'number',
+          label: "Mint's flat fee (sats)"
+        },
+        {
+          type: 'Input',
+          bind: 'feePercent',
+          kind: 'number',
+          label: "Mint's fee %"
+        }
+      ]
+    },
+    {
+      type: 'Text',
+      value: {
+        cat: [
+          'Charge ',
+          {
+            helper: 'priceDisplay',
+            args: [
+              {var: 'tiers'},
+              {var: 'marginPercent'},
+              {var: 'feeBaseSat'},
+              {var: 'feePercent'}
+            ]
+          },
+          " per ticket to net the pool plus your margin, after the mint's own cut"
         ]
       }
     },
@@ -156,7 +220,8 @@ const ui: UiNode = {
                   {var: 'title'},
                   {var: 'results'},
                   {var: 'showAmount'},
-                  {var: 'paper'}
+                  {var: 'paper'},
+                  {var: 'tiers'}
                 ]
               }
             }
@@ -222,6 +287,9 @@ export const raffleManifest: AddonManifest = {
     title: 'Lottery',
     sourceNote: null,
     tiers: [{id: 't1', count: 1, amountSat: 100000, label: 'Grand prize'}],
+    marginPercent: 10,
+    feeBaseSat: 0,
+    feePercent: 0,
     showAmount: true,
     paper: 'a4',
     results: []
@@ -239,7 +307,8 @@ export const raffleHelpers: Record<string, AddonHelper> = {
   ticketCount: ticketCount as AddonHelper,
   totalAmountSat: totalAmountSat as AddonHelper,
   planTickets: planTickets as AddonHelper,
-  buildTicketPdf: buildTicketPdf as AddonHelper
+  buildTicketPdf: buildTicketPdf as AddonHelper,
+  priceDisplay: priceDisplay as AddonHelper
 }
 
 export const raffleAddon: Addon = {

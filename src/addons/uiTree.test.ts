@@ -92,11 +92,11 @@ describe('getNodeAt / childrenOf / isContainer', () => {
     // [6] = For each tiers; [6,0] = the tier row View; [6,0,3] = its Remove button
     const removeBtn = getNodeAt(ui, [6, 0, 3])
     expect(removeBtn).toMatchObject({type: 'Button', label: 'Remove'})
-    // [10,0] = the "Run raffle" button behind the funding Show
-    const runBtn = getNodeAt(ui, [10, 0])
+    // [13,0] = the "Run raffle" button behind the funding Show
+    const runBtn = getNodeAt(ui, [13, 0])
     expect(runBtn).toMatchObject({type: 'Button', label: 'Run raffle'})
-    // [11,1,0] = the per-ticket View inside the results For
-    const ticketView = getNodeAt(ui, [11, 1, 0])
+    // [14,1,0] = the per-ticket View inside the results For
+    const ticketView = getNodeAt(ui, [14, 1, 0])
     expect(ticketView).toMatchObject({type: 'View', style: 'ticket'})
   })
 })

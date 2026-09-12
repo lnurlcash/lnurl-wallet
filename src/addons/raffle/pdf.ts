@@ -17,7 +17,7 @@
 // bundle cost).
 import type {PDFFont, PDFPage} from 'pdf-lib'
 import {toBech32Lnurl} from '../../lnurlcash'
-import type {PaperSize} from './lottery'
+import type {PaperSize, PrizeTier} from './lottery'
 
 export type PrintedTicket = {
   index: number
@@ -107,6 +107,7 @@ const drawCoverPage = (
   doc: import('pdf-lib').PDFDocument,
   config: PdfConfig,
   tickets: PrintedTicket[],
+  tiers: PrizeTier[],
   fonts: {font: PDFFont; boldFont: PDFFont},
   pageWidth: number,
   pageHeight: number
@@ -151,13 +152,33 @@ const drawCoverPage = (
     `${tickets.length} tickets total, ${totalSat.toLocaleString()} sat prize pool`,
     {x: margin, y: cursorY, size: 12, font: boldFont}
   )
+  cursorY -= 8 * MM
+
+  page.drawText('Prize tiers', {
+    x: margin,
+    y: cursorY,
+    size: 10,
+    font: boldFont
+  })
+  cursorY -= 5.5 * MM
+
+  for (const t of tiers) {
+    const count = Math.max(0, Math.floor(t.count))
+    if (count <= 0) continue
+    const line = `${count} × ${Math.max(0, t.amountSat).toLocaleString()} sat${t.label.trim() ? ` — ${t.label.trim()}` : ''}`
+    for (const wrapped of wrapWords(line, font, 9.5, contentWidth)) {
+      page.drawText(wrapped, {x: margin, y: cursorY, size: 9.5, font})
+      cursorY -= 4.6 * MM
+    }
+  }
 }
 
 export const buildTicketPdf = async (
   title: string,
   tickets: PrintedTicket[],
   showAmount: boolean,
-  paper: PaperSize = 'a4'
+  paper: PaperSize = 'a4',
+  tiers: PrizeTier[] = []
 ): Promise<Uint8Array> => {
   const [{PDFDocument, StandardFonts, rgb}, QRCode] = await Promise.all([
     import('pdf-lib'),
@@ -186,6 +207,7 @@ export const buildTicketPdf = async (
     doc,
     config,
     tickets,
+    tiers,
     {font, boldFont},
     pageWidth,
     pageHeight
