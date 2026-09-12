@@ -3,7 +3,7 @@ import type {Bearer} from '../storage'
 import type {WalletContextType} from '../WalletContext'
 import {parseLabelTags} from '../noteTags'
 import {serverOf, resolveLnurlInput, lnurlFetch} from '../lnurlcash'
-import {msatToSats, copyToClipboard} from '../helpers'
+import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
@@ -83,7 +83,11 @@ export const VERBS: Record<string, VerbHandler> = {
   // the tagging guarantee
   'note.split': async (args, ctx) => {
     const bearer = resolveNote(ctx, args.note)
-    const tickets = args.tickets as {amountMsat: number; tags?: string[]}[]
+    const tickets = args.tickets as {
+      index?: number
+      amountMsat: number
+      tags?: string[]
+    }[]
     const targets: SplitTarget[] = tickets.map(t => ({
       amountMsat: t.amountMsat,
       label: buildTicketLabel(t.tags, ctx.addon)
@@ -94,11 +98,20 @@ export const VERBS: Record<string, VerbHandler> = {
       `Split ${serverOf(bearer.url)} into ${parts.length} notes via an addon.`,
       bearer.label
     )
-    return parts.map(p => ({
+    // splitBearerIntoAmounts returns one part per target, in the same
+    // order (see its own doc comment) - so parts[i] is targets[i], which
+    // is tickets[i], carrying whatever index the caller assigned (e.g.
+    // planTickets's own shuffled print order) - falls back to plain array
+    // position for a caller that never set one. amountSat is a plain
+    // number here, not helpers.ts's own msatToSats (which formats a
+    // locale STRING for on-screen display) - the raffle PDF sums these
+    // arithmetically, not just prints them.
+    return parts.map((p, i) => ({
       id: p.id,
       url: p.url,
       label: parseLabelTags(p.label || '').text,
-      amountSat: msatToSats(p.amount)
+      index: tickets[i]?.index ?? i,
+      amountSat: Math.floor(p.amount / 1000)
     }))
   },
 

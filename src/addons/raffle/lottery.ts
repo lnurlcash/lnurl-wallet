@@ -65,6 +65,43 @@ export const totalAmountSat = (tiers: PrizeTier[]): number =>
     0
   )
 
+// what to charge per ticket, funding the whole prize pool plus an
+// organizer margin, while still netting exactly that once the mint takes
+// its own cut minting each ticket-purchase note. `marginPercent` is the
+// organizer's own take (10 means the pool is funded plus 10% extra);
+// `feeBaseSat`/`feePercent` are the mint's own advertised fee schedule
+// (LUD-25's "Mint fees: <base_fee_msat>,<fee_percent_ppm>" metadata entry,
+// see lib/fees.ts's parseMintFee/describeMintFee) - typed in by the
+// organizer, since the raffle only ever holds an already-funded source
+// note, never a live payRequest to read a fee from.
+//
+// Gross-up, not a plain markup: minting nets `gross - base - gross*rate`,
+// so charging exactly `net + fee` would still come up short by the fee
+// taken out of that same payment. Solving `gross - base - gross*rate = net`
+// for gross gives `(net + base) / (1 - rate)` - the actual amount to
+// charge so the organizer nets `net` after the mint's cut.
+// Null whenever there are no tickets to price, or the fee percent is
+// nonsensical (>= 100%, which would make gross-up divide by zero or go
+// negative).
+export const pricePerTicketSat = (
+  tiers: PrizeTier[],
+  marginPercent: number,
+  feeBaseSat: number,
+  feePercent: number
+): number | null => {
+  const count = ticketCount(tiers)
+  if (count <= 0) return null
+  const rate = Math.max(0, feePercent) / 100
+  if (rate >= 1) return null
+  const netPerTicket =
+    (totalAmountSat(tiers) / count) * (1 + Math.max(0, marginPercent) / 100)
+  const grossPerTicket = (netPerTicket + Math.max(0, feeBaseSat)) / (1 - rate)
+  // rounds off IEEE754 noise (e.g. 100 * 1.1 landing on 110.00000000000001)
+  // before the ceiling below, which would otherwise round a mathematically
+  // exact whole-sat result up to the next sat for no real reason
+  return Math.ceil(Math.round(grossPerTicket * 1e6) / 1e6)
+}
+
 export type PlannedTicket = {
   index: number
   amountMsat: number
