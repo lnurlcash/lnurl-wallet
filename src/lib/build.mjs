@@ -31,11 +31,15 @@ await build({
   packages: 'external'
 })
 
-execFileSync(process.execPath, [
-  path.join('node_modules', 'typescript', 'bin', 'tsc'),
-  '-p',
-  'tsconfig.build.json'
-], {stdio: 'inherit'})
+execFileSync(
+  process.execPath,
+  [
+    path.join('node_modules', 'typescript', 'bin', 'tsc'),
+    '-p',
+    'tsconfig.build.json'
+  ],
+  {stdio: 'inherit'}
+)
 
 // Unlike the JS bundle above (a single file, so it has no internal
 // relative imports left at all), tsc emits one .d.ts per source module,
