@@ -78,9 +78,10 @@ npm run check
 npm pack --dry-run
 ```
 
-Releases use tags named `lnurlcash-kit-vX.Y.Z`. Publishing is performed by
-`.github/workflows/release-kit.yml` through npm trusted publishing; releases
-must not be published from a maintainer workstation.
+The package and wallet share a version. A wallet tag named `vX.Y.Z` publishes
+`lnurlcash-kit@X.Y.Z` from the same commit through
+`.github/workflows/release-kit.yml` and npm trusted publishing; releases must
+not be published from a maintainer workstation.
 
 ## Licence
 

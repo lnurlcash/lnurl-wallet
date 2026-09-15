@@ -1,12 +1,14 @@
 name: Release lnurlcash-kit
 
 on:
-  release:
-    types: [published]
+  push:
+    # The wallet and its embedded kit share one version and one source commit.
+    # A vX.Y.Z tag deploys the wallet and publishes kit X.Y.Z.
+    tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
       tag:
-        description: Package tag, for example lnurlcash-kit-v0.14.0
+        description: Shared wallet and package tag, for example v0.14.0
         type: string
         required: true
       publish:
@@ -19,12 +21,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-lnurlcash-kit-${{ inputs.tag || github.event.release.tag_name }}
+  group: release-lnurlcash-kit-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: startsWith(inputs.tag || github.event.release.tag_name, 'lnurlcash-kit-v')
+    if: startsWith(inputs.tag || github.ref_name, 'v')
     runs-on: ubuntu-24.04
     outputs:
       filename: ${{ steps.pack.outputs.filename }}
@@ -32,7 +34,7 @@ jobs:
       - name: Checkout package tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -51,12 +53,12 @@ jobs:
 
       - name: Verify tag and package version
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         working-directory: src/lib
         run: |
           set -euo pipefail
           package_version="$(node --print "require('./package.json').version")"
-          expected_tag="lnurlcash-kit-v${package_version}"
+          expected_tag="v${package_version}"
           if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
             echo "::error::Expected tag $expected_tag, got $RELEASE_TAG"
             exit 1
@@ -114,7 +116,7 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'release' || inputs.publish == true
+    if: github.event_name == 'push' || inputs.publish == true
     runs-on: ubuntu-24.04
     environment:
       name: npm-publish

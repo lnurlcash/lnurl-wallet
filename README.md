@@ -107,9 +107,10 @@ npm run check
 npm pack --dry-run
 ```
 
-Package releases use `lnurlcash-kit-vX.Y.Z` tags and the dedicated
-`release-kit.yml` trusted-publishing workflow. Wallet releases continue to use
-ordinary `vX.Y.Z` tags, so the two release trains cannot be confused.
+The wallet and package share a version: a `vX.Y.Z` tag deploys wallet `X.Y.Z`
+and the dedicated `release-kit.yml` trusted-publishing workflow publishes
+`lnurlcash-kit@X.Y.Z` from the same commit. The package workflow rejects a tag
+that does not exactly match `src/lib/package.json`.
 
 For an end-to-end local loop, run [lnurl-mint](https://github.com/lnurlcash/lnurl-mint)
 (`uv run fastapi dev lnurl_mint/server.py`) and point the Mint page at
