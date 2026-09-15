@@ -48,8 +48,6 @@ jobs:
         with:
           node-version: 24.11.0
           registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: src/lib/package-lock.json
 
       - name: Verify tag and package version
         env:

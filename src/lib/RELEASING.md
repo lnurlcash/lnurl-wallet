@@ -12,6 +12,7 @@ An npm package owner must change the trusted publisher for `lnurlcash-kit` to:
 - repository: `lnurl-wallet`
 - workflow: `release-kit.yml`
 - environment: `npm-publish`
+- allowed actions: enable direct `npm publish`
 
 A GitHub repository or organisation administrator should create the
 `npm-publish` environment, restrict it to `lnurlcash-kit-v*` tags and require a
