@@ -21,10 +21,7 @@
 import {bech32m} from '@scure/base'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
-import {
-  encodeBolt11AmountSuffix,
-  decodeBolt11AmountSuffix
-} from './bolt11'
+import {encodeBolt11AmountSuffix, decodeBolt11AmountSuffix} from './bolt11'
 
 // ---- bech32m codec ----
 

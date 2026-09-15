@@ -11,7 +11,12 @@ import {
   cp1FromCk1,
   signAddressProof
 } from './signature'
-import {encodeCk1, encodeCp1, encodeCs1, encodeCs1WithAmount} from './recoverableNotes'
+import {
+  encodeCk1,
+  encodeCp1,
+  encodeCs1,
+  encodeCs1WithAmount
+} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 

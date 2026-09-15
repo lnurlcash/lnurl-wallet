@@ -95,7 +95,10 @@ describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
     const cs1 = encodeCs1WithAmount(1000, bytes)
     // matches 25.md's own Encoding-section example verbatim
     expect(cs1.startsWith('cs10n1')).toBe(true)
-    expect(decodeCs1WithAmount(cs1)).toEqual({amountMsat: 1000, signature: bytes})
+    expect(decodeCs1WithAmount(cs1)).toEqual({
+      amountMsat: 1000,
+      signature: bytes
+    })
     expect(isCs1WithAmount(cs1)).toBe(true)
   })
 
@@ -158,7 +161,9 @@ describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
   })
 
   it('rejects the wrong prefix, garbage, or a truncated amount suffix', () => {
-    expect(decodeCs1WithAmount(encodeCp1(hexToBytes('ab'.repeat(32))))).toBeNull()
+    expect(
+      decodeCs1WithAmount(encodeCp1(hexToBytes('ab'.repeat(32))))
+    ).toBeNull()
     expect(decodeCs1WithAmount('not bech32m at all')).toBeNull()
     expect(decodeCs1WithAmount('cs1garbage')).toBeNull()
   })
