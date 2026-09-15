@@ -7,6 +7,7 @@ import {
   IoTrashSharp
 } from 'solid-icons/io'
 
+import Dialog from '../components/Dialog'
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
 import {notify, NotifyKind} from '../helpers'
@@ -35,6 +36,7 @@ const Address: Component = () => {
   const [username, setUsername] = createSignal('')
   const [busy, setBusy] = createSignal(false)
   const [scanningServer, setScanningServer] = createSignal<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = createSignal<RegisteredAddress | null>(null)
 
   const register = async () => {
     const server = selectedServer()
@@ -103,6 +105,33 @@ const Address: Component = () => {
 
   return (
     <div id="address" class="page">
+      <Show when={confirmDelete()}>
+        {addr => (
+          <Dialog onClose={() => setConfirmDelete(null)}>
+            <>
+              <h4>Forget this address</h4>
+              <p class="warning">
+                Forget {addr().username}@{serverOf(addr().server)} on this
+                device? This does not un-claim the name at the mint, and
+                since claiming is first-come-first-served, you will not be
+                able to re-register the same username later if someone else
+                claims it first.
+              </p>
+              <div class="btns">
+                <button
+                  onClick={() => {
+                    removeRegisteredAddress(addr().server, addr().username)
+                    setConfirmDelete(null)
+                  }}
+                >
+                  Forget address
+                </button>
+                <button onClick={() => setConfirmDelete(null)}>Cancel</button>
+              </div>
+            </>
+          </Dialog>
+        )}
+      </Show>
       <h2>Address</h2>
       <p>
         Claim a username at a trusted mint so it can be paid directly as{' '}
@@ -203,9 +232,7 @@ const Address: Component = () => {
                       <button
                         class="icon-btn icon-btn-gap"
                         title="Forget this address on this device - does not un-claim it at the mint"
-                        onClick={() =>
-                          removeRegisteredAddress(addr.server, addr.username)
-                        }
+                        onClick={() => setConfirmDelete(addr)}
                       >
                         <IoTrashSharp />
                       </button>
