@@ -183,29 +183,12 @@ const ui: UiNode = {
       type: 'Show',
       when: {gt: [{var: 'results.length'}, 0]},
       children: [
-        {type: 'Text', value: 'Tickets', style: 'subheading'},
         {
-          type: 'For',
-          each: {var: 'results'},
-          children: [
-            {
-              type: 'View',
-              style: 'ticket',
-              children: [
-                {type: 'QrDisplay', value: {var: 'item.url'}},
-                {
-                  type: 'Show',
-                  when: {var: 'showAmount'},
-                  children: [{type: 'Text', value: {var: 'item.amountSat'}}]
-                },
-                {
-                  type: 'Show',
-                  when: {var: 'item.label'},
-                  children: [{type: 'Text', value: {var: 'item.label'}}]
-                }
-              ]
-            }
-          ]
+          type: 'Text',
+          value: {
+            cat: [{var: 'results.length'}, ' tickets ready']
+          },
+          style: 'subheading'
         },
         {
           type: 'Button',

@@ -95,9 +95,12 @@ describe('getNodeAt / childrenOf / isContainer', () => {
     // [13,0] = the "Run raffle" button behind the funding Show
     const runBtn = getNodeAt(ui, [13, 0])
     expect(runBtn).toMatchObject({type: 'Button', label: 'Run raffle'})
-    // [14,1,0] = the per-ticket View inside the results For
-    const ticketView = getNodeAt(ui, [14, 1, 0])
-    expect(ticketView).toMatchObject({type: 'View', style: 'ticket'})
+    // [14,1] = the "Download printable PDF" button behind the results Show
+    const downloadBtn = getNodeAt(ui, [14, 1])
+    expect(downloadBtn).toMatchObject({
+      type: 'Button',
+      label: 'Download printable PDF'
+    })
   })
 })
 

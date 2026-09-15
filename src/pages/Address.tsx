@@ -36,7 +36,8 @@ const Address: Component = () => {
   const [username, setUsername] = createSignal('')
   const [busy, setBusy] = createSignal(false)
   const [scanningServer, setScanningServer] = createSignal<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = createSignal<RegisteredAddress | null>(null)
+  const [confirmDelete, setConfirmDelete] =
+    createSignal<RegisteredAddress | null>(null)
 
   const register = async () => {
     const server = selectedServer()
@@ -112,10 +113,10 @@ const Address: Component = () => {
               <h4>Forget this address</h4>
               <p class="warning">
                 Forget {addr().username}@{serverOf(addr().server)} on this
-                device? This does not un-claim the name at the mint, and
-                since claiming is first-come-first-served, you will not be
-                able to re-register the same username later if someone else
-                claims it first.
+                device? This does not un-claim the name at the mint, and since
+                claiming is first-come-first-served, you will not be able to
+                re-register the same username later if someone else claims it
+                first.
               </p>
               <div class="btns">
                 <button
