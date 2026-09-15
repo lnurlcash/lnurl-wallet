@@ -6,6 +6,7 @@ import {seedGeneratorAddon} from './seedGenerator/manifest'
 import {lnurlToolsAddon} from './lnurlTools/manifest'
 import {nostrToolsAddon} from './nostrTools/manifest'
 import {giftCardAddon} from './giftcard/manifest'
+import {tapscriptAddon} from './tapscript/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
@@ -17,7 +18,8 @@ export const ADDONS: Addon[] = [
   seedGeneratorAddon,
   lnurlToolsAddon,
   nostrToolsAddon,
-  giftCardAddon
+  giftCardAddon,
+  tapscriptAddon
 ]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))
