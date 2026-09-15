@@ -19,7 +19,11 @@ import {
   unregisterUsername
 } from '../lnurlcash'
 import {trustedMints} from '../trustedMints'
-import {cashAddressBranch, cashAddressSecretAtIndex, hasCashRoot} from '../cashSecrets'
+import {
+  cashAddressBranch,
+  cashAddressSecretAtIndex,
+  hasCashRoot
+} from '../cashSecrets'
 import {
   registeredAddresses,
   addRegisteredAddress,

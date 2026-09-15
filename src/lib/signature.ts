@@ -263,9 +263,7 @@ const addressProofDigest = (
 ): Uint8Array => {
   const message = utf8ToBytes(`LNURLcash:${action}:${username}`)
   return sha256(
-    sha256(
-      new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message])
-    )
+    sha256(new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message]))
   )
 }
 

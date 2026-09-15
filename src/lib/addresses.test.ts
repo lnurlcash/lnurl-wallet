@@ -15,16 +15,14 @@ const SIG_PATTERN = /^[0-9a-f]{130}$/
 describe('registerUsername', () => {
   it('POSTs cx1 and a sig proof to /p/{username}', async () => {
     const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(
-      async (input: string | URL, init?: RequestInit) => {
-        const request = new URL(input.toString())
-        expect(request.pathname).toBe('/p/alice')
-        expect(init?.method).toBe('POST')
-        expect(request.searchParams.get('cx1')).toBe('cx1fakevalue')
-        expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
-        return {json: async () => ({status: 'OK'})} as Response
-      }
-    )
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const request = new URL(input.toString())
+      expect(request.pathname).toBe('/p/alice')
+      expect(init?.method).toBe('POST')
+      expect(request.searchParams.get('cx1')).toBe('cx1fakevalue')
+      expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
+      return {json: async () => ({status: 'OK'})} as Response
+    })
     vi.stubGlobal('fetch', fetchMock)
     await registerUsername(
       'https://mint.example.com',
@@ -43,7 +41,8 @@ describe('registerUsername', () => {
           ({
             json: async () => ({
               status: 'ERROR',
-              reason: 'Ownership proof required to overwrite an existing registration.'
+              reason:
+                'Ownership proof required to overwrite an existing registration.'
             })
           }) as Response
       )
@@ -62,15 +61,13 @@ describe('registerUsername', () => {
 describe('unregisterUsername', () => {
   it('DELETEs /p/{username} with a sig proof', async () => {
     const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(
-      async (input: string | URL, init?: RequestInit) => {
-        const request = new URL(input.toString())
-        expect(request.pathname).toBe('/p/alice')
-        expect(init?.method).toBe('DELETE')
-        expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
-        return {json: async () => ({status: 'OK'})} as Response
-      }
-    )
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const request = new URL(input.toString())
+      expect(request.pathname).toBe('/p/alice')
+      expect(init?.method).toBe('DELETE')
+      expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
+      return {json: async () => ({status: 'OK'})} as Response
+    })
     vi.stubGlobal('fetch', fetchMock)
     await unregisterUsername('https://mint.example.com', 'alice', proofKey)
     expect(fetchMock).toHaveBeenCalledTimes(1)
