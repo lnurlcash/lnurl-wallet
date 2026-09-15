@@ -1,23 +1,37 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
-import {registerUsername, scanForAddressNotes} from './addresses'
+import {
+  registerUsername,
+  unregisterUsername,
+  scanForAddressNotes
+} from './addresses'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
 const MINT_KEY = `02${'11'.repeat(32)}`
+const SIG_PATTERN = /^[0-9a-f]{130}$/
 
 describe('registerUsername', () => {
-  it('sends username and cx1 as query params to /register', async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const request = new URL(input.toString())
-      expect(request.pathname).toBe('/register')
-      expect(request.searchParams.get('username')).toBe('alice')
-      expect(request.searchParams.get('cx1')).toBe('cx1fakevalue')
-      return {json: async () => ({status: 'OK'})} as Response
-    })
+  it('POSTs cx1 and a sig proof to /p/{username}', async () => {
+    const proofKey = schnorr.utils.randomSecretKey()
+    const fetchMock = vi.fn(
+      async (input: string | URL, init?: RequestInit) => {
+        const request = new URL(input.toString())
+        expect(request.pathname).toBe('/p/alice')
+        expect(init?.method).toBe('POST')
+        expect(request.searchParams.get('cx1')).toBe('cx1fakevalue')
+        expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
+        return {json: async () => ({status: 'OK'})} as Response
+      }
+    )
     vi.stubGlobal('fetch', fetchMock)
-    await registerUsername('https://mint.example.com', 'alice', 'cx1fakevalue')
+    await registerUsername(
+      'https://mint.example.com',
+      'alice',
+      'cx1fakevalue',
+      proofKey
+    )
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -29,14 +43,59 @@ describe('registerUsername', () => {
           ({
             json: async () => ({
               status: 'ERROR',
-              reason: 'Username already registered.'
+              reason: 'Ownership proof required to overwrite an existing registration.'
             })
           }) as Response
       )
     )
     await expect(
-      registerUsername('https://mint.example.com', 'alice', 'cx1fakevalue')
-    ).rejects.toThrow(/already registered/)
+      registerUsername(
+        'https://mint.example.com',
+        'alice',
+        'cx1fakevalue',
+        schnorr.utils.randomSecretKey()
+      )
+    ).rejects.toThrow(/Ownership proof required/)
+  })
+})
+
+describe('unregisterUsername', () => {
+  it('DELETEs /p/{username} with a sig proof', async () => {
+    const proofKey = schnorr.utils.randomSecretKey()
+    const fetchMock = vi.fn(
+      async (input: string | URL, init?: RequestInit) => {
+        const request = new URL(input.toString())
+        expect(request.pathname).toBe('/p/alice')
+        expect(init?.method).toBe('DELETE')
+        expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
+        return {json: async () => ({status: 'OK'})} as Response
+      }
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await unregisterUsername('https://mint.example.com', 'alice', proofKey)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws on a rejected unregistration, with the service reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              status: 'ERROR',
+              reason: 'Invalid ownership signature.'
+            })
+          }) as Response
+      )
+    )
+    await expect(
+      unregisterUsername(
+        'https://mint.example.com',
+        'alice',
+        schnorr.utils.randomSecretKey()
+      )
+    ).rejects.toThrow(/Invalid ownership signature/)
   })
 })
 

@@ -2,7 +2,8 @@ import {afterEach, describe, expect, it, vi} from 'vitest'
 import {configureTransport, lnurlFetch, type Transport} from './net'
 import {AmbiguousMintError} from './errors'
 
-const defaultTransport: Transport = (url, signal) => fetch(url, {signal})
+const defaultTransport: Transport = (url, signal, method) =>
+  fetch(url, {signal, method})
 
 afterEach(() => {
   configureTransport(defaultTransport)
@@ -31,7 +32,8 @@ describe('configureTransport', () => {
     expect(body.status).toBe('OK')
     expect(transport).toHaveBeenCalledWith(
       'https://mint.example.com/w/cb?k1=x',
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      'GET'
     )
     expect(fetchMock).not.toHaveBeenCalled()
   })

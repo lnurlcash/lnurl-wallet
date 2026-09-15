@@ -12,9 +12,14 @@ import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
 import {notify, NotifyKind} from '../helpers'
 import {msatToSats} from '../helpers'
-import {serverOf, encodeCx1, registerUsername} from '../lnurlcash'
+import {
+  serverOf,
+  encodeCx1,
+  registerUsername,
+  unregisterUsername
+} from '../lnurlcash'
 import {trustedMints} from '../trustedMints'
-import {cashAddressBranch, hasCashRoot} from '../cashSecrets'
+import {cashAddressBranch, cashAddressSecretAtIndex, hasCashRoot} from '../cashSecrets'
 import {
   registeredAddresses,
   addRegisteredAddress,
@@ -38,6 +43,7 @@ const Address: Component = () => {
   const [scanningServer, setScanningServer] = createSignal<string | null>(null)
   const [confirmDelete, setConfirmDelete] =
     createSignal<RegisteredAddress | null>(null)
+  const [unregistering, setUnregistering] = createSignal(false)
 
   const register = async () => {
     const server = selectedServer()
@@ -51,7 +57,12 @@ const Address: Component = () => {
       return
     }
     const branch = cashAddressBranch(server)
-    if (!branch) {
+    // this branch's own index-0 note secret - required as this request's
+    // ownership proof (see lib/signature.ts's signAddressProof), even for
+    // a fresh claim: SERVICE only checks it against whatever's already on
+    // file, so it's harmless to always send
+    const proofKey = cashAddressSecretAtIndex(server, 0)
+    if (!branch || !proofKey) {
       notify(
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
         NotifyKind.ERROR
@@ -61,7 +72,7 @@ const Address: Component = () => {
     setBusy(true)
     try {
       const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-      await registerUsername(server, name, cx1)
+      await registerUsername(server, name, cx1, proofKey)
       addRegisteredAddress(server, name)
       notify(`Registered ${name}@${serverOf(server)}.`, NotifyKind.SUCCESS)
       setUsername('')
@@ -69,6 +80,31 @@ const Address: Component = () => {
       notify((err as Error).message, NotifyKind.ERROR)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const unregister = async (addr: RegisteredAddress) => {
+    const proofKey = cashAddressSecretAtIndex(addr.server, 0)
+    if (!proofKey) {
+      notify(
+        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
+        NotifyKind.ERROR
+      )
+      return
+    }
+    setUnregistering(true)
+    try {
+      await unregisterUsername(addr.server, addr.username, proofKey)
+      removeRegisteredAddress(addr.server, addr.username)
+      setConfirmDelete(null)
+      notify(
+        `Freed ${addr.username}@${serverOf(addr.server)}.`,
+        NotifyKind.SUCCESS
+      )
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    } finally {
+      setUnregistering(false)
     }
   }
 
@@ -110,24 +146,32 @@ const Address: Component = () => {
         {addr => (
           <Dialog onClose={() => setConfirmDelete(null)}>
             <>
-              <h4>Forget this address</h4>
+              <h4>Unregister this address</h4>
               <p class="warning">
-                Forget {addr().username}@{serverOf(addr().server)} on this
-                device? This does not un-claim the name at the mint, and since
-                claiming is first-come-first-served, you will not be able to
-                re-register the same username later if someone else claims it
-                first.
+                Unregister {addr().username}@{serverOf(addr().server)}? This
+                frees the username at the mint - since claiming is
+                first-come-first-served, anyone else can claim it the moment
+                it's free, and you will not be able to reclaim it yourself
+                unless you register it again before they do.
               </p>
               <div class="btns">
                 <button
-                  onClick={() => {
-                    removeRegisteredAddress(addr().server, addr().username)
-                    setConfirmDelete(null)
-                  }}
+                  disabled={
+                    unregistering() || offlineMode() || state() !== 'unlocked'
+                  }
+                  onClick={() => unregister(addr())}
                 >
-                  Forget address
+                  <Show when={unregistering()} fallback={<IoTrashSharp />}>
+                    <IoRefreshSharp class="spin" />
+                  </Show>
+                  &nbsp;Unregister
                 </button>
-                <button onClick={() => setConfirmDelete(null)}>Cancel</button>
+                <button
+                  disabled={unregistering()}
+                  onClick={() => setConfirmDelete(null)}
+                >
+                  Cancel
+                </button>
               </div>
             </>
           </Dialog>
@@ -232,7 +276,7 @@ const Address: Component = () => {
                       </button>
                       <button
                         class="icon-btn icon-btn-gap"
-                        title="Forget this address on this device - does not un-claim it at the mint"
+                        title="Unregister this address - frees the username at the mint"
                         onClick={() => setConfirmDelete(addr)}
                       >
                         <IoTrashSharp />

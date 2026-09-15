@@ -5,11 +5,14 @@
 // under the next unused key on the registered branch itself) - so the
 // wallet's only remaining job is to come online later and find what
 // arrived, by re-deriving pk_0, pk_1, ... and checking each (see
-// scanForAddressNotes). "How WALLET registers a username and proves it
-// owns it is a SERVICE-specific concern" (25.md) - this mint's own
-// `/register` needs no proof of key possession at all (cx1 is watch-only;
-// it never grants spending), so registerUsername below reflects only this
-// mint's shape, not a spec-mandated one.
+// scanForAddressNotes). Registering (when overwriting an already-claimed
+// username) or unregistering one MUST be proven, not just asserted
+// (25.md's Seed & derivation) - see signAddressProof. This mirrors
+// lnurl-mint's own router.py: POST/DELETE `/p/{username}`, never the
+// plain k1-bearing GET callback style the rest of this kit uses (Redeeming
+// a bearer note) - username registration is its own REST-ish management
+// surface, not a bearer-note mutation.
+import {bytesToHex} from '@noble/hashes/utils.js'
 import {lnurlFetch} from './net'
 import {
   ServiceError,
@@ -19,20 +22,61 @@ import {
 } from './errors'
 import {fetchNoteInfoByPubkey, type HashWithdrawRequestInfo} from './request'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
+import {signAddressProof, type AddressProofAction} from './signature'
+
+const addressProofUrl = (
+  server: string,
+  username: string,
+  indexZeroSecretKey: Uint8Array,
+  action: AddressProofAction
+): URL => {
+  const url = new URL(`/p/${encodeURIComponent(username)}`, server)
+  url.searchParams.set(
+    'sig',
+    bytesToHex(signAddressProof(indexZeroSecretKey, action, username))
+  )
+  return url
+}
 
 // `server` is the mint's own origin (see urls.ts's serviceOriginOf) - the
 // same identity every other trust decision in this kit is pinned to.
+// `indexZeroSecretKey` is this branch's own index-0 note secret (see
+// cashSecrets.ts's cashAddressSecretAtIndex(server, 0)) - always sent as
+// `sig`, even for a fresh, unclaimed username: SERVICE only checks it
+// against whatever branch is CURRENTLY on file, so it's simply ignored
+// when there's nothing registered yet to prove continued ownership of.
 export const registerUsername = async (
   server: string,
   username: string,
-  cx1: string
+  cx1: string,
+  indexZeroSecretKey: Uint8Array
 ): Promise<void> => {
-  const url = new URL('/register', server)
-  url.searchParams.set('username', username)
+  const url = addressProofUrl(server, username, indexZeroSecretKey, 'register')
   url.searchParams.set('cx1', cx1)
-  const body = await lnurlFetch(url)
+  const body = await lnurlFetch(url, 'POST')
   if (body?.status !== 'OK') {
     throw new Error('SERVICE did not confirm the registration.')
+  }
+}
+
+// Frees `username` at SERVICE entirely - it goes back to being unclaimed,
+// first-come-first-served for anyone (router.delete_registered_username).
+// Unlike registerUsername, `sig` here is mandatory at SERVICE: there is no
+// proof-free case for deleting an address someone else may depend on.
+export const unregisterUsername = async (
+  server: string,
+  username: string,
+  indexZeroSecretKey: Uint8Array
+): Promise<void> => {
+  const url = addressProofUrl(
+    server,
+    username,
+    indexZeroSecretKey,
+    'unregister'
+  )
+  const body = await lnurlFetch(url, 'DELETE')
+  if (body?.status !== 'OK') {
+    throw new Error('SERVICE did not confirm the unregistration.')
   }
 }
 

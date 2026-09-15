@@ -241,6 +241,52 @@ export const recoverNoteOwnershipPubkey = (
   }
 }
 
+// ---- LUD-25 Part 2: un-/registering a Lightning Address (Seed & derivation) ----
+//
+// Proof that SERVICE requires before overwriting an already-claimed
+// username, or before unregistering one at all (25.md: "Registering, or
+// later unregistering, a username against a cx1 MUST be proven, not just
+// asserted"). Same recoverable-ECDSA construction as signNoteOwnership
+// above, over a per-action, per-username message instead of one fixed
+// value - domain-separated so a signature captured for one action/
+// username can never be replayed as the other, or against a different
+// username sharing the same branch. Signed with the branch's own index-0
+// secret key (cashSecrets.ts's cashAddressSecretAtIndex(domain, 0) - "the
+// first secret" a WALLET would derive on this branch regardless, the same
+// one a wallet-initiated mint/transfer would claim first), never a fresh
+// per-request key.
+export type AddressProofAction = 'register' | 'unregister'
+
+const addressProofDigest = (
+  action: AddressProofAction,
+  username: string
+): Uint8Array => {
+  const message = utf8ToBytes(`LNURLcash:${action}:${username}`)
+  return sha256(
+    sha256(
+      new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message])
+    )
+  )
+}
+
+// returns the raw 65-byte r‖s‖recovery-id signature - callers hex-encode
+// it for the wire (SERVICE's `sig` query param), same as any other plain-
+// hex signature in this kit (see NOTE_SIGNATURE_PATTERN), not bech32m:
+// unlike ck1/cs1 this value is never a note's own bearer secret or
+// disclosed as part of a withdraw response, only ever a one-off proof.
+export const signAddressProof = (
+  branchIndexZeroSecretKey: Uint8Array,
+  action: AddressProofAction,
+  username: string
+): Uint8Array => {
+  const libSig = secp256k1.sign(
+    addressProofDigest(action, username),
+    branchIndexZeroSecretKey,
+    {format: 'recovered', prehash: false}
+  )
+  return new Uint8Array([...libSig.subarray(1), libSig[0]])
+}
+
 // the public commitment a wallet-generated ck1 secret names, computed
 // purely locally (no SERVICE round trip) - lets a caller that only has a
 // note's bearer secret (e.g. a wallet-initiated Part 2 mint, before the

@@ -91,9 +91,11 @@ export const addRegisteredAddress = (
   ])
 }
 
-// Forgets this device's own record of the registration - never un-registers
-// it at the mint (this mint's own /register has no such endpoint; the name
-// simply stays claimed there). Only for "stop showing/scanning this here."
+// Forgets this device's own record of a registration - purely local
+// bookkeeping, never itself calls the mint (see addresses.ts's
+// unregisterUsername for the network call that actually frees a username
+// there; Address.tsx calls both together). Also useful standalone, to
+// stop showing/scanning an address this device no longer controls.
 export const removeRegisteredAddress = (
   server: string,
   username: string

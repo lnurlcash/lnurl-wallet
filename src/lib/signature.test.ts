@@ -8,7 +8,8 @@ import {
   hashK1,
   signNoteOwnership,
   recoverNoteOwnershipPubkey,
-  cp1FromCk1
+  cp1FromCk1,
+  signAddressProof
 } from './signature'
 import {encodeCk1, encodeCp1, encodeCs1} from './recoverableNotes'
 
@@ -265,5 +266,70 @@ describe('cp1FromCk1', () => {
     expect(cp1FromCk1('not-a-ck1')).toBeNull()
     expect(cp1FromCk1(K1)).toBeNull()
     expect(cp1FromCk1(encodeCp1(schnorr.utils.randomSecretKey()))).toBeNull()
+  })
+})
+
+describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
+  // independently recomputes the per-action/username digest - deliberately
+  // not importing any internal helper, mirrors signNoteOwnership's own
+  // fixedDigest test above
+  const digestFor = (action: 'register' | 'unregister', username: string) => {
+    const message = utf8ToBytes(`LNURLcash:${action}:${username}`)
+    return sha256(
+      sha256(
+        new Uint8Array([
+          ...utf8ToBytes('Lightning Signed Message:'),
+          ...message
+        ])
+      )
+    )
+  }
+
+  it("recovers to the branch key's own pubkey for the exact action/username signed", () => {
+    const secretKey = secp256k1.utils.randomSecretKey()
+    const pubkeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true))
+    const sig = signAddressProof(secretKey, 'register', 'alice')
+    expect(sig).toHaveLength(65)
+
+    const recidLeading = new Uint8Array([sig[64]!, ...sig.subarray(0, 64)])
+    const recovered = secp256k1.recoverPublicKey(
+      recidLeading,
+      digestFor('register', 'alice'),
+      {prehash: false}
+    )
+    expect(bytesToHex(recovered)).toBe(pubkeyHex)
+  })
+
+  it('is domain-separated by action - a register proof does not verify as unregister', () => {
+    const secretKey = secp256k1.utils.randomSecretKey()
+    const pubkeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true))
+    const sig = signAddressProof(secretKey, 'register', 'alice')
+    const recidLeading = new Uint8Array([sig[64]!, ...sig.subarray(0, 64)])
+    const recovered = secp256k1.recoverPublicKey(
+      recidLeading,
+      digestFor('unregister', 'alice'),
+      {prehash: false}
+    )
+    expect(bytesToHex(recovered)).not.toBe(pubkeyHex)
+  })
+
+  it('is domain-separated by username - a proof for one name does not verify for another', () => {
+    const secretKey = secp256k1.utils.randomSecretKey()
+    const pubkeyHex = bytesToHex(secp256k1.getPublicKey(secretKey, true))
+    const sig = signAddressProof(secretKey, 'register', 'alice')
+    const recidLeading = new Uint8Array([sig[64]!, ...sig.subarray(0, 64)])
+    const recovered = secp256k1.recoverPublicKey(
+      recidLeading,
+      digestFor('register', 'bob'),
+      {prehash: false}
+    )
+    expect(bytesToHex(recovered)).not.toBe(pubkeyHex)
+  })
+
+  it('is deterministic for the same key/action/username', () => {
+    const secretKey = secp256k1.utils.randomSecretKey()
+    expect(bytesToHex(signAddressProof(secretKey, 'unregister', 'alice'))).toBe(
+      bytesToHex(signAddressProof(secretKey, 'unregister', 'alice'))
+    )
   })
 })

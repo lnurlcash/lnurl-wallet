@@ -14,10 +14,17 @@ export const configureNetworkGuard = (guard: NetworkGuard): void => {
 
 // host transport hook: how a request actually reaches the SERVICE (e.g. a
 // sandboxed host with no direct network access, going through its shell).
-// Defaults to plain fetch; a host configures this once at startup.
-export type Transport = (url: string, signal: AbortSignal) => Promise<Response>
+// Defaults to plain fetch; a host configures this once at startup. `method`
+// defaults to GET at every call site except the LUD-25 Part 2 username
+// registration endpoints (addresses.ts), the one place in this kit that
+// isn't a plain k1-bearing GET callback (see 25.md's Seed & derivation).
+export type Transport = (
+  url: string,
+  signal: AbortSignal,
+  method: string
+) => Promise<Response>
 
-let transport: Transport = (url, signal) => fetch(url, {signal})
+let transport: Transport = (url, signal, method) => fetch(url, {signal, method})
 
 export const configureTransport = (next: Transport): void => {
   transport = next
@@ -25,7 +32,10 @@ export const configureTransport = (next: Transport): void => {
 
 // the one choke point every LNURLcash request in this kit goes through -
 // lookups, melt, split, merge, rotate, verify, minting.
-export const lnurlFetch = async (url: string | URL): Promise<any> => {
+export const lnurlFetch = async (
+  url: string | URL,
+  method: string = 'GET'
+): Promise<any> => {
   networkGuard()
   if (!isAllowedServiceUrl(url.toString())) {
     throw new Error(
@@ -36,7 +46,7 @@ export const lnurlFetch = async (url: string | URL): Promise<any> => {
   try {
     // bounded wait: without a timeout a hung service would freeze whatever
     // flow called this (lookup, refresh, melt) forever
-    res = await transport(url.toString(), AbortSignal.timeout(30_000))
+    res = await transport(url.toString(), AbortSignal.timeout(30_000), method)
   } catch (err) {
     // transport failures are ambiguous for a mutating request (see
     // AmbiguousMintError) - the request may have arrived before the failure
