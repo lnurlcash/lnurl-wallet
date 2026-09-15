@@ -47,7 +47,7 @@ const signAsMint = (
     format: 'recovered',
     prehash: false
   })
-  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
+  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
 }
 
 describe('offline signature verification', () => {
@@ -236,7 +236,7 @@ describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
       format: 'recovered',
       prehash: false
     })
-    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
+    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
   }
 
   it('verifies a cp1 note (k1=ck1<sig>) against its recovered pubkey', () => {

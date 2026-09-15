@@ -81,7 +81,7 @@ export const decodeBolt11AmountMsat = (pr: string): number | null => {
   if (!match) return null
   const [, digits, multiplier] = match
   if (!digits) return null
-  const msat = Number(digits) * BOLT11_AMOUNT_MSAT_PER_UNIT[multiplier || '']
+  const msat = Number(digits) * BOLT11_AMOUNT_MSAT_PER_UNIT[multiplier || '']!
   return Number.isInteger(msat) ? msat : null
 }
 
@@ -108,7 +108,7 @@ export const decodeBolt11PaymentHash = (pr: string): string | null => {
     let pos = 7
     while (pos + 3 <= fieldsEnd) {
       const tag = words[pos]
-      const len = words[pos + 1] * 32 + words[pos + 2]
+      const len = words[pos + 1]! * 32 + words[pos + 2]!
       const start = pos + 3
       const end = start + len
       if (end > fieldsEnd) break

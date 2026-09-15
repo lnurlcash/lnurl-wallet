@@ -97,7 +97,7 @@ const verifyNoteSignatureDigest = (
   }
   if (wireSig.length !== 65) return false
   const target = mintPubkeyHex.toLowerCase()
-  const trailing = new Uint8Array([wireSig[64], ...wireSig.subarray(0, 64)])
+  const trailing = new Uint8Array([wireSig[64]!, ...wireSig.subarray(0, 64)])
   const leading = wireSig
   for (const candidate of [trailing, leading]) {
     try {
@@ -215,7 +215,7 @@ export const signNoteOwnership = (secretKey: Uint8Array): Uint8Array => {
     format: 'recovered',
     prehash: false
   })
-  return new Uint8Array([...libSig.subarray(1), libSig[0]])
+  return new Uint8Array([...libSig.subarray(1), libSig[0]!])
 }
 
 // the inverse of signNoteOwnership: recovers the x-only pubkey a ck1 this

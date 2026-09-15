@@ -99,7 +99,7 @@ export const isLightningAddress = (value: string): boolean => {
   if (/^[^\s@]+\.[^\s@]+$/.test(domain)) return true
   // dot-less: only the hosts an http fetch is allowed to reach at all, so
   // this can never widen what resolves on the public internet
-  return isInsecureHost(domain.split(':')[0])
+  return isInsecureHost(domain.split(':')[0]!)
 }
 
 const lnAddressToUrl = (address: string): string => {
@@ -120,7 +120,7 @@ const isBareMintDomain = (value: string): boolean => {
   const trimmed = value.trim()
   if (isLightningAddress(trimmed)) return false
   if (/^@?[^\s@/]+\.[^\s@/]+$/.test(trimmed)) return true
-  return isInsecureHost(trimmed.replace(/^@/, '').split(':')[0])
+  return isInsecureHost(trimmed.replace(/^@/, '').split(':')[0]!)
 }
 
 const bareMintDomainToUrl = (value: string): string =>

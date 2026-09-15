@@ -1,0 +1,71 @@
+{
+  "name": "lnurlcash-kit",
+  "version": "0.14.0",
+  "description": "LNURLcash (LUD-25) protocol client for TypeScript",
+  "author": "dni",
+  "contributors": [
+    "TheCryptoDonkey"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lnurlcash/lnurl-wallet.git",
+    "directory": "src/lib"
+  },
+  "homepage": "https://github.com/lnurlcash/lnurl-wallet/tree/main/src/lib#readme",
+  "bugs": {
+    "url": "https://github.com/lnurlcash/lnurl-wallet/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "lnurl",
+    "lnurlcash",
+    "lud-25",
+    "lightning",
+    "bitcoin",
+    "bearer",
+    "ecash"
+  ],
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "MIGRATION-0.14.md",
+    "RELEASING.md",
+    "SECURITY.md",
+    "THREAT-MODEL.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^5.0.0"
+  }
+}

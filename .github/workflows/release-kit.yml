@@ -1,0 +1,142 @@
+name: Release lnurlcash-kit
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Package tag, for example lnurlcash-kit-v0.14.0
+        type: string
+        required: true
+      publish:
+        description: Publish to npm after validation
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lnurlcash-kit-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: startsWith(inputs.tag || github.event.release.tag_name, 'lnurlcash-kit-v')
+    runs-on: ubuntu-24.04
+    outputs:
+      filename: ${{ steps.pack.outputs.filename }}
+    steps:
+      - name: Checkout package tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release commit is on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::Package tags must point to a commit on origin/main"
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: src/lib/package-lock.json
+
+      - name: Verify tag and package version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        working-directory: src/lib
+        run: |
+          set -euo pipefail
+          package_version="$(node --print "require('./package.json').version")"
+          expected_tag="lnurlcash-kit-v${package_version}"
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error::Expected tag $expected_tag, got $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Install package dependencies
+        working-directory: src/lib
+        run: npm ci
+
+      - name: Check package
+        working-directory: src/lib
+        run: npm run check
+
+      - name: Audit production dependencies
+        working-directory: src/lib
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Verify public exports load
+        working-directory: src/lib
+        run: |
+          node --input-type=module <<'NODE'
+          const kit = await import('./dist/index.js')
+          const expected = [
+            'fetchNoteInfo',
+            'rotateNote',
+            'splitNote',
+            'mergeNotes',
+            'meltNote',
+            'registerUsername',
+            'scanForAddressNotes'
+          ]
+          const missing = expected.filter(name => typeof kit[name] !== 'function')
+          if (missing.length) throw new Error(`Missing exports: ${missing.join(', ')}`)
+          NODE
+
+      - name: Pack exact release artefact
+        id: pack
+        working-directory: src/lib
+        run: |
+          set -euo pipefail
+          pack_json="$(npm pack --pack-destination "$RUNNER_TEMP" --json)"
+          filename="$(jq -r '.[0].filename' <<<"$pack_json")"
+          test -n "$filename"
+          test -f "$RUNNER_TEMP/$filename"
+          npm publish --dry-run --access public "$RUNNER_TEMP/$filename"
+          echo "filename=$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artefact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lnurlcash-kit-package
+          path: ${{ runner.temp }}/${{ steps.pack.outputs.filename }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.event_name == 'release' || inputs.publish == true
+    runs-on: ubuntu-24.04
+    environment:
+      name: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up Node with npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Download validated release artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: lnurlcash-kit-package
+          path: ${{ runner.temp }}/lnurlcash-kit-package
+
+      - name: Publish exact artefact to npm
+        env:
+          TARBALL: ${{ runner.temp }}/lnurlcash-kit-package/${{ needs.build.outputs.filename }}
+        run: npm publish --access public --provenance "$TARBALL"

@@ -33,7 +33,7 @@ const signAsMint = (
     format: 'recovered',
     prehash: false
   })
-  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
+  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
 }
 
 describe('fetchPayRequest - LUD-25 Part 2 internal transfer hint', () => {
@@ -145,7 +145,7 @@ describe('bound-mint receipt authentication', () => {
       format: 'recovered',
       prehash: false
     })
-    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
+    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
   }
 
   it('accepts a cp1/cs1-encoded bound-mint receipt, normalized to plain hex', () => {

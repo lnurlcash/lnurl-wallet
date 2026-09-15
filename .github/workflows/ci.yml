@@ -26,11 +26,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/lib/package-lock.json
       - run: npm ci
       - run: npm run format:check
       - run: npm run tsc
       - run: npm test
       - run: npm run build
+      - run: npm ci
+        working-directory: src/lib
+      - run: npm run check
+        working-directory: src/lib
+      - run: npm pack --dry-run
+        working-directory: src/lib
       # informational only - surfaces newly disclosed advisories without
       # failing an otherwise-green build over an unmaintained transitive dep
       - run: npm audit --audit-level=high

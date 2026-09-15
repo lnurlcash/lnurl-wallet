@@ -1,97 +1,87 @@
-# LNURLcash (LUD-25) protocol kit
+# lnurlcash-kit
 
-Staged extraction of this wallet's own LNURLcash implementation out of the
-monolithic `src/lnurlcash.ts` it used to live in, organized as a
-publishable-on-its-own package. Every function here has been through this
-repo's own independent security-review history (see the commit log for
-"security review"/"harden" fixes) - it did not previously depend on the
-already-published `lnurlcash-kit` package (a separate implementation, by a
-different author, that the sibling `raffle` project uses instead).
+The LNURLcash protocol client used by
+[`lnurl-wallet`](https://github.com/lnurlcash/lnurl-wallet). It is published
+from the wallet repository so the reference wallet and the npm package share
+the same implementation and test suite.
 
-**Intent**: this becomes (or replaces the content of) a real
-`github.com/lnurlcash/lnurlcash-kit` package. Nothing here has been
-published yet - see "Publishing" below for what's still needed.
+LUD-25 is still a draft. Pin an exact version and review the changelog before
+upgrading software that can spend bearer notes.
 
-## Why this is decoupled the way it is
+Version 0.14 replaces the separate 0.13 implementation. Existing consumers
+should read [MIGRATION-0.14.md](./MIGRATION-0.14.md) before upgrading.
 
-This directory has **zero dependency on anything wallet-specific** -
-no `localStorage`, no Solid, no import from anywhere outside `src/lib/`.
-Two things the original monolith got from the wallet directly are now
-injectable, configured once at startup by whatever host embeds this:
+## Install
 
-- **`net.ts`'s `configureNetworkGuard(guard)`** - called before every
-  network request; throwing from `guard` refuses the request before it's
-  attempted. The wallet uses this for its "offline mode" toggle
-  (`offlineMode.ts`) - see `src/lnurlcash.ts`.
-- **`secrets.ts`'s `configureSecretProvider(provider)`** - decides how
-  `rotateNote`/`splitNote`/`mergeNotes` (`request.ts`) generate a fresh
-  output secret. Defaults to plain `crypto.getRandomValues` randomness; the
-  wallet configures it to prefer a seed-derived, recoverable secret instead
-  (`cashSecrets.ts`) - see `src/lnurlcash.ts`.
+```sh
+npm install --save-exact lnurlcash-kit
+```
 
-Neither default requires any configuration to use correctly - a bare
-`import` of this package with no setup behaves like a stateless, pure-random
-LUD-25 client.
+Node 22 or newer is required. The package is ESM-only and also targets modern
+browsers with Web Crypto and `AbortSignal.timeout`.
 
-## What deliberately stayed out of this directory
+## Use
 
-`src/lnurlcash.ts` (one level up) is what actually gets imported everywhere
-else in this app - it re-exports everything from here unchanged, plus:
+```ts
+import {fetchNoteInfo, rotateNote} from 'lnurlcash-kit'
 
-- `generateNoteSecret`/`generateMintSecret` - the wallet's own
-  `cashSecrets.ts`-backed implementations, wired in via
-  `configureSecretProvider` above. A generic kit shouldn't assume a specific
-  seed-derivation scheme.
-- `formatFeePercent`/`describeMintFee` - English display strings ("2 sat
-  flat", "0.5% of the amount paid"). A protocol kit shouldn't dictate UI
-  copy or language; `fees.ts` here only has the pure numeric fee math
-  (`parseMintFee`/`applyMintFee`/`withinMintFeeBand`/`grossUpForMintFee`).
-- the `offlineMode()` check itself (a wallet-wide UI toggle, not a protocol
-  concept) - wired in via `configureNetworkGuard` above.
+const info = await fetchNoteInfo(noteUrl)
+const replacement = await rotateNote(info.callback, info.k1)
+```
 
-If you're editing something in `src/lib/` and find yourself reaching for
-`localStorage`, a Solid signal, or any other wallet module, that's a sign
-the logic belongs in `src/lnurlcash.ts` instead, calling into an
-injectable hook here if it needs one.
+`fetchNoteInfo` first uses a secret-free hash or public-key lookup. It sends a
+raw legacy `k1` only when an older service explicitly says that `k1` is
+required. Mutations generate and name replacement outputs locally.
 
-## File map
+Configuration is process-wide. Call `configureNetworkGuard`,
+`configureTransport`, `configureSecretProvider` and
+`configurePubkeySecretProvider` once during application startup, before any
+requests are made. The defaults use the platform `fetch` and secure random
+bytes; the wallet overrides them for offline mode, recoverable outputs and
+host-provided transports.
 
-| File             | Contents                                                             |
-| ---------------- | -------------------------------------------------------------------- |
-| `errors.ts`      | The error taxonomy (`AmbiguousMutationError`, `NoteSpentError`, ...) |
-| `urls.ts`        | LUD-01/16/17 encoding, note-URL construction/parsing, origin checks  |
-| `bolt11.ts`      | BOLT-11 decode (amount, payment_hash), preimage/invoice shape checks |
-| `signature.ts`   | LUD-13-style offline note-signature sign/verify, dual byte-order     |
-| `fees.ts`        | LUD-25 mint fee math (parse/apply/band-check/gross-up)               |
-| `secrets.ts`     | Injectable secret generation for rotate/split/merge                  |
-| `net.ts`         | The one network choke point + injectable pre-flight guard            |
-| `request.ts`     | fetchNoteInfo, probeBurnedNote, rotate/split/merge/melt, settleNote  |
-| `mintRequest.ts` | LUD-06 payRequest, invoice request/verify, bound-mint-receipt        |
-| `index.ts`       | Public barrel - `export *` from everything above                     |
+## Public modules
 
-## Testing
+The root export includes:
 
-This directory has its own scoped test suite (`src/lib/*.test.ts` +
-`src/lib/vitest.config.ts`), run independently of the wallet app's own tests
-via `npm run test:lib` from the repo root (`npm test` runs the wallet suite
-only - the two are mutually exclusive so nothing runs twice; `npm run
-test:all` runs both). Every test file here imports only from its sibling
-`.ts` module (never from `../lnurlcash`), so this suite alone proves the
-kit's public surface works with zero wallet code loaded. The one exception is
-`generateNoteSecret`, which is wallet-specific policy (see above) and stays
-tested in `../lnurlcash.test.ts` instead.
+- LNURL and note parsing in `urls.ts`
+- BOLT-11 amount, hash and preimage checks in `bolt11.ts`
+- offline note signatures and Part 2 ownership proofs in `signature.ts`
+- fee parsing and arithmetic in `fees.ts`
+- guarded network access in `net.ts`
+- note lookup, melt, rotate, split, merge and settlement in `request.ts`
+- mint invoice and bound-receipt checks in `mintRequest.ts`
+- LN address registration and gap-limit recovery scans in `addresses.ts`
+- cp1, ck1, cs1 and cx1 codecs and derivation in `recoverableNotes.ts`
+- injectable output-secret providers in `secrets.ts`
 
-## Publishing
+The implementation has no dependency on Solid, browser storage or any other
+wallet module. Wallet policy stays in the parent `src/lnurlcash.ts` adapter.
 
-Not done yet. Before this becomes a real npm release:
+## Errors and ambiguous mutations
 
-1. Decide the actual relationship to the existing `lnurlcash-kit` package
-   (currently published by a different author/org) - replace it, fork it,
-   or merge histories. Not a decision this directory makes on its own.
-2. Give this its own `package.json`/build step (the existing
-   `lnurlcash-kit` repo already has a working `tsup`/`vitest` setup worth
-   copying rather than reinventing) - the scoped `vitest.config.ts` here can
-   move over largely as-is.
-3. Write this package's own README/SECURITY.md/THREAT-MODEL.md - the
-   existing `lnurlcash-kit` repo's versions of these are a reasonable
-   starting template for shape, even where the content differs.
+LNURLcash mutations move bearer value. A timeout or unreadable response does
+not prove that a callback failed. Preserve every replacement secret carried by
+an `AmbiguousMutationError` and reconcile the input and outputs before retrying.
+Do not turn transport uncertainty into an automatic retry.
+
+See [THREAT-MODEL.md](./THREAT-MODEL.md) before integrating the package and
+[SECURITY.md](./SECURITY.md) before reporting a vulnerability.
+
+## Development
+
+From `src/lib` in the wallet checkout:
+
+```sh
+npm ci
+npm run check
+npm pack --dry-run
+```
+
+Releases use tags named `lnurlcash-kit-vX.Y.Z`. Publishing is performed by
+`.github/workflows/release-kit.yml` through npm trusted publishing; releases
+must not be published from a maintainer workstation.
+
+## Licence
+
+MIT
