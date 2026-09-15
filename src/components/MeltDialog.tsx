@@ -12,7 +12,7 @@ import {MdSharpKeyboard} from 'solid-icons/md'
 import type {Bearer} from '../storage'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
-import type {PayRequestInfo, MeltResult} from '../lnurlcash'
+import type {PayRequestInfo, MeltResult, InternalTransferResult} from '../lnurlcash'
 import {
   isBolt11Invoice,
   isLightningAddress,
@@ -31,7 +31,8 @@ import {
   probeBurnedNote,
   sameInvoice,
   NoteSpentError,
-  AmbiguousMutationError
+  AmbiguousMutationError,
+  payInternalTransfer
 } from '../lnurlcash'
 import {
   deviceMerge,
@@ -116,6 +117,13 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   const [lnAddressText, setLnAddressText] = createSignal('')
   const [lnAddressAmountSats, setLnAddressAmountSats] = createSignal('')
   const [fetchingInvoice, setFetchingInvoice] = createSignal(false)
+  // LUD-25 Part 2's Internal transfer: burning a held note straight onto
+  // the recipient's own registered branch, skipping Lightning entirely -
+  // see payWithInternalTransfer below. A separate confirm/busy pair from
+  // the ordinary melt flow's own (confirming/paying), since this never
+  // touches pastedInvoice at all
+  const [confirmingTransfer, setConfirmingTransfer] = createSignal(false)
+  const [transferring, setTransferring] = createSignal(false)
 
   // set right after a melt is requested, alongside the LUD-25 melt proof
   // URL it returned - polled until that proof reports the payment settled
@@ -232,6 +240,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
       return
     }
     setFetchingInvoice(true)
+    setConfirmingTransfer(false)
     try {
       setLnAddressPayRequest(await fetchPayRequest(url))
       setLnAddressText(address)
@@ -316,6 +325,169 @@ const MeltDialog: Component<MeltDialogProps> = props => {
     }
   }
 
+  // Coin selection for an internal transfer: an exact match needs no split
+  // at all, so it's strictly better than accumulating past the target and
+  // minting leftover change - a single matching note is a free rotate
+  // (Internal transfer, 25.md: "a plain rotate is free"), and even the
+  // full-held-total case still avoids a split's change note and its fee.
+  // Only checks those two exact cases (a single note, or everything
+  // available) rather than searching every subset for one that happens to
+  // sum exactly - a general subset-sum search is overkill for what's
+  // normally a handful of notes per mint, and this still always finds a
+  // usable selection via the plain accumulate-in-order walk when no exact
+  // one exists.
+  const pickInternalTransferBearers = (
+    available: Bearer[],
+    msat: number
+  ): Bearer[] => {
+    const exact = available.find(b => b.amount === msat)
+    if (exact) return [exact]
+    const total = available.reduce((sum, b) => sum + b.amount, 0)
+    if (total === msat) return available
+    const picked: Bearer[] = []
+    let running = 0
+    for (const bearer of available) {
+      if (running >= msat) break
+      picked.push(bearer)
+      running += bearer.amount
+    }
+    return picked
+  }
+
+  // picks notes at the recipient's own mint (see pickInternalTransferBearers)
+  // and burns them straight onto the recipient's next derived pubkey (see
+  // lib's payInternalTransfer) - no invoice, no Lightning round trip, and
+  // nothing to poll afterward (finishMelt exists for a melt's async
+  // settlement; this isn't one)
+  const payWithInternalTransfer = async () => {
+    const info = lnAddressPayRequest()
+    const hint = internalTransferHint()
+    if (!info || !hint) return
+    const msat = satsToMsat(lnAddressAmountSats())
+    if (!lnAddressAmountSats() || !Number.isFinite(msat) || msat <= 0) {
+      notify('Enter an amount in sats.', NotifyKind.ERROR)
+      return
+    }
+    if (msat < info.minSendable || msat > info.maxSendable) {
+      notify(
+        `Amount must be between ${msatToSats(info.minSendable)} and ${msatToSats(info.maxSendable)} sats.`,
+        NotifyKind.ERROR
+      )
+      return
+    }
+    const picked = pickInternalTransferBearers(internalTransferBearers(), msat)
+    const total = picked.reduce((sum, b) => sum + b.amount, 0)
+    if (total < msat || picked.length === 0) {
+      notify(
+        `Not enough notes at ${serverOf(info.callback)} to cover this with an internal transfer.`,
+        NotifyKind.ERROR
+      )
+      return
+    }
+    setConfirmingTransfer(false)
+    setTransferring(true)
+    try {
+      const base = picked[0]
+      const k1s = picked.map(b => requireNoteK1(b.url))
+      let changeK1: string | undefined
+      let changeSignature: string | undefined
+      try {
+        const result: InternalTransferResult = await payInternalTransfer(
+          base.callback,
+          k1s,
+          msat,
+          total,
+          hint
+        )
+        if (result.kind === 'split') {
+          changeK1 = result.change
+          changeSignature = result.changeSignature
+        }
+      } catch (err) {
+        if (!(err instanceof AmbiguousMutationError)) throw err
+        // the request may have landed despite the failure - probe one
+        // input before deciding what (if anything) the carried change
+        // secret is worth, same reconciliation mergeSelectionIfNeeded/
+        // splitAndPay already do for their own mutations
+        const outcome = await probeBurnedNote(base.url)
+        if (outcome === 'live') throw err // nothing burned - a plain failure
+        if (outcome === 'unknown') {
+          if (err.newSecrets.length > 0) {
+            await addBearer({
+              url: withNewK1(base.url, err.newSecrets[0], total - msat),
+              callback: base.callback,
+              amount: total - msat,
+              verified: false,
+              mintPubkey: base.mintPubkey
+            })
+          }
+          throw new Error(
+            'The internal transfer may have gone through but could not be confirmed - ' +
+              (err.newSecrets.length > 0
+                ? 'the possible change is stored unverified alongside your originals. Refresh it to reconcile before trying again.'
+                : 'the input notes are still shown as unspent. Refresh them before trying again.')
+          )
+        }
+        // 'gone': the burn landed - any carried secret is the only money left
+        if (err.newSecrets.length > 0) changeK1 = err.newSecrets[0]
+      }
+      // every input is burned server-side from here on - any change is the
+      // only money left from this selection, so (when present) it's
+      // stored BEFORE any removeBearer of an input
+      if (changeK1) {
+        const change = await addBearer({
+          url: withNewK1(base.url, changeK1, total - msat, changeSignature),
+          callback: base.callback,
+          amount: total - msat,
+          verified: false,
+          mintPubkey: base.mintPubkey
+        })
+        for (const bearer of picked) removeBearer(bearer.id)
+        try {
+          const settledChange = await settleNote(
+            base.url,
+            changeK1,
+            total - msat,
+            changeSignature
+          )
+          await updateBearer(change.id, {
+            url: withNewK1(
+              base.url,
+              settledChange.k1,
+              settledChange.amountMsat,
+              settledChange.signature
+            ),
+            callback: settledChange.callback,
+            amount: settledChange.amountMsat,
+            verified: true
+          })
+        } catch (err) {
+          notify(
+            `Sent, but settling the change note didn't complete (${(err as Error).message}) - it's tracked unverified; refresh it to repair.`,
+            NotifyKind.ERROR
+          )
+        }
+      } else {
+        for (const bearer of picked) removeBearer(bearer.id)
+      }
+      logActivity(
+        'melt',
+        `Sent ${msatToSats(msat)} sats to ${lnAddressText() || serverOf(info.callback)} via an internal transfer at ${serverOf(info.callback)}.`
+      )
+      notify(
+        `Sent ${msatToSats(msat)} sats via internal transfer.`,
+        NotifyKind.SUCCESS
+      )
+      setLnAddressPayRequest(null)
+      setLnAddressAmountSats('')
+      props.onClose()
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    } finally {
+      setTransferring(false)
+    }
+  }
+
   const onKeydown = (e: KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -329,6 +501,27 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   })
 
   const unspentBearers = createMemo(() => bearers().filter(b => !b.spent))
+
+  // LUD-25 Part 2's Internal transfer: eligible only if the looked-up
+  // address published a cx1 (Seed & derivation) AND this wallet holds a
+  // verified, browser-held note at that SAME mint - device-backed notes
+  // are excluded because the vault always generates its own output secret
+  // (deviceOrchestration.ts's deviceMerge/deviceSplit), with no way yet to
+  // name an external recipient's pubkey as that output instead.
+  const internalTransferHint = createMemo(
+    () => lnAddressPayRequest()?.internalTransfer ?? null
+  )
+  const internalTransferBearers = createMemo(() => {
+    const info = lnAddressPayRequest()
+    if (!info || !internalTransferHint()) return []
+    const server = serverOf(info.callback)
+    return unspentBearers().filter(
+      b => !b.deviceId && b.callback !== '' && serverOf(b.url) === server
+    )
+  })
+  const internalTransferAvailableMsat = createMemo(() =>
+    internalTransferBearers().reduce((sum, b) => sum + b.amount, 0)
+  )
   const selectedBearers = createMemo(() =>
     bearers().filter(b => selectedIds().has(b.id))
   )
@@ -927,21 +1120,82 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                   }
                 }}
               />
-              <div class="btns">
-                <button
-                  disabled={fetchingInvoice() || offlineMode()}
-                  onClick={getInvoiceFromAddress}
-                >
-                  <Show when={fetchingInvoice()}>
-                    <IoRefreshSharp class="spin" />
-                    &nbsp;
-                  </Show>
-                  Get invoice
-                </button>
-                <button onClick={() => setLnAddressPayRequest(null)}>
-                  Cancel
-                </button>
-              </div>
+              <Show
+                when={internalTransferHint() && internalTransferAvailableMsat() > 0}
+              >
+                <p class="bearer-hint">
+                  You hold {msatToSats(internalTransferAvailableMsat())} sats
+                  at {serverOf(info().callback)} - paying this address can
+                  skip Lightning entirely (LUD-25 internal transfer).
+                </p>
+              </Show>
+              <Show
+                when={confirmingTransfer()}
+                fallback={
+                  <div class="btns">
+                    <button
+                      disabled={fetchingInvoice() || offlineMode()}
+                      onClick={getInvoiceFromAddress}
+                    >
+                      <Show when={fetchingInvoice()}>
+                        <IoRefreshSharp class="spin" />
+                        &nbsp;
+                      </Show>
+                      Get invoice
+                    </button>
+                    <Show
+                      when={
+                        internalTransferHint() &&
+                        internalTransferAvailableMsat() > 0
+                      }
+                    >
+                      <button
+                        disabled={
+                          transferring() ||
+                          offlineMode() ||
+                          !lnAddressAmountSats()
+                        }
+                        onClick={() => setConfirmingTransfer(true)}
+                      >
+                        Pay via internal transfer
+                      </button>
+                    </Show>
+                    <button
+                      onClick={() => {
+                        setLnAddressPayRequest(null)
+                        setConfirmingTransfer(false)
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                }
+              >
+                <p class="warning">
+                  Send {lnAddressAmountSats()} sats to{' '}
+                  {lnAddressText() || 'this address'} directly at{' '}
+                  {serverOf(info().callback)} - no Lightning payment
+                  involved. This can't be undone.
+                </p>
+                <div class="btns">
+                  <button
+                    disabled={transferring() || offlineMode()}
+                    onClick={payWithInternalTransfer}
+                  >
+                    <Show when={transferring()}>
+                      <IoRefreshSharp class="spin" />
+                      &nbsp;
+                    </Show>
+                    Yes, send it
+                  </button>
+                  <button
+                    disabled={transferring()}
+                    onClick={() => setConfirmingTransfer(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </Show>
             </div>
           )}
         </Show>
