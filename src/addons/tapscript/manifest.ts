@@ -4,6 +4,12 @@ import {
   generateKeypair,
   tweakPubkey,
   signWithTweakedKey,
+  compileLeaf,
+  scriptTemplateById,
+  SCRIPT_TEMPLATES,
+  type ScriptTemplateId,
+  type ScriptTemplateParams,
+  type CompiledLeaf,
   type TweakResult,
   type SignResult
 } from './taproot'
@@ -32,16 +38,75 @@ const isHex32 = (value: unknown): boolean =>
   /^[0-9a-fA-F]{64}$/.test(trimmedString(value))
 
 // ---- Taproot tweak section ----
+//
+// A "script tree" entry used to be a free-text field folded into a fake
+// sha256(joined-text) merkle root - illustrative, never a real Tapscript
+// program. It's now a (template, params) row compiled through taproot.ts's
+// own compileLeaf into a REAL Bitcoin Script program (real opcodes, via
+// @scure/btc-signer/script.js's own encoder) and folded into a REAL BIP341
+// merkle root (via @scure/btc-signer/payment.js's own p2tr tree builder,
+// see taproot.ts's merkleRootFor) - the same machinery a real wallet uses,
+// not an approximation of it.
+type ScriptRow = {
+  templateId: string
+  pubkeyHex: string
+  pubkey2Hex: string
+  hashHex: string
+  locktime: number
+}
 
-type ScriptRow = {value: string}
+const newScriptRow = (templateId: unknown): ScriptRow => ({
+  templateId: trimmedString(templateId) || SCRIPT_TEMPLATES[0]!.id,
+  pubkeyHex: '',
+  pubkey2Hex: '',
+  hashHex: '',
+  locktime: 0
+})
 
-const newScriptRow = (): ScriptRow => ({value: ''})
+const rowParams = (
+  row: Partial<ScriptRow> | undefined
+): ScriptTemplateParams => ({
+  pubkeyHex: trimmedString(row?.pubkeyHex),
+  pubkey2Hex: trimmedString(row?.pubkey2Hex),
+  hashHex: trimmedString(row?.hashHex),
+  locktime: Number(row?.locktime) || 0
+})
 
-const scriptTexts = (scripts: unknown): string[] =>
+// compiles one row's own (template, params) - the per-row live preview
+// (opcodes/script hex/leaf hash) below all read through this, same
+// "swallow throws, not-ready-yet reads as null" contract as tweakPreview
+// further down, since this reruns on every keystroke while a holder is
+// still typing a pubkey/hash/locktime.
+const rowCompiled = (item: unknown): CompiledLeaf | null => {
+  const row = item as Partial<ScriptRow> | undefined
+  if (!row?.templateId) return null
+  return compileLeaf(row.templateId, rowParams(row))
+}
+
+const templateName = (templateId: unknown): string =>
+  scriptTemplateById(trimmedString(templateId))?.name ?? 'Unknown template'
+
+const templateDescription = (templateId: unknown): string =>
+  scriptTemplateById(trimmedString(templateId))?.description ?? ''
+
+const rowOpcodes = (item: unknown): string => rowCompiled(item)?.opcodes ?? '-'
+
+const rowScriptHex = (item: unknown): string =>
+  rowCompiled(item)?.scriptHex ?? '-'
+
+const rowLeafHash = (item: unknown): string =>
+  rowCompiled(item)?.leafHashHex ?? '-'
+
+// every row's compiled leaf script bytes, in order - null (incomplete/
+// malformed) rows are dropped rather than blocking the whole tweak, so a
+// holder mid-way through typing a second leaf's pubkey still sees the
+// first leaf's tweak update live
+const leafScriptsFor = (scripts: unknown): Uint8Array[] =>
   Array.isArray(scripts)
     ? (scripts as unknown[])
-        .map(s => trimmedString((s as ScriptRow)?.value))
-        .filter(s => s.length > 0)
+        .map(rowCompiled)
+        .filter((c): c is CompiledLeaf => c !== null)
+        .map(c => hexToBytes(c.scriptHex))
     : []
 
 // swallows tweakPubkey's own throws (bad/incomplete hex) rather than
@@ -55,7 +120,7 @@ const tweakPreview = (
 ): TweakResult | null => {
   if (!isHex32(pubkeyHex)) return null
   try {
-    return tweakPubkey(trimmedString(pubkeyHex), scriptTexts(scripts))
+    return tweakPubkey(trimmedString(pubkeyHex), leafScriptsFor(scripts))
   } catch {
     return null
   }
@@ -73,6 +138,14 @@ const tweakScalarDisplay = (pubkeyHex: unknown, scripts: unknown): string =>
 const tweakParityDisplay = (pubkeyHex: unknown, scripts: unknown): string =>
   tweakPreview(pubkeyHex, scripts)?.parity ?? '-'
 
+const merkleRootDisplay = (pubkeyHex: unknown, scripts: unknown): string => {
+  const result = tweakPreview(pubkeyHex, scripts)
+  if (!result) return '-'
+  return result.merkleRootHex === ''
+    ? '(none - key-path only)'
+    : result.merkleRootHex
+}
+
 // the Sign button's own helper - deliberately throws straight through on
 // bad input (unlike the live preview above) since a Button's onClick
 // already runs inside Renderer.tsx's own try/catch (see runAction), which
@@ -85,15 +158,73 @@ const signDemo = (
 ): SignResult =>
   signWithTweakedKey(
     trimmedString(secretKeyHex),
-    scriptTexts(scripts),
+    leafScriptsFor(scripts),
     trimmedString(message)
   )
+
+const addTemplateButton = (id: ScriptTemplateId): UiNode => ({
+  type: 'Button',
+  label: `Add "${scriptTemplateById(id)!.name}"`,
+  onClick: {
+    action: 'push',
+    path: 'scripts',
+    value: {helper: 'newScriptRow', args: [id]}
+  }
+})
 
 const scriptRow: UiNode = {
   type: 'View',
   style: 'row',
   children: [
-    {type: 'Input', bind: 'item.value', label: 'Toy script text'},
+    {
+      type: 'Text',
+      value: {helper: 'templateName', args: [{var: 'item.templateId'}]},
+      style: 'subheading'
+    },
+    {
+      type: 'Text',
+      value: {helper: 'templateDescription', args: [{var: 'item.templateId'}]}
+    },
+    {
+      type: 'Input',
+      bind: 'item.pubkeyHex',
+      label: 'Pubkey (every template uses this one - multisig2’s FIRST key)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.pubkey2Hex',
+      label: 'Pubkey B (multisig2 only)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.hashHex',
+      label: 'SHA256 hash of a secret, hex (hashlock only)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.locktime',
+      kind: 'number',
+      label: 'Locktime / sequence number (csv/cltv only)'
+    },
+    {
+      type: 'Text',
+      value: {
+        cat: ['Opcodes: ', {helper: 'rowOpcodes', args: [{var: 'item'}]}]
+      },
+      style: 'response-block'
+    },
+    {
+      type: 'Text',
+      value: {
+        cat: ['Script hex: ', {helper: 'rowScriptHex', args: [{var: 'item'}]}]
+      }
+    },
+    {
+      type: 'Text',
+      value: {
+        cat: ['TapLeaf hash: ', {helper: 'rowLeafHash', args: [{var: 'item'}]}]
+      }
+    },
     {
       type: 'Button',
       label: 'Remove',
@@ -115,8 +246,9 @@ const taprootUi: UiNode[] = [
     ordered: true,
     each: [
       "Generate a keypair below (or skip this - you only need a pubkey for the tweak itself, the secret key is only for the last, optional 'sign' step).",
-      "Optionally add one or more entries under 'Script tree' to try a script-path tweak - leave it empty for a plain key-path tweak.",
-      "Paste the x-only pubkey you want to tweak into 'Tweak a pubkey' - the tweaked pubkey, tweak scalar, and parity appear automatically as you type.",
+      "Optionally click one or more 'Add \"...\"' buttons under 'Script tree' to try a script-path tweak with a real Tapscript leaf - leave it empty for a plain key-path tweak.",
+      'Each added leaf needs a pubkey (paste the one generated above, or any 32-byte x-only hex) - some templates also need a second pubkey, a SHA256 hash, or a locktime/sequence number; its compiled opcodes, script hex, and TapLeaf hash appear automatically as you fill them in.',
+      "Paste the x-only pubkey you want to tweak into 'Tweak a pubkey' - the tweaked pubkey, tweak scalar, parity, and merkle root (folding in every leaf above via a real BIP341 tree, not an approximation) appear automatically as you type.",
       "To prove the tweaked key is a real, usable keypair (not just hex), paste the SAME key's secret key, type any message, and click 'Sign with tweaked key'."
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
@@ -171,17 +303,13 @@ const taprootUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      'Each entry stands in for one script leaf - illustrative, not a real Tapscript program. Together they fold into one 32-byte value used as the Merkle root, the same slot a real script tree’s root would occupy.'
+      'Each entry below is a REAL Tapscript leaf, compiled from real Bitcoin Script opcodes (via @scure/btc-signer’s own Script encoder) - not illustrative placeholder text. Pick a template to add one, fill in its pubkey(s)/hash/locktime, and its opcodes, script hex, and individual TapLeaf hash (BIP341’s own tagged hash) appear below it. Multiple leaves fold into one real BIP341 merkle root via @scure/btc-signer’s own script-tree builder, the same code path a real wallet uses.'
   },
   {type: 'For', each: {var: 'scripts'}, children: [scriptRow]},
   {
-    type: 'Button',
-    label: 'Add script',
-    onClick: {
-      action: 'push',
-      path: 'scripts',
-      value: {helper: 'newScriptRow', args: []}
-    }
+    type: 'View',
+    style: 'row',
+    children: SCRIPT_TEMPLATES.map(t => addTemplateButton(t.id))
   },
   {type: 'Text', value: 'Tweak a pubkey', style: 'subheading'},
   {
@@ -228,6 +356,18 @@ const taprootUi: UiNode[] = [
             'Tweaked key parity: ',
             {
               helper: 'tweakParityDisplay',
+              args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
+            }
+          ]
+        }
+      },
+      {
+        type: 'Text',
+        value: {
+          cat: [
+            'Merkle root: ',
+            {
+              helper: 'merkleRootDisplay',
               args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
             }
           ]
@@ -548,7 +688,7 @@ const tapscriptManifest: AddonManifest = {
   version: '1',
   icon: 'gitmerge',
   description:
-    'Play around with BIP341 Taproot pubkey tweaking and BIP327 MuSig2 joint signatures - a sandbox, never wired into this wallet’s own notes.',
+    'Play around with BIP341 Taproot pubkey tweaking (real Tapscript leaf templates - pay-to-pubkey, CSV/CLTV timelocks, hashlock, 2-of-2 multisig) and BIP327 MuSig2 joint signatures - a sandbox, never wired into this wallet’s own notes.',
   permissions: [],
   nav: {position: 'right', icon: 'gitmerge', label: 'Tapscript'},
   state: {
@@ -573,10 +713,16 @@ const tapscriptManifest: AddonManifest = {
 const tapscriptHelpers: Record<string, AddonHelper> = {
   generateKeypair: generateKeypair as AddonHelper,
   newScriptRow: newScriptRow as AddonHelper,
+  templateName: templateName as AddonHelper,
+  templateDescription: templateDescription as AddonHelper,
+  rowOpcodes: rowOpcodes as AddonHelper,
+  rowScriptHex: rowScriptHex as AddonHelper,
+  rowLeafHash: rowLeafHash as AddonHelper,
   hasTweakPreview: hasTweakPreview as AddonHelper,
   tweakedPubkeyDisplay: tweakedPubkeyDisplay as AddonHelper,
   tweakScalarDisplay: tweakScalarDisplay as AddonHelper,
   tweakParityDisplay: tweakParityDisplay as AddonHelper,
+  merkleRootDisplay: merkleRootDisplay as AddonHelper,
   signDemo: signDemo as AddonHelper,
   newParticipant: newParticipant as AddonHelper,
   canAddParticipant: canAddParticipant as AddonHelper,
