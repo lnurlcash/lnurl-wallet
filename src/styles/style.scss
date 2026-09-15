@@ -1657,16 +1657,8 @@ nav {
 .mint-card {
   display: block;
   h4 {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
     overflow-wrap: anywhere;
   }
-}
-
-.mint-card-title {
-  overflow-wrap: anywhere;
 }
 
 @media (max-width: 700px) {
@@ -1691,8 +1683,8 @@ nav {
 }
 
 // the npub a holder optionally attached to a claimed address (see
-// ClaimAddressDialog.tsx / addressRegistry.ts's own `npub` field) - shown
-// on its Address.tsx card only when one was actually given
+// AddressDialog.tsx / addressRegistry.ts's own `npub` field) - shown in
+// its manage view only when one was actually given
 .address-npub {
   font-size: 0.8em;
   margin: 4px 0 0 0;
@@ -1721,11 +1713,15 @@ nav {
 .mint-trusted-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  font-size: 0.7em;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba($font-color, 0.12);
+  font-size: 0.65em;
   font-weight: normal;
-  opacity: 0.8;
+  vertical-align: middle;
+  opacity: 0.85;
 }
 
 // click-to-select mint lists on the Mint page (trusted + public)

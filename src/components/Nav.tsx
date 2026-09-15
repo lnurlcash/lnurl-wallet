@@ -9,8 +9,7 @@ import {
   IoBookSharp,
   IoCogSharp,
   IoHardwareChipSharp,
-  IoReceiptSharp,
-  IoAtCircleSharp
+  IoReceiptSharp
 } from 'solid-icons/io'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
@@ -88,20 +87,6 @@ const Nav = () => {
             <IoLibrarySharp />
             &nbsp;Mint
           </A>
-          {/* claiming/checking a registered username needs this wallet's
-          own seed-derived key branch (see cashSecrets.ts's
-          cashAddressBranch) - gated the same as Wallet, unlike Mint/Vault
-          below, since a device with no wallet has no branch to claim with */}
-          <Show when={state() !== 'none'}>
-            <A
-              href="/address"
-              class="nav-link"
-              title="Claim a username at a trusted mint"
-            >
-              <IoAtCircleSharp />
-              &nbsp;Address
-            </A>
-          </Show>
           {/* still alpha (TODO.md) - off by default, a holder opts in via
           Settings instead of this permanently occupying a nav slot */}
           <Show when={vaultEnabled()}>

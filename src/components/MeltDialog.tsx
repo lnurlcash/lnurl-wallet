@@ -380,13 +380,14 @@ const MeltDialog: Component<MeltDialogProps> = props => {
       notify('Enter an amount in sats.', NotifyKind.ERROR)
       return
     }
-    if (msat < info.minSendable || msat > info.maxSendable) {
-      notify(
-        `Amount must be between ${msatToSats(info.minSendable)} and ${msatToSats(info.maxSendable)} sats.`,
-        NotifyKind.ERROR
-      )
-      return
-    }
+    // minSendable/maxSendable are LUD-06 bounds on what the callback will
+    // turn into an INVOICE - meaningless here, since an internal transfer
+    // never requests one (payInternalTransfer burns straight onto the
+    // recipient's derived pubkey via SERVICE's split/merge endpoint
+    // instead - see lib/internalTransfer.ts, whose own only amount check
+    // is "not more than the selected notes are worth"). The mint is free
+    // to reject an amount it doesn't like there; nothing about the invoice
+    // bounds applies first.
     const picked = pickInternalTransferBearers(internalTransferBearers(), msat)
     const total = picked.reduce((sum, b) => sum + b.amount, 0)
     if (total < msat || picked.length === 0) {
@@ -605,6 +606,16 @@ const MeltDialog: Component<MeltDialogProps> = props => {
     setPastedInvoice(null)
     setSelectedIds(new Set<string>())
     setConfirming(null)
+  }
+
+  // steps back from the amount step to re-entering a destination - the
+  // paste-input-row above is hidden for the duration of that step (see
+  // this component's own render), so this is the only way back to it
+  // short of closing the whole dialog
+  const clearLnAddress = () => {
+    setLnAddressPayRequest(null)
+    setLnAddressAmountSats('')
+    setConfirmingTransfer(false)
   }
 
   // merges the selection into one note worth their sum - a no-op returning
@@ -1040,81 +1051,98 @@ const MeltDialog: Component<MeltDialogProps> = props => {
     <Dialog onClose={props.onClose}>
       <figure class="paste-widget">
         <figcaption>Melt - pay an invoice with a bearer note</figcaption>
-        <div class="paste-input-row">
-          <ScanToggle
-            onScan={onScan}
-            accept={v => isBolt11Invoice(v) || isLightningAddress(v)}
-          />
-          <NfcToggle
-            onScan={onScan}
-            accept={v => isBolt11Invoice(v) || isLightningAddress(v)}
-          />
-          <button
-            type="button"
-            class="icon-btn paste-icon-btn"
-            title="Paste from clipboard"
-            onClick={paste}
-          >
-            <IoClipboardSharp />
-          </button>
-          <button
-            type="button"
-            class="icon-btn paste-keyboard-btn"
-            title="Type instead"
-            onClick={() => setShowKeyboard(v => !v)}
-          >
-            <MdSharpKeyboard />
-          </button>
-          <div
-            class="paste-input-wrapper"
-            classList={{'mobile-open': showKeyboard()}}
-          >
-            <input
-              ref={pasteRef}
-              type="text"
-              class="paste-input"
-              classList={{invalid: value() !== '' && !isValid()}}
-              placeholder="lnbc1... or user@example.com"
-              value={value()}
-              onInput={e => setValue(e.currentTarget.value)}
-              onKeyDown={onKeydown}
+        {/* hidden once a destination has actually resolved (a pasted
+        invoice, or a looked-up Lightning Address's payRequest) - it used
+        to stay rendered the whole time, cleared back to empty rather than
+        hidden, which left an apparently-blank, unrelated-looking paste
+        field sitting above the amount step */}
+        <Show when={!lnAddressPayRequest() && !pastedInvoice()}>
+          <div class="paste-input-row">
+            <ScanToggle
+              onScan={onScan}
+              accept={v => isBolt11Invoice(v) || isLightningAddress(v)}
             />
-            <Show when={value() !== ''}>
-              <button
-                type="button"
-                class="icon-btn paste-clear-btn"
-                title="Clear"
-                onClick={() => setValue('')}
-              >
-                <IoCloseSharp />
-              </button>
-            </Show>
-          </div>
-          <button
-            type="button"
-            class="icon-btn paste-confirm-btn"
-            title={offlineMode() ? 'Offline mode is on' : 'Continue'}
-            disabled={
-              value() === '' || !isValid() || fetchingInvoice() || offlineMode()
-            }
-            onClick={handle}
-          >
-            <Show
-              when={fetchingInvoice()}
-              fallback={<IoReturnDownForwardSharp />}
+            <NfcToggle
+              onScan={onScan}
+              accept={v => isBolt11Invoice(v) || isLightningAddress(v)}
+            />
+            <button
+              type="button"
+              class="icon-btn paste-icon-btn"
+              title="Paste from clipboard"
+              onClick={paste}
             >
-              <IoRefreshSharp class="spin" />
-            </Show>
-          </button>
-        </div>
-        <Show when={value() !== '' && !isValid()}>
-          <p class="warning">
-            Not a valid bolt11 invoice or Lightning Address.
-          </p>
+              <IoClipboardSharp />
+            </button>
+            <button
+              type="button"
+              class="icon-btn paste-keyboard-btn"
+              title="Type instead"
+              onClick={() => setShowKeyboard(v => !v)}
+            >
+              <MdSharpKeyboard />
+            </button>
+            <div
+              class="paste-input-wrapper"
+              classList={{'mobile-open': showKeyboard()}}
+            >
+              <input
+                ref={pasteRef}
+                type="text"
+                class="paste-input"
+                classList={{invalid: value() !== '' && !isValid()}}
+                placeholder="lnbc1... or user@example.com"
+                value={value()}
+                onInput={e => setValue(e.currentTarget.value)}
+                onKeyDown={onKeydown}
+              />
+              <Show when={value() !== ''}>
+                <button
+                  type="button"
+                  class="icon-btn paste-clear-btn"
+                  title="Clear"
+                  onClick={() => setValue('')}
+                >
+                  <IoCloseSharp />
+                </button>
+              </Show>
+            </div>
+            <button
+              type="button"
+              class="icon-btn paste-confirm-btn"
+              title={offlineMode() ? 'Offline mode is on' : 'Continue'}
+              disabled={
+                value() === '' ||
+                !isValid() ||
+                fetchingInvoice() ||
+                offlineMode()
+              }
+              onClick={handle}
+            >
+              <Show
+                when={fetchingInvoice()}
+                fallback={<IoReturnDownForwardSharp />}
+              >
+                <IoRefreshSharp class="spin" />
+              </Show>
+            </button>
+          </div>
+          <Show when={value() !== '' && !isValid()}>
+            <p class="warning">
+              Not a valid bolt11 invoice or Lightning Address.
+            </p>
+          </Show>
         </Show>
         <Show when={lnAddressPayRequest()}>
           {info => (
             <div class="form-item">
+              {/* the address itself no longer has a visible field of its
+              own (see the hidden paste-input-row above) - restated here
+              for context, now that it's resolved rather than still being
+              typed */}
+              <p class="bearer-hint">
+                Paying {lnAddressText() || 'this address'}
+              </p>
               <label>
                 Amount (sats, {msatToSats(info().minSendable)} -{' '}
                 {msatToSats(info().maxSendable)})
@@ -1175,14 +1203,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                         Pay via internal transfer
                       </button>
                     </Show>
-                    <button
-                      onClick={() => {
-                        setLnAddressPayRequest(null)
-                        setConfirmingTransfer(false)
-                      }}
-                    >
-                      Cancel
-                    </button>
+                    <button onClick={clearLnAddress}>Change address</button>
                   </div>
                 }
               >

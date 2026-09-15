@@ -24,7 +24,6 @@ import Activity from './pages/Activity'
 import Docs from './pages/Docs'
 import Vault from './pages/Vault'
 import Claim from './pages/Claim'
-import Address from './pages/Address'
 import Settings from './pages/Settings'
 import AddonRun from './pages/AddonRun'
 
@@ -104,7 +103,11 @@ const cleanup = render(
       <Route path="/addons/:addonId" component={AddonRun} />
       <Route path="/vault" component={Vault} />
       <Route path="/claim" component={Claim} />
-      <Route path="/address" component={Address} />
+      {/* /address merged into /mint (claiming/checking/unclaiming/auto-
+      check now live in that trusted-mint card's own "@" dialog, see
+      AddressDialog.tsx) - kept as a redirect so old links/bookmarks still
+      land somewhere useful instead of 404ing */}
+      <Route path="/address" component={() => <Navigate href="/mint" />} />
       <Route path="*" component={() => <h1>Page not found</h1>} />
     </HashRouter>
   ),

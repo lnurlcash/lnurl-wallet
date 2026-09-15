@@ -17,7 +17,7 @@ export type RegisteredAddress = {
   server: string
   username: string
   registeredAt: number
-  // whatever npub ClaimAddressDialog sent alongside this claim (see
+  // whatever npub AddressDialog sent alongside this claim (see
   // lib/addresses.ts's registerUsername), purely for this device's own
   // display - SERVICE is the one that actually serves it as a NIP-05
   // identity, this is never re-sent anywhere, just shown back on the card
@@ -159,8 +159,9 @@ export const addRegisteredAddress = (
 // Forgets this device's own record of a registration - purely local
 // bookkeeping, never itself calls the mint (see addresses.ts's
 // unregisterUsername for the network call that actually frees a username
-// there; Address.tsx calls both together). Also useful standalone, to
-// stop showing/scanning an address this device no longer controls.
+// there; AddressDialog.tsx's own unclaim calls both together). Also
+// useful standalone, to stop showing/scanning an address this device no
+// longer controls.
 export const removeRegisteredAddress = (
   server: string,
   username: string

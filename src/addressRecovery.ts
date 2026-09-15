@@ -188,8 +188,8 @@ export type AddressScanWalletOps = {
 
 // runs scanRegisteredAddress and actually claims anything it finds into
 // the wallet (addBearer + activity log) - the one piece every caller
-// (Address.tsx's manual scan, Mint.tsx's per-mint "check notes"/"rescan
-// all", AddressAutoScanner's periodic tick) needs identically. Always
+// (AddressDialog's "check notes"/"full rescan", AddressAutoScanner's
+// periodic tick) needs identically. Always
 // records how far this pass got (markAddressScanned) so the NEXT
 // incremental "check notes" pass resumes past it, regardless of whether
 // this one found anything. What each caller does with the returned

@@ -59,8 +59,7 @@ import {
   requireMintComment,
   requireBoundMintQuote,
   validateBoundMintReceipt,
-  AmbiguousMutationError,
-  unregisterUsername
+  AmbiguousMutationError
 } from '../lnurlcash'
 import {
   deviceMint,
@@ -102,22 +101,8 @@ import {
   type PendingDeviceMint
 } from '../pendingDeviceMint'
 import {scanMintForNotes} from '../recovery'
-import {
-  hasCashRoot,
-  mergeCashSecretIndices,
-  cashAddressSecretAtIndex
-} from '../cashSecrets'
-import {
-  registeredAddresses,
-  removeRegisteredAddress,
-  setAddressAutoScan,
-  ADDRESS_SCAN_OPTIONS,
-  ADDRESS_SCAN_LABEL,
-  type RegisteredAddress,
-  type AddressScanMinutes
-} from '../addressRegistry'
-import {runAddressScan} from '../addressRecovery'
-import {requestNotificationPermission} from '../notifications'
+import {hasCashRoot, mergeCashSecretIndices} from '../cashSecrets'
+import {registeredAddresses} from '../addressRegistry'
 import {
   storeableMints,
   addStoreableMint,
@@ -130,7 +115,7 @@ import NfcToggle from '../components/NfcToggle'
 import RequireWallet from '../components/RequireWallet'
 import Dialog from '../components/Dialog'
 import FiatValue from '../components/FiatValue'
-import ClaimAddressDialog from '../components/ClaimAddressDialog'
+import AddressDialog from '../components/AddressDialog'
 
 // LUD-21 auto-poll interval, in seconds - both the countdown shown on the
 // button and the cadence of the automatic check
@@ -1054,93 +1039,15 @@ const Mint: Component = () => {
     null
   )
   const [rescanIndex, setRescanIndex] = createSignal(0)
-  // which trusted mint's own "Claim address" button opened
-  // ClaimAddressDialog (LUD-25 Part 2's cx1 registration, see that
-  // component) - at most one at a time, same single-flow-at-a-time
-  // convention every other mint-card action here follows
-  const [claimAddressFor, setClaimAddressFor] = createSignal<string | null>(
+  // which trusted mint's own "@" button opened AddressDialog (LUD-25 Part
+  // 2's cx1 registration and everything that follows from having one -
+  // claim, check notes, unclaim, auto-check - all live in that one dialog
+  // now, see its own top comment) - at most one at a time, same
+  // single-flow-at-a-time convention every other mint-card action here
+  // follows
+  const [addressDialogFor, setAddressDialogFor] = createSignal<string | null>(
     null
   )
-  // per-mint-server busy flags for the registered-address actions below
-  // (unclaim / check notes / rescan all) - a bare boolean would be shared
-  // across every card; keyed by server the same way rescanningServer/
-  // refreshingServer already are elsewhere on this page
-  const [addressActionFor, setAddressActionFor] = createSignal<string | null>(
-    null
-  )
-
-  // the "check notes"/"rescan all" split TODO.md asks for: "check notes"
-  // resumes from wherever this address's own nextScanIndex (or SERVICE's
-  // own metadata hint) left off, "rescan all" always re-walks from 0 -
-  // both funnel through the same runAddressScan (addressRecovery.ts),
-  // which claims anything found and persists the new resume point either
-  // way (markAddressScanned)
-  const checkRegisteredAddress = async (
-    addr: RegisteredAddress,
-    mode: 'incremental' | 'all'
-  ) => {
-    if (addressActionFor()) return
-    setAddressActionFor(addr.server)
-    try {
-      const result = await runAddressScan(
-        addr.server,
-        addr.username,
-        bearers(),
-        {addBearer, logActivity},
-        {startIndex: mode === 'incremental' ? (addr.nextScanIndex ?? 0) : 0}
-      )
-      if (result.error) {
-        notify(result.error, NotifyKind.ERROR)
-      } else {
-        const total = result.recovered.reduce((sum, n) => sum + n.amount, 0)
-        notify(
-          result.recovered.length > 0
-            ? `Found ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(total)} sats).`
-            : 'No new notes found.',
-          NotifyKind.SUCCESS
-        )
-      }
-    } finally {
-      setAddressActionFor(null)
-    }
-  }
-
-  const unclaimRegisteredAddress = async (addr: RegisteredAddress) => {
-    if (addressActionFor()) return
-    const proofKey = cashAddressSecretAtIndex(addr.server, 0)
-    if (!proofKey) {
-      notify(
-        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
-        NotifyKind.ERROR
-      )
-      return
-    }
-    setAddressActionFor(addr.server)
-    try {
-      await unregisterUsername(addr.server, addr.username, proofKey)
-      removeRegisteredAddress(addr.server, addr.username)
-      notify(
-        `Freed ${addr.username}@${serverOf(addr.server)}.`,
-        NotifyKind.SUCCESS
-      )
-    } catch (err) {
-      notify((err as Error).message, NotifyKind.ERROR)
-    } finally {
-      setAddressActionFor(null)
-    }
-  }
-
-  // enabling auto-scan is the one user gesture this feature has to hang a
-  // Notification permission prompt off of (TODO.md) - most browsers
-  // silently drop a request made outside a direct gesture, so this can't
-  // wait until the first scan actually finds something
-  const setAddressAutoScanWithPrompt = (
-    addr: RegisteredAddress,
-    minutes: AddressScanMinutes
-  ) => {
-    setAddressAutoScan(addr.server, addr.username, minutes)
-    if (minutes > 0) void requestNotificationPermission()
-  }
 
   const addByAddress = async (value: string) => {
     const url = resolveMintInput(value)
@@ -1358,11 +1265,11 @@ const Mint: Component = () => {
   return (
     <div id="mint" class="page">
       <h2>Trusted Mints</h2>
-      <Show when={claimAddressFor()}>
+      <Show when={addressDialogFor()}>
         {server => (
-          <ClaimAddressDialog
+          <AddressDialog
             server={server()}
-            onClose={() => setClaimAddressFor(null)}
+            onClose={() => setAddressDialogFor(null)}
           />
         )}
       </Show>
@@ -1429,15 +1336,13 @@ const Mint: Component = () => {
                   return (
                     <figure class="mint-card">
                       <h4>
-                        <span class="mint-card-title">
-                          <Show when={mint.nodeColor}>
-                            <span
-                              class="mint-color-dot"
-                              style={{'background-color': mint.nodeColor!}}
-                            />
-                          </Show>
-                          {mint.nodeAlias || serverOf(mint.server)}
-                        </span>
+                        <Show when={mint.nodeColor}>
+                          <span
+                            class="mint-color-dot"
+                            style={{'background-color': mint.nodeColor!}}
+                          />
+                        </Show>
+                        {mint.nodeAlias || serverOf(mint.server)}
                         <Show when={hasNotesFrom(mint.server)}>
                           <span
                             class="mint-trusted-badge"
@@ -1586,107 +1491,18 @@ const Mint: Component = () => {
                             </Show>
                             &nbsp;Rescan
                           </button>
-                          <Show
-                            when={registered()}
-                            fallback={
-                              <button
-                                disabled={offlineMode() || !hasCashRoot()}
-                                title={
-                                  offlineMode()
-                                    ? 'Offline mode is on'
-                                    : !hasCashRoot()
-                                      ? 'No seed loaded for this wallet - restore your seed again first'
-                                      : 'Claim a username@mint address here (LUD-25)'
-                                }
-                                onClick={() => setClaimAddressFor(mint.server)}
-                              >
-                                <IoAtCircleSharp />
-                                &nbsp;Claim address
-                              </button>
+                          <button
+                            class="icon-btn icon-btn-gap"
+                            title={
+                              registered()
+                                ? `Manage ${registered()!.username}@${serverOf(mint.server)} - check notes, unclaim, auto-check`
+                                : 'Claim a username@mint address here (LUD-25)'
                             }
+                            onClick={() => setAddressDialogFor(mint.server)}
                           >
-                            {addr => (
-                              <>
-                                <button
-                                  disabled={
-                                    offlineMode() ||
-                                    !hasCashRoot() ||
-                                    addressActionFor() !== null
-                                  }
-                                  title={
-                                    offlineMode()
-                                      ? 'Offline mode is on'
-                                      : `Check ${addr().username}@${serverOf(addr().server)} for new notes, resuming from where the last check left off`
-                                  }
-                                  onClick={() =>
-                                    checkRegisteredAddress(
-                                      addr(),
-                                      'incremental'
-                                    )
-                                  }
-                                >
-                                  <Show
-                                    when={addressActionFor() === mint.server}
-                                    fallback={<IoSearchSharp />}
-                                  >
-                                    <IoRefreshSharp class="spin" />
-                                  </Show>
-                                  &nbsp;Check notes
-                                </button>
-                                <button
-                                  disabled={addressActionFor() !== null}
-                                  title={`Unclaim ${addr().username}@${serverOf(addr().server)} - frees the username at the mint`}
-                                  onClick={() =>
-                                    unclaimRegisteredAddress(addr())
-                                  }
-                                >
-                                  <IoTrashSharp />
-                                  &nbsp;Unclaim
-                                </button>
-                                <button
-                                  class="icon-btn icon-btn-gap"
-                                  disabled={
-                                    offlineMode() ||
-                                    !hasCashRoot() ||
-                                    addressActionFor() !== null
-                                  }
-                                  title="Rescan all - re-walk every index from 0, ignoring what's already been checked"
-                                  onClick={() =>
-                                    checkRegisteredAddress(addr(), 'all')
-                                  }
-                                >
-                                  <IoRefreshSharp />
-                                </button>
-                              </>
-                            )}
-                          </Show>
+                            <IoAtCircleSharp />
+                          </button>
                         </div>
-                        <Show when={registered()}>
-                          {addr => (
-                            <label>
-                              Auto-check {addr().username}
-                              <select
-                                value={addr().autoScanMinutes ?? 0}
-                                onChange={e =>
-                                  setAddressAutoScanWithPrompt(
-                                    addr(),
-                                    Number(
-                                      e.currentTarget.value
-                                    ) as AddressScanMinutes
-                                  )
-                                }
-                              >
-                                <For each={ADDRESS_SCAN_OPTIONS}>
-                                  {option => (
-                                    <option value={option}>
-                                      {ADDRESS_SCAN_LABEL[option]}
-                                    </option>
-                                  )}
-                                </For>
-                              </select>
-                            </label>
-                          )}
-                        </Show>
                       </Show>
                       <div class="btns">
                         <button

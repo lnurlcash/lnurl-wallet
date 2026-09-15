@@ -2,7 +2,7 @@ import {bech32} from '@scure/base'
 
 // NIP-19's npub: classic bech32 (BIP-173, not bech32m - Nostr predates
 // BIP-350's checksum), hrp "npub", wrapping a 32-byte x-only pubkey.
-// Optionally given alongside a username claim (ClaimAddressDialog.tsx) so
+// Optionally given alongside a username claim (AddressDialog.tsx) so
 // SERVICE can also serve it as a NIP-05 identity - sent exactly as typed
 // (see lib/addresses.ts's registerUsername), never decoded to raw bytes
 // here: SERVICE decodes it itself (lnurl-mint's own bech32m.decode_npub,

@@ -375,11 +375,12 @@ const Settings: Component = () => {
             </h4>
             <p>
               How many consecutive unused indices to check before giving up on a
-              mint or registered address (Setup's "Recover notes", and the
-              Address page's "Check for new notes") - the same gap-limit
-              convention HD wallets use for address recovery. Higher finds notes
-              further out at the cost of more requests per empty mint; lower
-              finishes faster but could miss a note past a long unused stretch.
+              mint or registered address (Setup's "Recover notes", and a trusted
+              mint's own "@" address dialog on the Mint page) - the same
+              gap-limit convention HD wallets use for address recovery. Higher
+              finds notes further out at the cost of more requests per empty
+              mint; lower finishes faster but could miss a note past a long
+              unused stretch.
             </p>
             <div class="btns">
               <For each={GAP_LIMIT_OPTIONS}>
