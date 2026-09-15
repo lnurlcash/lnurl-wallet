@@ -51,7 +51,7 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test && npm run build",
@@ -64,8 +64,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "tsup": "^8.5.0",
-    "typescript": "^5.7.0",
+    "esbuild": "^0.27.7",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   }
 }
