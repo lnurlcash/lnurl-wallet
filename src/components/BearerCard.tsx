@@ -26,7 +26,8 @@ import {
   verifyNoteSignature,
   verifyNoteSignatureHash,
   withoutSignature,
-  isCk1
+  isCk1,
+  isLegacyCk1
 } from '../lnurlcash'
 import {
   deviceExportForHandoff,
@@ -317,6 +318,21 @@ const BearerCard: Component<BearerCardProps> = props => {
                 title="This note's own secret is a legacy hash preimage (LUD-25 Part 1), not a Part 2 pubkey/signature"
               >
                 plain secret
+              </span>
+            </Show>
+            {/* TODO(deprecated): this note's ck1 still uses the OLD bare
+            recoverable-ECDSA shape (no embedded pubkey) rather than the
+            current BIP-340 Schnorr pk||sig one - see
+            src/lib/recoverableNotes.ts's isLegacyCk1. Rotating burns it and
+            re-issues an equivalent note under the current scheme, closing
+            whatever exposure the deprecated signature format carries. */}
+            <Show when={k1() && isLegacyCk1(k1())}>
+              <span
+                class="bearer-legacy-ck1"
+                title="This note uses a deprecated ck1 signature format that will stop being supported - rotate it (above) to move it to the current scheme."
+              >
+                <IoWarningSharp />
+                &nbsp;deprecated format - rotate
               </span>
             </Show>
             <Show when={props.bearer.deviceId}>

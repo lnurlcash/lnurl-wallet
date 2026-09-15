@@ -9,6 +9,7 @@ import {
   serviceOriginOf,
   verifyNoteSignature,
   isCk1,
+  isLegacyCk1,
   isBolt11Invoice,
   decodeBolt11AmountMsat,
   decodeBolt11PaymentHash
@@ -109,9 +110,12 @@ const looksLikeNoteUrl = (value: unknown): boolean => {
 const noteKindDisplay = (value: unknown): string => {
   const k1 = noteK1(stripScheme(value))
   if (!k1) return '-'
-  return isCk1(k1)
-    ? 'LUD-25 Part 2 (ck1 signature, address-bound)'
-    : 'Legacy hash-keyed (Part 1)'
+  if (!isCk1(k1)) return 'Legacy hash-keyed (Part 1)'
+  // TODO(deprecated): a ck1 under the OLD bare recoverable-ECDSA shape -
+  // see src/lib/recoverableNotes.ts's isLegacyCk1
+  return isLegacyCk1(k1)
+    ? 'LUD-25 Part 2 (ck1 signature, address-bound) - DEPRECATED format, ask the holder to rotate this note'
+    : 'LUD-25 Part 2 (ck1 signature, address-bound)'
 }
 
 const noteAmountDisplay = (value: unknown): string => {

@@ -10,7 +10,9 @@ import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 afterEach(() => vi.unstubAllGlobals())
 
 const MINT_KEY = `02${'11'.repeat(32)}`
-const SIG_PATTERN = /^[0-9a-f]{130}$/
+// a 64-byte BIP-340 Schnorr signature (signAddressProof, luds#ck1) - was a
+// 65-byte recoverable-ECDSA one (130 hex chars) before that change
+const SIG_PATTERN = /^[0-9a-f]{128}$/
 
 describe('registerUsername', () => {
   it('POSTs cx1 and a sig proof to /p/{username}', async () => {

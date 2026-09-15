@@ -241,7 +241,8 @@ describe('mint address node identity', () => {
 describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   const secretKey = schnorr.utils.randomSecretKey()
   const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-  const ck1 = encodeCk1(signNoteOwnership(secretKey))
+  const ownership = signNoteOwnership(secretKey)
+  const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
   const cp1 = encodeCp1(pubkeyXOnly)
 
   it('still requires a certificate for a cp1 output', async () => {
@@ -476,10 +477,15 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
 
 describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgrade', () => {
   const secretKey = schnorr.utils.randomSecretKey()
-  const ck1 = encodeCk1(signNoteOwnership(secretKey))
+  const ownership = signNoteOwnership(secretKey)
+  const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
   // a second, distinct ck1 for the "every input" all-or-nothing checks
   const otherSecretKey = schnorr.utils.randomSecretKey()
-  const otherCk1 = encodeCk1(signNoteOwnership(otherSecretKey))
+  const otherOwnership = signNoteOwnership(otherSecretKey)
+  const otherCk1 = encodeCk1(
+    otherOwnership.pubkeyXOnly,
+    otherOwnership.signature
+  )
 
   afterEach(() => {
     // reset both provider singletons back to their unconfigured defaults so

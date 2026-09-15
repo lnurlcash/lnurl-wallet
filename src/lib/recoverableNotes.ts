@@ -7,9 +7,11 @@
 //   1. bech32m (BIP-350, NOT the classic bech32/BIP-173 this repo's own
 //      LUD-01 lnurl encoding in urls.ts uses) codecs for the 4 new fixed-
 //      length value types: cp1 (a note's pubkey commitment), ck1 (a
-//      recoverable ownership signature - the note's actual bearer secret),
-//      cs1 (a SERVICE issuance certificate), cx1 (a watch-only branch
-//      export: pubkey + chain code).
+//      BIP-340 Schnorr ownership signature, pubkey attached - the note's
+//      actual bearer secret; TODO(deprecated) still decodes the OLD bare
+//      recoverable-ECDSA shape too, see isLegacyCk1), cs1 (a SERVICE
+//      issuance certificate, still recoverable ECDSA - unchanged), cx1 (a
+//      watch-only branch export: pubkey + chain code).
 //   2. The non-hardened, taproot-style per-note key tweak a watch-only cx1
 //      branch derives pk_i from - this is NOT standard BIP32 child
 //      derivation (which hashes differently and needs HMAC-SHA512); it's
@@ -66,11 +68,70 @@ export const decodeCp1 = (value: string): Uint8Array | null =>
   decodeFixed('cp', value, 32)
 export const isCp1 = (value: string): boolean => decodeCp1(value) !== null
 
-export const encodeCk1 = (signature: Uint8Array): string =>
-  encodeFixed('ck', signature, 65)
-export const decodeCk1 = (value: string): Uint8Array | null =>
-  decodeFixed('ck', value, 65)
+// CURRENT form (2026-09-16, luds#ck1): a 32-byte BIP-340 x-only pubkey
+// concatenated with a 64-byte Schnorr signature over it - pk travels
+// alongside the signature explicitly, verified directly, rather than
+// recovered from it. 96 bytes total.
+export const CK1_LENGTH = 96
+
+// TODO(deprecated): the OLD ck1 shape - a bare 65-byte recoverable ECDSA
+// signature (r || s || recovery-id), no embedded pubkey; a verifier had to
+// ecrecover it back out. Kept only so a note minted before this scheme
+// changed still decodes - see signature.ts's legacyRecoverNoteOwnershipPubkey
+// for the matching (deprecated) recovery path, and isLegacyCk1 below for the
+// check a UI uses to warn a holder and prompt a rotate. Once no such notes
+// are expected to remain in the wild, this whole legacy branch (here and in
+// signature.ts) can be deleted outright.
+export const CK1_LEGACY_LENGTH = 65
+
+export type DecodedCk1 =
+  | {legacy: true; signature: Uint8Array}
+  | {legacy: false; pubkeyXOnly: Uint8Array; signature: Uint8Array}
+
+export const encodeCk1 = (
+  pubkeyXOnly: Uint8Array,
+  signature: Uint8Array
+): string =>
+  encodeFixed('ck', new Uint8Array([...pubkeyXOnly, ...signature]), CK1_LENGTH)
+
+const decodeCk1Bytes = (value: string): Uint8Array | null => {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed.startsWith('ck1')) return null
+  try {
+    const decoded = bech32m.decode(trimmed as `${string}1${string}`, false)
+    if (decoded.prefix !== 'ck') return null
+    return bech32m.fromWords(decoded.words)
+  } catch {
+    return null
+  }
+}
+
+export const decodeCk1 = (value: string): DecodedCk1 | null => {
+  const bytes = decodeCk1Bytes(value)
+  if (!bytes) return null
+  if (bytes.length === CK1_LENGTH) {
+    return {
+      legacy: false,
+      pubkeyXOnly: bytes.slice(0, 32),
+      signature: bytes.slice(32)
+    }
+  }
+  if (bytes.length === CK1_LEGACY_LENGTH) {
+    return {legacy: true, signature: bytes}
+  }
+  return null
+}
+
 export const isCk1 = (value: string): boolean => decodeCk1(value) !== null
+
+// TODO(deprecated): true iff `value` decodes as a ck1 under the OLD
+// recoverable-ECDSA shape (CK1_LEGACY_LENGTH) rather than the current
+// pk||sig one - a UI should treat this as "this note's bearer secret uses a
+// deprecated format" and prompt the holder to rotate it (see BearerCard.tsx),
+// closing the exposure and re-issuing it under the current scheme. Delete
+// alongside the rest of the legacy branch once it's no longer needed.
+export const isLegacyCk1 = (value: string): boolean =>
+  decodeCk1(value)?.legacy === true
 
 // LEGACY, fixed-HRP form: a cs1 certificate with no amount encoded in it
 // at all (SERVICE and WALLET had to carry amount_msat alongside it

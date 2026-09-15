@@ -138,7 +138,9 @@ export const scanRegisteredAddress = async (
       // while it was running - skip rather than crash; a re-scan once
       // unlocked again picks this index right back up
       if (!secretKey) continue
-      const ck1 = encodeCk1(signNoteOwnership(secretKey))
+      const {pubkeyXOnly: ownershipPubkey, signature: ownershipSignature} =
+        signNoteOwnership(secretKey)
+      const ck1 = encodeCk1(ownershipPubkey, ownershipSignature)
       // attach an already-disclosed offline-verification sig immediately
       // (see WithdrawRequestInfo's own comment) rather than requiring a
       // separate rotate/refresh afterward just to obtain one

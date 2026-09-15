@@ -211,7 +211,8 @@ export const nextCashAddressSecret = (domain: string): string | null => {
   const indices = readIndices(ADDRESS_STORAGE_KEY)
   indices[domain] = i + 1
   writeIndices(ADDRESS_STORAGE_KEY, indices)
-  return encodeCk1(signNoteOwnership(secretKey))
+  const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+  return encodeCk1(pubkeyXOnly, signature)
 }
 
 // same reload-survival reasoning as requireRecoverableCashSecret above -
