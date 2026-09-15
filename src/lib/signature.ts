@@ -291,7 +291,7 @@ export const signAddressProof = (
     branchIndexZeroSecretKey,
     {format: 'recovered', prehash: false}
   )
-  return new Uint8Array([...libSig.subarray(1), libSig[0]])
+  return new Uint8Array([...libSig.subarray(1), libSig[0]!])
 }
 
 // the public commitment a wallet-generated ck1 secret names, computed
