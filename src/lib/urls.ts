@@ -1,6 +1,6 @@
 import {bech32} from '@scure/base'
 import {isPreimage} from './bolt11'
-import {isCk1} from './recoverableNotes'
+import {isCk1, isCs1WithAmount, decodeCs1WithAmount} from './recoverableNotes'
 
 // LUD-25 LNURLcash - bearer assets. Draft spec:
 // https://github.com/lnurl/luds/blob/lnurlcash/25.md
@@ -243,13 +243,21 @@ export const requireNoteK1 = (url: string): string => {
 // by whoever encoded it (SERVICE ignores it at the informational endpoint),
 // safe to show before contacting SERVICE but not to be trusted without a
 // matching signature (see signature.ts's verifyNoteSignature) or a fresh
-// online GET
+// online GET. A separate `amount` param is redundant (and omitted - see
+// withNewK1/withoutK1) whenever `sig` is already an amount-encoding cs1
+// (25.md's "encode amount in offline sig"): its own human-readable part
+// carries the exact same value, so this falls back to decoding it from
+// there rather than duplicating it in the URL.
 export const noteDeclaredAmount = (url: string): number | null => {
   try {
-    const raw = new URL(url).searchParams.get('amount')
-    if (raw === null) return null
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : null
+    const parsed = new URL(url)
+    const raw = parsed.searchParams.get('amount')
+    if (raw !== null) {
+      const n = Number(raw)
+      return Number.isFinite(n) ? n : null
+    }
+    const sig = parsed.searchParams.get('sig')
+    return sig ? (decodeCs1WithAmount(sig)?.amountMsat ?? null) : null
   } catch {
     return null
   }
@@ -305,6 +313,17 @@ export const buildNoteUrl = (
   return url.toString()
 }
 
+// whether `amount` would be pure duplication alongside this signature - an
+// amount-encoding cs1 (25.md's "encode amount in offline sig") already
+// carries the exact same value in its own human-readable part (see
+// noteDeclaredAmount's read-side fallback), so a separate `amount` param
+// next to one is never written. Truthy check, not `!== undefined`: matches
+// the `if (signature)` check every caller of this pairs it with below, so
+// an empty-string signature (never written as `sig` either) can't disagree
+// with itself and cause `amount` to be dropped with nothing to replace it.
+const amountIsImpliedBySignature = (signature?: string): boolean =>
+  Boolean(signature) && isCs1WithAmount(signature!)
+
 // the same note with its secret swapped out - after rotate/split/merge. A
 // signature only carries over when the response actually returned a fresh
 // one for this k1.  An ambiguous or non-conformant response drops any stale
@@ -317,7 +336,11 @@ export const withNewK1 = (
 ): string => {
   const newUrl = new URL(url)
   newUrl.searchParams.set('k1', k1)
-  newUrl.searchParams.set('amount', String(amountMsat))
+  if (amountIsImpliedBySignature(signature)) {
+    newUrl.searchParams.delete('amount')
+  } else {
+    newUrl.searchParams.set('amount', String(amountMsat))
+  }
   if (signature) newUrl.searchParams.set('sig', signature)
   else newUrl.searchParams.delete('sig')
   return newUrl.toString()
@@ -334,20 +357,33 @@ export const withoutK1 = (
 ): string => {
   const newUrl = new URL(url)
   newUrl.searchParams.delete('k1')
-  newUrl.searchParams.set('amount', String(amountMsat))
+  if (amountIsImpliedBySignature(signature)) {
+    newUrl.searchParams.delete('amount')
+  } else {
+    newUrl.searchParams.set('amount', String(amountMsat))
+  }
   if (signature) newUrl.searchParams.set('sig', signature)
   else newUrl.searchParams.delete('sig')
   return newUrl.toString()
 }
 
-// strips a note's own sig, if any, leaving k1/amount/everything else
-// untouched - for a holder who'd rather hand over a note that can't be
-// checked offline against a pinned mint key than keep disclosing which
-// service issued it. Offline verification (signature.ts) already treats a
-// missing sig as simply unverifiable, never as an error, so a stripped
-// note remains an otherwise ordinary bearer note to whoever receives it.
+// strips a note's own sig, if any, leaving k1/everything else untouched -
+// for a holder who'd rather hand over a note that can't be checked offline
+// against a pinned mint key than keep disclosing which service issued it.
+// Offline verification (signature.ts) already treats a missing sig as
+// simply unverifiable, never as an error, so a stripped note remains an
+// otherwise ordinary bearer note to whoever receives it. `amount` needs
+// special care here: withNewK1/withoutK1 omit it whenever sig already
+// carries it (see amountIsImpliedBySignature above), so removing that sig
+// would silently drop the note's only declared value - backfilled as an
+// explicit param first, whenever there isn't one already.
 export const withoutSignature = (url: string): string => {
   const newUrl = new URL(url)
+  const sig = newUrl.searchParams.get('sig')
+  if (sig && !newUrl.searchParams.has('amount')) {
+    const decoded = decodeCs1WithAmount(sig)
+    if (decoded) newUrl.searchParams.set('amount', String(decoded.amountMsat))
+  }
   newUrl.searchParams.delete('sig')
   return newUrl.toString()
 }

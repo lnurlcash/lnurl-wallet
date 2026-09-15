@@ -15,6 +15,8 @@ import {
   noteSignature,
   buildNoteUrl,
   withNewK1,
+  withoutK1,
+  withoutSignature,
   serverOf,
   serviceOriginOf,
   noteEndpointOf,
@@ -22,6 +24,7 @@ import {
   lightningAddressUsername,
   isAllowedServiceUrl
 } from './urls'
+import {encodeCs1WithAmount} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 const NOTE_URL = `https://mint.example.com/withdraw?k1=${K1}&amount=21000`
@@ -344,5 +347,52 @@ describe('note helpers', () => {
     // rotating again without a signature drops the stale one
     const reRotated = withNewK1(signed, 'c'.repeat(64), 15000)
     expect(noteSignature(reRotated)).toBeNull()
+  })
+
+  describe('amount vs. an amount-encoding cs1 sig', () => {
+    const sig65 = new Uint8Array(65).fill(0xab)
+    const cs1 = encodeCs1WithAmount(15000, sig65) // e.g. 'cs150n1...'
+
+    it('withNewK1/withoutK1 omit amount entirely once sig already carries it', () => {
+      const rotated = withNewK1(NOTE_URL, 'b'.repeat(64), 15000, cs1)
+      expect(new URL(rotated).searchParams.has('amount')).toBe(false)
+      expect(noteSignature(rotated)).toBe(cs1)
+      // still readable - just decoded from sig instead of a separate param
+      expect(noteDeclaredAmount(rotated)).toBe(15000)
+
+      const blanked = withoutK1(NOTE_URL, 15000, cs1)
+      expect(new URL(blanked).searchParams.has('k1')).toBe(false)
+      expect(new URL(blanked).searchParams.has('amount')).toBe(false)
+      expect(noteDeclaredAmount(blanked)).toBe(15000)
+    })
+
+    it('keeps a separate amount param for a legacy hex sig or no sig at all', () => {
+      const hexSigned = withNewK1(NOTE_URL, 'b'.repeat(64), 15000, 'deadbeef')
+      expect(new URL(hexSigned).searchParams.get('amount')).toBe('15000')
+
+      const unsigned = withNewK1(NOTE_URL, 'b'.repeat(64), 15000)
+      expect(new URL(unsigned).searchParams.get('amount')).toBe('15000')
+    })
+
+    it('withoutSignature backfills amount when stripping the sig that alone carried it', () => {
+      const rotated = withNewK1(NOTE_URL, 'b'.repeat(64), 15000, cs1)
+      expect(new URL(rotated).searchParams.has('amount')).toBe(false)
+
+      const stripped = withoutSignature(rotated)
+      expect(noteSignature(stripped)).toBeNull()
+      expect(new URL(stripped).searchParams.get('amount')).toBe('15000')
+      expect(noteDeclaredAmount(stripped)).toBe(15000)
+    })
+
+    it('withoutSignature leaves an already-present amount untouched', () => {
+      const signed = withNewK1(NOTE_URL, 'b'.repeat(64), 15000, 'deadbeef')
+      const stripped = withoutSignature(signed)
+      expect(noteSignature(stripped)).toBeNull()
+      expect(new URL(stripped).searchParams.get('amount')).toBe('15000')
+    })
+
+    it('withoutSignature is a no-op on a note with no sig at all', () => {
+      expect(withoutSignature(NOTE_URL)).toBe(NOTE_URL)
+    })
   })
 })
