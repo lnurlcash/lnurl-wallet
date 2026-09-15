@@ -12,7 +12,11 @@ import {MdSharpKeyboard} from 'solid-icons/md'
 import type {Bearer} from '../storage'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
-import type {PayRequestInfo, MeltResult, InternalTransferResult} from '../lnurlcash'
+import type {
+  PayRequestInfo,
+  MeltResult,
+  InternalTransferResult
+} from '../lnurlcash'
 import {
   isBolt11Invoice,
   isLightningAddress,
@@ -1121,12 +1125,14 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                 }}
               />
               <Show
-                when={internalTransferHint() && internalTransferAvailableMsat() > 0}
+                when={
+                  internalTransferHint() && internalTransferAvailableMsat() > 0
+                }
               >
                 <p class="bearer-hint">
-                  You hold {msatToSats(internalTransferAvailableMsat())} sats
-                  at {serverOf(info().callback)} - paying this address can
-                  skip Lightning entirely (LUD-25 internal transfer).
+                  You hold {msatToSats(internalTransferAvailableMsat())} sats at{' '}
+                  {serverOf(info().callback)} - paying this address can skip
+                  Lightning entirely (LUD-25 internal transfer).
                 </p>
               </Show>
               <Show
@@ -1174,8 +1180,8 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                 <p class="warning">
                   Send {lnAddressAmountSats()} sats to{' '}
                   {lnAddressText() || 'this address'} directly at{' '}
-                  {serverOf(info().callback)} - no Lightning payment
-                  involved. This can't be undone.
+                  {serverOf(info().callback)} - no Lightning payment involved.
+                  This can't be undone.
                 </p>
                 <div class="btns">
                   <button
