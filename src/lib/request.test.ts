@@ -482,7 +482,10 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
   // a second, distinct ck1 for the "every input" all-or-nothing checks
   const otherSecretKey = schnorr.utils.randomSecretKey()
   const otherOwnership = signNoteOwnership(otherSecretKey)
-  const otherCk1 = encodeCk1(otherOwnership.pubkeyXOnly, otherOwnership.signature)
+  const otherCk1 = encodeCk1(
+    otherOwnership.pubkeyXOnly,
+    otherOwnership.signature
+  )
 
   afterEach(() => {
     // reset both provider singletons back to their unconfigured defaults so

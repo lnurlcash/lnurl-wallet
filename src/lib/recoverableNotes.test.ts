@@ -58,10 +58,16 @@ describe('bech32m codec', () => {
       bech32m.toWords(legacySignature),
       false
     )
-    expect(decodeCk1(encoded)).toEqual({legacy: true, signature: legacySignature})
+    expect(decodeCk1(encoded)).toEqual({
+      legacy: true,
+      signature: legacySignature
+    })
     expect(isCk1(encoded)).toBe(true)
     expect(isLegacyCk1(encoded)).toBe(true)
-    const current = encodeCk1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(64)))
+    const current = encodeCk1(
+      hexToBytes('ab'.repeat(32)),
+      hexToBytes('cd'.repeat(64))
+    )
     expect(isLegacyCk1(current)).toBe(false)
   })
 
@@ -202,7 +208,10 @@ describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
     })
 
     it('rejects anything that is neither', () => {
-      const ck1 = encodeCk1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(64)))
+      const ck1 = encodeCk1(
+        hexToBytes('ab'.repeat(32)),
+        hexToBytes('cd'.repeat(64))
+      )
       expect(decodeAnyCs1(ck1)).toBeNull()
       expect(isAnyCs1(ck1)).toBe(false)
     })

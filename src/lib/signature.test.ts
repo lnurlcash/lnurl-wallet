@@ -294,10 +294,7 @@ describe('recoverNoteOwnershipPubkey', () => {
       format: 'recovered',
       prehash: false
     })
-    const legacySignature = new Uint8Array([
-      ...libSig.subarray(1),
-      libSig[0]!
-    ])
+    const legacySignature = new Uint8Array([...libSig.subarray(1), libSig[0]!])
     const legacyCk1 = bech32m.encode(
       'ck',
       bech32m.toWords(legacySignature),

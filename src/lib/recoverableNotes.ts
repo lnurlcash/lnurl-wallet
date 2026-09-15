@@ -92,11 +92,7 @@ export const encodeCk1 = (
   pubkeyXOnly: Uint8Array,
   signature: Uint8Array
 ): string =>
-  encodeFixed(
-    'ck',
-    new Uint8Array([...pubkeyXOnly, ...signature]),
-    CK1_LENGTH
-  )
+  encodeFixed('ck', new Uint8Array([...pubkeyXOnly, ...signature]), CK1_LENGTH)
 
 const decodeCk1Bytes = (value: string): Uint8Array | null => {
   const trimmed = value.trim().toLowerCase()
