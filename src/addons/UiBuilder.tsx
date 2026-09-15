@@ -35,7 +35,9 @@ const NODE_TYPES: UiNode['type'][] = [
   'Button',
   'For',
   'Show',
-  'QrDisplay'
+  'QrDisplay',
+  'List',
+  'JsonDisplay'
 ]
 
 // pure documentation, not a schema - the actual args stay a scoped JSON
@@ -613,6 +615,38 @@ const NodeInspector: Component<NodeInspectorProps> = props => {
         return (
           <ExprEditor
             label="Value"
+            expr={n().value}
+            onChange={value => update({...n(), value})}
+          />
+        )
+      }
+      case 'List': {
+        const n = () => node() as Extract<UiNode, {type: 'List'}>
+        return (
+          <>
+            <ExprEditor
+              label="Each (list to iterate)"
+              expr={n().each}
+              onChange={each => update({...n(), each})}
+            />
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(n().ordered)}
+                onChange={e =>
+                  update({...n(), ordered: e.currentTarget.checked})
+                }
+              />
+              &nbsp;Ordered (renders &lt;ol&gt; instead of &lt;ul&gt;)
+            </label>
+          </>
+        )
+      }
+      case 'JsonDisplay': {
+        const n = () => node() as Extract<UiNode, {type: 'JsonDisplay'}>
+        return (
+          <ExprEditor
+            label="Value (JSON value or string)"
             expr={n().value}
             onChange={value => update({...n(), value})}
           />

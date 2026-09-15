@@ -225,7 +225,9 @@ describe('defaultNodeFor', () => {
     'Button',
     'For',
     'Show',
-    'QrDisplay'
+    'QrDisplay',
+    'List',
+    'JsonDisplay'
   ]
 
   it('produces a manifest-valid node for every type', () => {
@@ -274,6 +276,20 @@ describe('describeNode / describeExprShort', () => {
     )
     expect(describeNode({type: 'QrDisplay', value: {var: 'url'}})).toBe(
       'QrDisplay {url}'
+    )
+    expect(
+      describeNode({type: 'List', each: {var: 'entries'}, children: []})
+    ).toBe('List each {entries}')
+    expect(
+      describeNode({
+        type: 'List',
+        ordered: true,
+        each: {var: 'entries'},
+        children: []
+      })
+    ).toBe('List (ordered) each {entries}')
+    expect(describeNode({type: 'JsonDisplay', value: {var: 'response'}})).toBe(
+      'JsonDisplay {response}'
     )
   })
 

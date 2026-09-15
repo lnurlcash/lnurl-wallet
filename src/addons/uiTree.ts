@@ -11,8 +11,11 @@ export type NodePath = number[]
 
 export const isContainer = (
   node: UiNode
-): node is Extract<UiNode, {type: 'View' | 'For' | 'Show'}> =>
-  node.type === 'View' || node.type === 'For' || node.type === 'Show'
+): node is Extract<UiNode, {type: 'View' | 'For' | 'Show' | 'List'}> =>
+  node.type === 'View' ||
+  node.type === 'For' ||
+  node.type === 'Show' ||
+  node.type === 'List'
 
 export const childrenOf = (node: UiNode): UiNode[] | undefined =>
   isContainer(node) ? (node.children ?? []) : undefined
@@ -140,6 +143,10 @@ export const defaultNodeFor = (type: UiNode['type']): UiNode => {
       return {type: 'Show', when: false, children: []}
     case 'QrDisplay':
       return {type: 'QrDisplay', value: ''}
+    case 'List':
+      return {type: 'List', each: [], children: []}
+    case 'JsonDisplay':
+      return {type: 'JsonDisplay', value: ''}
   }
 }
 
@@ -175,6 +182,10 @@ export const describeNode = (node: UiNode): string => {
       return `Show when ${describeExprShort(node.when)}`
     case 'QrDisplay':
       return `QrDisplay ${describeExprShort(node.value)}`
+    case 'List':
+      return `${node.ordered ? 'List (ordered)' : 'List'} each ${describeExprShort(node.each)}`
+    case 'JsonDisplay':
+      return `JsonDisplay ${describeExprShort(node.value)}`
   }
 }
 
@@ -248,7 +259,9 @@ const UI_NODE_TYPES = new Set([
   'Button',
   'For',
   'Show',
-  'QrDisplay'
+  'QrDisplay',
+  'List',
+  'JsonDisplay'
 ])
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>

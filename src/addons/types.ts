@@ -71,6 +71,15 @@ export type UiNode =
   | {type: 'For'; each: Expr; children: UiNode[]}
   | {type: 'Show'; when: Expr; children: UiNode[]}
   | {type: 'QrDisplay'; value: Expr}
+  // renders as an actual <ol>/<ul> with each item's children wrapped in an
+  // <li> - unlike 'For' (which leaves list semantics to whatever the
+  // children happen to be), this is for content that genuinely reads as a
+  // list, e.g. LUD-06 metadata entries
+  | {type: 'List'; each: Expr; ordered?: boolean; children: UiNode[]}
+  // pretty-prints an arbitrary JSON value (or a JSON string, parsed first)
+  // with indentation and syntax colouring - the generic counterpart to
+  // hand-rolling a JSON.stringify Text block per addon
+  | {type: 'JsonDisplay'; value: Expr}
 
 export type Permission = {verb: string; scope?: string; reason: string}
 

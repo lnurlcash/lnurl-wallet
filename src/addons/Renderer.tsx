@@ -41,6 +41,92 @@ type Vars = Record<string, unknown> & {
   __indexOf?: () => number
 }
 
+// 'JsonDisplay' accepts either an already-parsed value or a raw JSON
+// string (e.g. straight from a fetch response's body) - falls back to the
+// original string on a parse failure rather than throwing, so a malformed
+// body still renders as something instead of blanking the whole block
+const tryParseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+const JSON_INDENT = '  '
+
+// pure recursive pretty-printer for 'JsonDisplay' - no external syntax
+// highlighter, just span classes the stylesheet colours (see .addon-json-*
+// in style.scss), so it stays within the same "no arbitrary code" rules as
+// every other renderer primitive
+const renderJsonValue = (value: unknown, depth = 0): JSX.Element => {
+  const pad = JSON_INDENT.repeat(depth)
+  const childPad = JSON_INDENT.repeat(depth + 1)
+
+  if (value === null || value === undefined)
+    return <span class="addon-json-null">null</span>
+  if (typeof value === 'boolean')
+    return <span class="addon-json-bool">{String(value)}</span>
+  if (typeof value === 'number')
+    return <span class="addon-json-number">{String(value)}</span>
+  if (typeof value === 'string')
+    return <span class="addon-json-string">{JSON.stringify(value)}</span>
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span class="addon-json-punct">[]</span>
+    return (
+      <span>
+        <span class="addon-json-punct">[</span>
+        {'\n'}
+        <For each={value}>
+          {(item, index) => (
+            <>
+              {childPad}
+              {renderJsonValue(item, depth + 1)}
+              <span class="addon-json-punct">
+                {index() < value.length - 1 ? ',' : ''}
+              </span>
+              {'\n'}
+            </>
+          )}
+        </For>
+        {pad}
+        <span class="addon-json-punct">]</span>
+      </span>
+    )
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0)
+      return <span class="addon-json-punct">{'{}'}</span>
+    return (
+      <span>
+        <span class="addon-json-punct">{'{'}</span>
+        {'\n'}
+        <For each={entries}>
+          {([key, val], index) => (
+            <>
+              {childPad}
+              <span class="addon-json-key">{JSON.stringify(key)}</span>
+              <span class="addon-json-punct">: </span>
+              {renderJsonValue(val, depth + 1)}
+              <span class="addon-json-punct">
+                {index() < entries.length - 1 ? ',' : ''}
+              </span>
+              {'\n'}
+            </>
+          )}
+        </For>
+        {pad}
+        <span class="addon-json-punct">{'}'}</span>
+      </span>
+    )
+  }
+
+  return <span>{String(value)}</span>
+}
+
 const AddonRenderer: Component<AddonRendererProps> = props => {
   const wallet = useWallet()
   const {client: deviceClient} = useDevice()
@@ -342,6 +428,31 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
             {renderChildren(node.children, vars)}
           </Show>
         )
+
+      case 'List': {
+        const Tag = node.ordered ? 'ol' : 'ul'
+        return (
+          <Tag class="addon-list-block">
+            <For each={(resolveExpr(node.each, vars) as unknown[]) ?? []}>
+              {(item, index) => {
+                const itemVars: Vars = {
+                  ...vars,
+                  item: item as object,
+                  __indexOf: index
+                }
+                return <li>{renderChildren(node.children, itemVars)}</li>
+              }}
+            </For>
+          </Tag>
+        )
+      }
+
+      case 'JsonDisplay': {
+        const resolved = resolveExpr(node.value, vars)
+        const value =
+          typeof resolved === 'string' ? tryParseJson(resolved) : resolved
+        return <pre class="addon-json">{renderJsonValue(value)}</pre>
+      }
 
       case 'QrDisplay':
         return <Qr value={String(resolveExpr(node.value, vars) ?? '')} />

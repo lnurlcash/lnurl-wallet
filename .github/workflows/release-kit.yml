@@ -25,8 +25,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  # A wallet tag pushes here unconditionally (same tag drives deploy.yml),
+  # but most wallet releases never touch src/lib at all - publishing an
+  # unchanged tarball under a new version number every time would be noise,
+  # not a real release. This job is the sole gate: everything below only
+  # runs when src/lib actually differs from the last plain vX.Y.Z tag.
+  # deploy.yml's own release job runs the same comparison independently (no
+  # data passed between the two separately-triggered workflows) to note the
+  # same outcome on the wallet's GitHub Release.
+  check-changed:
     if: startsWith(inputs.tag || github.ref_name, 'v')
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Has src/lib changed since the last plain release tag?
+        id: diff
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # "the last release" = the plain vX.Y.Z tag immediately BEFORE
+          # this one in version order - walking the sorted list to find
+          # RELEASE_TAG's own neighbour (rather than just the newest tag
+          # that isn't RELEASE_TAG) matters for a workflow_dispatch re-run
+          # against an older tag after newer ones already exist: that must
+          # still compare against ITS OWN predecessor, not skip past every
+          # tag released since. Deliberately excludes anything with a
+          # prerelease/build suffix ('v*.*.*' itself would also match
+          # v0.14.0-rc.0), so a one-time bootstrap prerelease is never the
+          # comparison point. No prior plain tag at all (a first-ever
+          # release, or RELEASE_TAG itself isn't a plain vX.Y.Z tag) always
+          # counts as changed - there's nothing to diff.
+          mapfile -t tags < <(git tag --list 'v*.*.*' --sort=-v:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+          previous_tag=""
+          found_current=false
+          for t in "${tags[@]}"; do
+            if [[ "$found_current" == true ]]; then
+              previous_tag="$t"
+              break
+            fi
+            [[ "$t" == "$RELEASE_TAG" ]] && found_current=true
+          done
+          if [[ -z "$previous_tag" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$previous_tag" HEAD -- src/lib; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check-changed
+    if: needs.check-changed.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     outputs:
       filename: ${{ steps.pack.outputs.filename }}
@@ -119,7 +178,14 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' || inputs.publish == true
+    # a custom `if:` replaces the implicit success() check entirely, so
+    # build's own outcome must be re-checked explicitly here too - without
+    # this, build being skipped (check-changed found nothing to publish)
+    # wouldn't stop this job from trying to run anyway and failing when it
+    # goes looking for an artefact that was never produced
+    if: |
+      needs.build.result == 'success' &&
+      (github.event_name == 'push' || inputs.publish == true)
     runs-on: ubuntu-24.04
     environment:
       name: npm-publish

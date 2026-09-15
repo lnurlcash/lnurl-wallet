@@ -66,17 +66,6 @@ const formatLnurlResponse = (response: unknown): string => {
       `Withdrawable: ${Math.floor(b.minWithdrawable / 1000).toLocaleString()} - ${Math.floor(b.maxWithdrawable / 1000).toLocaleString()} sats`
     )
   }
-  if (typeof b.metadata === 'string') {
-    try {
-      const entries: unknown = JSON.parse(b.metadata)
-      const textEntry = Array.isArray(entries)
-        ? entries.find(e => Array.isArray(e) && e[0] === 'text/plain')
-        : null
-      if (textEntry) lines.push(`Description: ${textEntry[1]}`)
-    } catch {
-      // metadata wasn't valid JSON - the raw JSON dump below still shows it
-    }
-  }
   if (typeof b.defaultDescription === 'string') {
     lines.push(`Description: ${b.defaultDescription}`)
   }
@@ -88,13 +77,86 @@ const formatLnurlResponse = (response: unknown): string => {
   if (typeof b.commentAllowed === 'number') {
     lines.push(`Comment allowed: ${b.commentAllowed} characters`)
   }
+  if (b.allowsNostr === true) {
+    lines.push(
+      `Nostr zaps (NIP-57): allowed${typeof b.nostrPubkey === 'string' ? ` (pubkey ${b.nostrPubkey})` : ''}`
+    )
+  }
   return lines.join('\n')
 }
 
-const rawResponseDisplay = (response: unknown): string => {
-  const body = (response as FetchResult)?.body
-  return body ? JSON.stringify(body, null, 2) : ''
+// the raw response body as-is (not pre-stringified) - 'JsonDisplay' does
+// its own parsing/formatting, so this just hands over the value
+const rawResponseValue = (response: unknown): unknown =>
+  (response as FetchResult)?.body ?? null
+
+// human-readable labels for the LUD-06 metadata types worth calling out by
+// name; anything else still shows up in the list under its raw mime type
+const METADATA_LABELS: Record<string, string> = {
+  'text/plain': 'Description',
+  'text/long-desc': 'Long description',
+  'text/email': 'Email',
+  'text/identifier': 'Identifier',
+  'image/png;base64': 'Image (PNG, base64)',
+  'image/jpeg;base64': 'Image (JPEG, base64)',
+  // this wallet's own LUD-25 Part 2 extension - see internalTransfer.ts's
+  // parseInternalTransferHint, `cx1<...>:<i>`
+  'text/xpub': 'Internal transfer xpub (LUD-25)'
 }
+
+const MAX_METADATA_VALUE_LENGTH = 160
+
+const truncateMetadataValue = (value: string): string =>
+  value.length > MAX_METADATA_VALUE_LENGTH
+    ? `${value.slice(0, MAX_METADATA_VALUE_LENGTH)}… (${value.length} chars)`
+    : value
+
+type MetadataEntry = {label: string; value: string}
+
+// LUD-06's metadata field is a JSON-encoded array of [type, value] pairs -
+// parses it into a flat list the UI can render as an <ol>, one <li> per
+// entry, instead of hand-picking just the text/plain description like
+// before. Never throws on an unexpected shape - an empty list just hides
+// the metadata section (see hasMetadataEntries below).
+const metadataEntries = (response: unknown): MetadataEntry[] => {
+  const body = (response as FetchResult)?.body
+  if (!body || typeof body !== 'object') return []
+  const metadata = (body as Record<string, unknown>).metadata
+  if (typeof metadata !== 'string') return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(metadata)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const raw = parsed
+    .filter(
+      (entry): entry is [string, unknown] =>
+        Array.isArray(entry) && typeof entry[0] === 'string'
+    )
+    .map(([type, value]) => ({
+      label: METADATA_LABELS[type] ?? type,
+      value: truncateMetadataValue(
+        typeof value === 'string' ? value : JSON.stringify(value)
+      )
+    }))
+  // LUD-06 allows the same metadata type more than once (e.g. two
+  // "text/plain" entries) - number same-labelled entries (Description 1,
+  // Description 2, ...) instead of showing several identical-looking
+  // "Description" rows a holder can't tell apart
+  const counts: Record<string, number> = {}
+  for (const entry of raw) counts[entry.label] = (counts[entry.label] ?? 0) + 1
+  const seen: Record<string, number> = {}
+  return raw.map(entry => {
+    if (counts[entry.label] === 1) return entry
+    seen[entry.label] = (seen[entry.label] ?? 0) + 1
+    return {...entry, label: `${entry.label} ${seen[entry.label]}`}
+  })
+}
+
+const hasMetadataEntries = (response: unknown): boolean =>
+  metadataEntries(response).length > 0
 
 const lnurlToolsManifest: AddonManifest = {
   id: 'lnurl-tools',
@@ -172,11 +234,30 @@ const lnurlToolsManifest: AddonManifest = {
             value: {helper: 'formatLnurlResponse', args: [{var: 'response'}]},
             style: 'response-block'
           },
+          {
+            type: 'Show',
+            when: {helper: 'hasMetadataEntries', args: [{var: 'response'}]},
+            children: [
+              {type: 'Text', value: 'Metadata', style: 'subheading'},
+              {
+                type: 'List',
+                ordered: true,
+                each: {helper: 'metadataEntries', args: [{var: 'response'}]},
+                children: [
+                  {
+                    type: 'Text',
+                    value: {
+                      cat: [{var: 'item.label'}, ': ', {var: 'item.value'}]
+                    }
+                  }
+                ]
+              }
+            ]
+          },
           {type: 'Text', value: 'Raw JSON', style: 'subheading'},
           {
-            type: 'Text',
-            value: {helper: 'rawResponseDisplay', args: [{var: 'response'}]},
-            style: 'response-block'
+            type: 'JsonDisplay',
+            value: {helper: 'rawResponseValue', args: [{var: 'response'}]}
           }
         ]
       }
@@ -190,7 +271,9 @@ const lnurlToolsHelpers: Record<string, AddonHelper> = {
   hasResponse: hasResponse as AddonHelper,
   resolvedUrlDisplay: resolvedUrlDisplay as AddonHelper,
   formatLnurlResponse: formatLnurlResponse as AddonHelper,
-  rawResponseDisplay: rawResponseDisplay as AddonHelper
+  rawResponseValue: rawResponseValue as AddonHelper,
+  metadataEntries: metadataEntries as AddonHelper,
+  hasMetadataEntries: hasMetadataEntries as AddonHelper
 }
 
 export const lnurlToolsAddon: Addon = {

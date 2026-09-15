@@ -120,7 +120,9 @@ const UI_NODE_TYPES = new Set([
   'Button',
   'For',
   'Show',
-  'QrDisplay'
+  'QrDisplay',
+  'List',
+  'JsonDisplay'
 ])
 
 const isUiNode = (v: unknown, path: string): string | null => {
@@ -153,6 +155,13 @@ const isUiNode = (v: unknown, path: string): string | null => {
         isUiNodeArray(v.children, `${path}.children`)
       )
     case 'QrDisplay':
+      return isExpr(v.value, `${path}.value`)
+    case 'List':
+      return (
+        isExpr(v.each, `${path}.each`) ??
+        isUiNodeArray(v.children, `${path}.children`)
+      )
+    case 'JsonDisplay':
       return isExpr(v.value, `${path}.value`)
   }
 }

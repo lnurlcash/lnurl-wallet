@@ -39,6 +39,13 @@ describe('validateManifest', () => {
             children: [{type: 'QrDisplay', value: {var: 'url'}}]
           },
           {
+            type: 'List',
+            ordered: true,
+            each: {var: 'entries'},
+            children: [{type: 'Text', value: {var: 'item.label'}}]
+          },
+          {type: 'JsonDisplay', value: {var: 'response'}},
+          {
             type: 'Button',
             label: 'Go',
             onClick: {

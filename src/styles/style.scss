@@ -1989,6 +1989,56 @@ nav {
   margin: 4px 0 12px 0;
 }
 
+// the addon DSL's 'List' node (see Renderer.tsx) - a real <ol>/<ul>, e.g.
+// LNURL Tools' metadata entries, so it keeps browser-native numbering/
+// markers instead of each addon faking one with a "#N" Text prefix
+.addon-list-block {
+  margin: 4px 0 12px 0;
+  padding-left: 22px;
+  li {
+    margin: 2px 0;
+    word-break: break-word;
+  }
+}
+
+// the addon DSL's 'JsonDisplay' node - same block treatment as
+// .addon-response-block (monospace, bordered, wraps long lines) plus
+// per-token colouring from renderJsonValue's span classes below
+.addon-json {
+  display: block;
+  font-family: monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba($font-color, 0.3);
+  border-radius: 5px;
+  padding: 10px 12px;
+  margin: 4px 0 12px 0;
+}
+
+.addon-json-key {
+  color: #e4c567;
+}
+
+.addon-json-string {
+  color: #6c6;
+}
+
+.addon-json-number {
+  color: #69c;
+}
+
+.addon-json-bool,
+.addon-json-null {
+  color: $font-color;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.addon-json-punct {
+  opacity: 0.55;
+}
+
 .addon-row {
   display: flex;
   flex-wrap: wrap;

@@ -97,6 +97,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout full history
+        # needed only to find the previous plain release tag for the
+        # @lnurlcash/kit status note below - release-kit.yml's own
+        # check-changed job runs the identical comparison independently to
+        # decide whether to actually publish; nothing is shared between
+        # the two separately-triggered workflow runs beyond both starting
+        # from the same tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
@@ -105,12 +116,66 @@ jobs:
         run: |
           tar -czf "lnurl-wallet-${GITHUB_REF_NAME}.tar.gz" -C dist .
           sha256sum "lnurl-wallet-${GITHUB_REF_NAME}.tar.gz" > "lnurl-wallet-${GITHUB_REF_NAME}.tar.gz.sha256"
+      - name: Note whether @lnurlcash/kit changed in this release
+        id: kit-note
+        run: |
+          set -euo pipefail
+          # same version-walk as release-kit.yml's own check-changed job
+          # (see its comment for why "the newest tag that isn't this one"
+          # is the wrong comparison) - kept independent rather than shared,
+          # since this workflow and that one are triggered separately and
+          # never pass data between runs
+          mapfile -t tags < <(git tag --list 'v*.*.*' --sort=-v:refname \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+          previous_tag=""
+          found_current=false
+          for t in "${tags[@]}"; do
+            if [[ "$found_current" == true ]]; then
+              previous_tag="$t"
+              break
+            fi
+            [[ "$t" == "$GITHUB_REF_NAME" ]] && found_current=true
+          done
+          {
+            echo "note<<KITNOTE"
+            if [[ -z "$previous_tag" ]]; then
+              echo "**@lnurlcash/kit:** published as \`@lnurlcash/kit@${GITHUB_REF_NAME#v}\` (first release)."
+            elif git diff --quiet "$previous_tag" "$GITHUB_REF_NAME" -- src/lib; then
+              echo "**@lnurlcash/kit:** unchanged since \`$previous_tag\` - not republished (still \`@lnurlcash/kit@${previous_tag#v}\` on npm)."
+            else
+              echo "**@lnurlcash/kit:** published as \`@lnurlcash/kit@${GITHUB_REF_NAME#v}\`. Changes since \`$previous_tag\`:"
+              echo
+              echo '<details><summary>src/lib diff --stat</summary>'
+              echo
+              echo '```'
+              git diff --stat "$previous_tag" "$GITHUB_REF_NAME" -- src/lib
+              echo '```'
+              echo '</details>'
+            fi
+            echo "KITNOTE"
+          } >> "$GITHUB_OUTPUT"
       - env:
           GH_TOKEN: ${{ github.token }}
+          # passed as an env var, never interpolated straight into the
+          # script below - the note's own content (backticks, `$`, code
+          # fences) would otherwise be substituted as literal shell text
+          # before bash ever sees it, the same injection class GitHub's
+          # own docs warn against for any ${{ }} expression carrying
+          # non-literal content into a run: block
+          KIT_NOTE: ${{ steps.kit-note.outputs.note }}
         run: |
+          set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             "lnurl-wallet-${GITHUB_REF_NAME}.tar.gz" \
             "lnurl-wallet-${GITHUB_REF_NAME}.tar.gz.sha256"
+          # gh release create has no way to append to its own
+          # --generate-notes output in one call, so the kit note is added
+          # as a follow-up edit rather than replacing the auto-generated
+          # PR notes entirely
+          body="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes "$(printf '%s\n\n---\n\n%s' "$body" "$KIT_NOTE")"
