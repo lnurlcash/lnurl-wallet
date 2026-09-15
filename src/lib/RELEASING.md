@@ -25,15 +25,24 @@ provenance. A missing or mismatched trusted publisher should fail closed.
 
 ## Each release
 
-1. Choose the next version for both the wallet and kit, then update the kit's
-   `package.json` and `CHANGELOG.md` in a reviewed pull request.
+The version is never hand-bumped in `package.json` - `src/lib/package.json`'s
+own checked-in `version` (`0.0.0-dev`) is a placeholder, overwritten by
+`release-kit.yml`'s own `npm version "${RELEASE_TAG#v}" --no-git-tag-version`
+step from whichever tag actually triggered the run. This mirrors how the
+wallet's own displayed version already works (`scripts/git-version.mjs` -
+`git describe --tags`, no hand-bumped field either): cutting a release is just
+tagging a commit, nothing to remember to keep in sync first.
+
+1. (Optional but recommended) Add a `CHANGELOG.md` entry summarising what's
+   new, in a reviewed pull request.
 2. Require the wallet CI and the independent `src/lib` package gate to pass.
-3. Merge, then create the shared `vX.Y.Z` tag at that exact merge commit. The
-   tag must exactly equal `v` plus the version in `src/lib/package.json`.
+3. Merge, then create the shared `vX.Y.Z` tag at that exact merge commit -
+   any valid semver works, npm itself rejects anything else.
 4. Pushing the tag starts both release workflows. The wallet is tested and
-   deployed at `X.Y.Z`; `release-kit.yml` independently rebuilds and tests the
-   package, packs one tarball, performs a dry-run publish and uploads that same
-   tarball through npm OIDC as `@lnurlcash/kit@X.Y.Z`.
+   deployed at `X.Y.Z`; `release-kit.yml` independently sets the package
+   version from the tag, rebuilds and tests the package, packs one tarball,
+   performs a dry-run publish and uploads that same tarball through npm OIDC
+   as `@lnurlcash/kit@X.Y.Z`.
 5. Verify the workflow, npm version, repository metadata and provenance before
    announcing the release.
 

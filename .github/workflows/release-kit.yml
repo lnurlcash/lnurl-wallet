@@ -51,18 +51,21 @@ jobs:
           node-version: 24.11.0
           registry-url: https://registry.npmjs.org
 
-      - name: Verify tag and package version
+      - name: Derive and set the package version from the release tag
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         working-directory: src/lib
         run: |
           set -euo pipefail
-          package_version="$(node --print "require('./package.json').version")"
-          expected_tag="v${package_version}"
-          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
-            echo "::error::Expected tag $expected_tag, got $RELEASE_TAG"
-            exit 1
-          fi
+          # The tag is the sole source of truth for what gets published -
+          # same "cutting a release is just tagging a commit" model the
+          # wallet's own displayed version already uses
+          # (scripts/git-version.mjs), applied here to package.json's
+          # version field instead of a JS runtime string. There's no
+          # separate "remember to also bump package.json in a PR first"
+          # step to forget (see RELEASING.md) - npm itself rejects
+          # anything that isn't a valid semver.
+          npm version "${RELEASE_TAG#v}" --no-git-tag-version --allow-same-version
 
       - name: Install package dependencies
         working-directory: src/lib
