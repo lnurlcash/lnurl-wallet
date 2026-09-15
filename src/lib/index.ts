@@ -14,6 +14,7 @@ export * from './net'
 export * from './request'
 export * from './mintRequest'
 export * from './addresses'
+export * from './internalTransfer'
 export * from './recoverableNotes'
 export {
   configureSecretProvider,

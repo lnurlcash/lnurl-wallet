@@ -504,8 +504,11 @@ export type RotateResult = {k1: string; signature: string}
 // generatePubkeySecret returning null (no Part 2 provider configured, or
 // the seed-derived key isn't available right now) always falls back to
 // the ordinary legacy provider, same as an application that never wired
-// Part 2 up at all - this never throws on its own.
-const generateOutputSecret = (
+// Part 2 up at all - this never throws on its own. Exported: reused by
+// internalTransfer.ts for a split's own change output, the one output of
+// an internal transfer this wallet actually keeps for itself (the other
+// output names the recipient's pk_i directly - see payInternalTransfer).
+export const generateOutputSecret = (
   domain: string,
   preferPubkey: boolean
 ): string => {
@@ -519,7 +522,7 @@ const generateOutputSecret = (
 // the value actually disclosed to SERVICE for a freshly generated output -
 // outputFieldName below picks the matching field name (p1/h1, p2/h2) from
 // this same shape
-const disclosedValue = (secret: string): string => {
+export const disclosedValue = (secret: string): string => {
   if (isCk1(secret)) {
     const cp1 = cp1FromCk1(secret)
     // generateOutputSecret only ever returns a pubkey secret from a

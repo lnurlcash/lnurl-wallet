@@ -4,6 +4,8 @@ import {parseMintFee, withinMintFeeBand} from './fees'
 import {verifyNoteSignatureHash} from './signature'
 import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
 import {isCp1, decodeCp1, decodeAnyCs1} from './recoverableNotes'
+import type {InternalTransferHint} from './internalTransfer'
+import {parseInternalTransferHint} from './internalTransfer'
 import {bytesToHex} from '@noble/hashes/utils.js'
 
 // ---- minting via LUD-06 payRequest ----
@@ -33,6 +35,12 @@ export type PayRequestInfo = {
   // accepts the matching `h` field and may offer an authenticated receipt;
   // it never substitutes for commentAllowed above.
   mintToHash?: boolean
+  // LUD-25 Part 2 (optional): parsed from metadata (see
+  // internalTransfer.ts's parseInternalTransferHint) - present when this
+  // payee registered a cx1 branch (Seed & derivation) that SERVICE will
+  // credit directly, letting a payer already holding a note at the same
+  // SERVICE skip Lightning entirely (Internal transfer)
+  internalTransfer?: InternalTransferHint
 }
 
 export const fetchPayRequest = async (url: string): Promise<PayRequestInfo> => {
@@ -42,9 +50,14 @@ export const fetchPayRequest = async (url: string): Promise<PayRequestInfo> => {
   }
   const mintFee =
     typeof body.metadata === 'string' ? parseMintFee(body.metadata) : null
+  const internalTransfer =
+    typeof body.metadata === 'string'
+      ? parseInternalTransferHint(body.metadata)
+      : null
   return {
     ...body,
     mintFee: mintFee ?? undefined,
+    internalTransfer: internalTransfer ?? undefined,
     mintToHash: body.mintToHash === true,
     commentAllowed:
       typeof body.commentAllowed === 'number' ? body.commentAllowed : undefined

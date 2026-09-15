@@ -5,10 +5,11 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {
   requireBoundMintQuote,
   validateBoundMintReceipt,
-  requestInvoice
+  requestInvoice,
+  fetchPayRequest
 } from './mintRequest'
 import {hashK1} from './signature'
-import {encodeCp1} from './recoverableNotes'
+import {encodeCp1, encodeCx1} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -34,6 +35,58 @@ const signAsMint = (
   })
   return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]]))
 }
+
+describe('fetchPayRequest - LUD-25 Part 2 internal transfer hint', () => {
+  it('wires a text/xpub metadata entry through to internalTransfer', async () => {
+    const cx1 = encodeCx1(
+      schnorr.getPublicKey(schnorr.utils.randomSecretKey()),
+      hexToBytes('ab'.repeat(32))
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'payRequest',
+              callback: 'https://mint.example.com/p/cb',
+              minSendable: 1000,
+              maxSendable: 1_000_000,
+              metadata: JSON.stringify([
+                ['text/plain', 'alice@mint.example.com'],
+                ['text/xpub', `${cx1}:3`]
+              ])
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchPayRequest('https://mint.example.com/lnurlp/alice')
+    expect(info.internalTransfer?.startIndex).toBe(3)
+    expect(info.internalTransfer?.cx1).toBeDefined()
+  })
+
+  it('leaves internalTransfer undefined without a text/xpub entry', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          ({
+            json: async () => ({
+              tag: 'payRequest',
+              callback: 'https://mint.example.com/p/cb',
+              minSendable: 1000,
+              maxSendable: 1_000_000,
+              metadata: JSON.stringify([
+                ['text/plain', 'alice@mint.example.com']
+              ])
+            })
+          }) as Response
+      )
+    )
+    const info = await fetchPayRequest('https://mint.example.com/lnurlp/alice')
+    expect(info.internalTransfer).toBeUndefined()
+  })
+})
 
 describe('bound-mint receipt authentication', () => {
   it('authenticates a settled bound-mint receipt from h without revealing k1', () => {
