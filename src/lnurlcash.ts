@@ -13,8 +13,8 @@ import {
   hashK1,
   cp1FromCk1,
   configurePubkeySecretProvider
-} from './lib'
-import type {MintFee, InvoiceResult} from './lib'
+} from './lib/index'
+import type {MintFee, InvoiceResult} from './lib/index'
 
 // LUD-25 LNURLcash - bearer assets. Draft spec:
 // https://github.com/lnurl/luds/blob/lnurlcash/25.md
@@ -55,7 +55,7 @@ import type {MintFee, InvoiceResult} from './lib'
 // protocol: seed-derived recoverable secrets, an "offline mode" toggle,
 // and display-string formatting for mint fees. Every existing import of
 // this module keeps working exactly as before.
-export * from './lib'
+export * from './lib/index'
 
 // wires this wallet's "offline mode" toggle into every network call
 // src/lib's functions make - see offlineMode.ts's own comment on why this
