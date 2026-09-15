@@ -1,8 +1,14 @@
 # Migrating from 0.13
 
 Version 0.14 makes the protocol layer maintained by `lnurl-wallet` the npm
-package implementation. It is intentionally outside the `^0.13.0` semver
-range. Upgrade only after adapting and testing the caller.
+package implementation. It is published as `@lnurlcash/kit`; npm treats that
+as a different package from `lnurlcash-kit`. Upgrade only after changing the
+dependency and imports, adapting the API and testing the caller.
+
+```sh
+npm uninstall lnurlcash-kit
+npm install --save-exact @lnurlcash/kit@0.14.0
+```
 
 ## Configuration
 
@@ -15,7 +21,7 @@ import {
   configureTransport,
   configureSecretProvider,
   configurePubkeySecretProvider
-} from 'lnurlcash-kit'
+} from '@lnurlcash/kit'
 ```
 
 Do this during application startup, before any request. The defaults use
@@ -34,9 +40,9 @@ exported by 0.14:
 - payment-request encoding and decoding from the old `request.ts`
 - UI fee strings `formatFeePercent` and `describeMintFee`
 
-Keep `0.13.x` pinned if a caller still depends on them. Seed persistence,
-restoration and UI wording remain wallet policy rather than protocol-package
-policy.
+Keep `lnurlcash-kit@0.13.x` pinned if a caller still depends on them. Seed
+persistence, restoration and UI wording remain wallet policy rather than
+protocol-package policy.
 
 ## Errors and mutations
 

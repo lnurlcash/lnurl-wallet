@@ -1,4 +1,4 @@
-# lnurlcash-kit
+# @lnurlcash/kit
 
 The LNURLcash protocol client used by
 [`lnurl-wallet`](https://github.com/lnurlcash/lnurl-wallet). It is published
@@ -8,13 +8,14 @@ the same implementation and test suite.
 LUD-25 is still a draft. Pin an exact version and review the changelog before
 upgrading software that can spend bearer notes.
 
-Version 0.14 replaces the separate 0.13 implementation. Existing consumers
-should read [MIGRATION-0.14.md](./MIGRATION-0.14.md) before upgrading.
+Version 0.14 replaces the separate `lnurlcash-kit` 0.13 implementation under a
+new scoped package name. Existing consumers should read
+[MIGRATION-0.14.md](./MIGRATION-0.14.md) before upgrading.
 
 ## Install
 
 ```sh
-npm install --save-exact lnurlcash-kit
+npm install --save-exact @lnurlcash/kit
 ```
 
 Node 22 or newer is required. The package is ESM-only and also targets modern
@@ -23,7 +24,7 @@ browsers with Web Crypto and `AbortSignal.timeout`.
 ## Use
 
 ```ts
-import {fetchNoteInfo, rotateNote} from 'lnurlcash-kit'
+import {fetchNoteInfo, rotateNote} from '@lnurlcash/kit'
 
 const info = await fetchNoteInfo(noteUrl)
 const replacement = await rotateNote(info.callback, info.k1)
@@ -79,9 +80,10 @@ npm pack --dry-run
 ```
 
 The package and wallet share a version. A wallet tag named `vX.Y.Z` publishes
-`lnurlcash-kit@X.Y.Z` from the same commit through
+`@lnurlcash/kit@X.Y.Z` from the same commit through
 `.github/workflows/release-kit.yml` and npm trusted publishing; releases must
-not be published from a maintainer workstation.
+not be published from a maintainer workstation. The one-time scoped-package
+bootstrap is documented in [RELEASING.md](./RELEASING.md).
 
 ## Licence
 

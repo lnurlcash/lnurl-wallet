@@ -1,4 +1,4 @@
-name: Release lnurlcash-kit
+name: Release @lnurlcash/kit
 
 on:
   push:

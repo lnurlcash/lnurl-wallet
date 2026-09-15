@@ -36,7 +36,7 @@ jobs:
           package_version="$(node --print "require('./src/lib/package.json').version")"
           expected_tag="v${package_version}"
           if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
-            echo "::error::Wallet tag $RELEASE_TAG does not match lnurlcash-kit@$package_version"
+            echo "::error::Wallet tag $RELEASE_TAG does not match @lnurlcash/kit@$package_version"
             exit 1
           fi
       - run: npm ci

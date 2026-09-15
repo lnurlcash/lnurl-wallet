@@ -1,6 +1,6 @@
 # Threat model
 
-`lnurlcash-kit` handles LNURLcash protocol data. It does not provide custody,
+`@lnurlcash/kit` handles LNURLcash protocol data. It does not provide custody,
 secret storage, routing, channel management or a guarantee that a mint will
 honour its liabilities.
 
