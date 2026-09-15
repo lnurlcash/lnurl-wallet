@@ -2,7 +2,10 @@ import {describe, expect, it} from 'vitest'
 import {bech32, bech32m} from '@scure/base'
 import {isValidNpub} from './nostrAddress'
 
-const validNpub = bech32.encode('npub', bech32.toWords(new Uint8Array(32).fill(0xab)))
+const validNpub = bech32.encode(
+  'npub',
+  bech32.toWords(new Uint8Array(32).fill(0xab))
+)
 
 describe('isValidNpub', () => {
   it('accepts a well-formed npub', () => {
@@ -14,12 +17,18 @@ describe('isValidNpub', () => {
   })
 
   it('rejects the wrong hrp', () => {
-    const nsec = bech32.encode('nsec', bech32.toWords(new Uint8Array(32).fill(0xab)))
+    const nsec = bech32.encode(
+      'nsec',
+      bech32.toWords(new Uint8Array(32).fill(0xab))
+    )
     expect(isValidNpub(nsec)).toBe(false)
   })
 
   it('rejects the wrong payload length', () => {
-    const short = bech32.encode('npub', bech32.toWords(new Uint8Array(31).fill(0xab)))
+    const short = bech32.encode(
+      'npub',
+      bech32.toWords(new Uint8Array(31).fill(0xab))
+    )
     expect(isValidNpub(short)).toBe(false)
   })
 

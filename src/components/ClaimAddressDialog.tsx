@@ -81,10 +81,10 @@ const ClaimAddressDialog: Component<ClaimAddressDialogProps> = props => {
           &nbsp;Claim an address at {serverOf(props.server)}
         </h4>
         <p>
-          First-come-first-served - claiming proves nothing about who you
-          are, and costs nothing but the name if someone else claims it
-          first. Your funds are never at risk either way: only this
-          wallet's own seed can ever derive spendable notes from it.
+          First-come-first-served - claiming proves nothing about who you are,
+          and costs nothing but the name if someone else claims it first. Your
+          funds are never at risk either way: only this wallet's own seed can
+          ever derive spendable notes from it.
         </p>
         <label>Username</label>
         <input
@@ -104,8 +104,8 @@ const ClaimAddressDialog: Component<ClaimAddressDialogProps> = props => {
           If you give an npub, this mint will also serve{' '}
           {username().trim().toLowerCase() || 'username'}@
           {serverOf(props.server)} as a NIP-05 identity for it (
-          <code>.well-known/nostr.json</code>) - anyone can look up that
-          npub by this same address.
+          <code>.well-known/nostr.json</code>) - anyone can look up that npub by
+          this same address.
         </p>
         <div class="btns">
           <button

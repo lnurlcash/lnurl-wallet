@@ -130,11 +130,10 @@ const Address: Component = () => {
       <h2>Address</h2>
       <p>
         A claimed username at a trusted mint can be paid directly as{' '}
-        <code>username@mint</code>, with no note attached on the payer's end
-        - the mint mints a fresh note straight onto a key only this wallet
-        can derive, and this page is where you come back to check for what
-        arrived. Claim one from a mint's own card on the{' '}
-        <A href="/mint">Mint page</A>.
+        <code>username@mint</code>, with no note attached on the payer's end -
+        the mint mints a fresh note straight onto a key only this wallet can
+        derive, and this page is where you come back to check for what arrived.
+        Claim one from a mint's own card on the <A href="/mint">Mint page</A>.
       </p>
       <h3>Your addresses</h3>
       <Show

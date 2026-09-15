@@ -15,8 +15,7 @@ export const isValidNpub = (value: string): boolean => {
   try {
     const decoded = bech32.decode(trimmed as `${string}1${string}`, false)
     return (
-      decoded.prefix === 'npub' &&
-      bech32.fromWords(decoded.words).length === 32
+      decoded.prefix === 'npub' && bech32.fromWords(decoded.words).length === 32
     )
   } catch {
     return false
