@@ -3,7 +3,7 @@ import type {MintFee} from './fees'
 import {parseMintFee, withinMintFeeBand} from './fees'
 import {verifyNoteSignatureHash} from './signature'
 import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
-import {isCp1, decodeCp1, isCs1, decodeCs1} from './recoverableNotes'
+import {isCp1, decodeCp1, decodeAnyCs1} from './recoverableNotes'
 import {bytesToHex} from '@noble/hashes/utils.js'
 
 // ---- minting via LUD-06 payRequest ----
@@ -72,7 +72,9 @@ const normalizeNoteId = (value: string): string | null => {
 
 const normalizeSignature = (value: string): string | null => {
   if (/^[0-9a-f]{130}$/i.test(value)) return value.toLowerCase()
-  const decoded = decodeCs1(value)
+  // either cs1 wire shape, current or legacy - see recoverableNotes.ts's
+  // decodeAnyCs1
+  const decoded = decodeAnyCs1(value)
   return decoded ? bytesToHex(decoded) : null
 }
 

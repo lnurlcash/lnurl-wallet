@@ -33,6 +33,40 @@ const BOLT11_AMOUNT_MSAT_PER_UNIT: Record<string, number> = {
   p: 0.1
 }
 
+// per BOLT-11's own multiplier-choice algorithm (the `bolt11` Python
+// package's msat_to_amount, which lnurl-mint's own bech32m.py reuses
+// verbatim for LUD-25 Part 2's amount-encoding cs1 - see
+// recoverableNotes.ts's encodeCs1WithAmount): the COARSEST unit ('' > m >
+// u > n > p) that still represents amount_msat exactly as an integer
+// digit count. Each successive per-unit value differs by exactly 1000x,
+// so this always terminates - worst case 'p' (0.1 msat/digit) divides any
+// integer msat amount exactly.
+export const encodeBolt11AmountSuffix = (amountMsat: number): string => {
+  if (!Number.isInteger(amountMsat) || amountMsat < 0) {
+    throw new Error('amount_msat must be a non-negative integer.')
+  }
+  for (const multiplier of ['', 'm', 'u', 'n', 'p'] as const) {
+    const digits = amountMsat / BOLT11_AMOUNT_MSAT_PER_UNIT[multiplier]
+    if (Number.isInteger(digits)) return `${digits}${multiplier}`
+  }
+  // unreachable: 'p' above always divides an integer amountMsat exactly
+  throw new Error('amount_msat could not be encoded.')
+}
+
+// the inverse of encodeBolt11AmountSuffix - an HRP amount suffix
+// ("<digits><multiplier>", e.g. "10n") back to msat. Null (never throws)
+// on anything that doesn't parse, same convention as
+// decodeBolt11AmountMsat below (which this doesn't share code with,
+// despite the overlap, so each stays a faithful, independent mirror of
+// its own reference algorithm).
+export const decodeBolt11AmountSuffix = (suffix: string): number | null => {
+  const match = suffix.match(/^(\d+)([munp])?$/)
+  if (!match) return null
+  const [, digits, multiplier] = match
+  const msat = Number(digits) * BOLT11_AMOUNT_MSAT_PER_UNIT[multiplier ?? '']
+  return Number.isSafeInteger(msat) ? msat : null
+}
+
 // pulls just the amount out of a bolt11 invoice's human-readable part - no
 // full bech32/TLV decode needed for that. The bech32 separator is the LAST
 // '1' in the string (data characters can also be '1'); everything before it

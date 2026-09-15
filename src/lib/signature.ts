@@ -2,7 +2,13 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {AmbiguousMintError} from './errors'
-import {decodeCs1, isCs1, isCk1, decodeCk1, encodeCp1} from './recoverableNotes'
+import {
+  decodeAnyCs1,
+  isAnyCs1,
+  isCk1,
+  decodeCk1,
+  encodeCp1
+} from './recoverableNotes'
 
 // ---- offline verification ----
 
@@ -69,7 +75,10 @@ const noteSignatureDigest = (k1: string, amountMsat: number): Uint8Array =>
 // raw bytes, same convention as every other dual-mode field in this kit.
 const normalizeSignatureHex = (signature: string): string | null => {
   if (NOTE_SIGNATURE_PATTERN.test(signature)) return signature.toLowerCase()
-  const decoded = decodeCs1(signature)
+  // accepts either cs1 wire shape (current amount-encoding form or the
+  // legacy fixed-HRP one) transparently - see recoverableNotes.ts's
+  // decodeAnyCs1
+  const decoded = decodeAnyCs1(signature)
   return decoded ? bytesToHex(decoded) : null
 }
 
@@ -315,7 +324,7 @@ export const requireMutationSignature = (
     if (NOTE_SIGNATURE_PATTERN.test(signature)) {
       return signature.toLowerCase()
     }
-    if (isCs1(signature)) return signature.trim()
+    if (isAnyCs1(signature)) return signature.trim()
   }
   // The SERVICE has already answered OK, so callers must preserve the fresh
   // output secret even though the response is non-conformant.  Reuse the

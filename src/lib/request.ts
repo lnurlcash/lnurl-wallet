@@ -19,7 +19,7 @@ import {
 } from './errors'
 import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
-import {isCk1, isCp1, isCs1, decodeCk1, encodeCp1} from './recoverableNotes'
+import {isCk1, isCp1, isAnyCs1, decodeCk1, encodeCp1} from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -45,7 +45,9 @@ export type HashWithdrawRequestInfo = Omit<WithdrawRequestInfo, 'k1'>
 const parseOptionalSig = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined
   if (NOTE_SIGNATURE_PATTERN.test(value)) return value.toLowerCase()
-  return isCs1(value) ? value.trim() : undefined
+  // either cs1 wire shape, current or legacy - see recoverableNotes.ts's
+  // isAnyCs1
+  return isAnyCs1(value) ? value.trim() : undefined
 }
 
 const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {

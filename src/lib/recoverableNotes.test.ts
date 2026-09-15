@@ -12,6 +12,11 @@ import {
   encodeCs1,
   decodeCs1,
   isCs1,
+  encodeCs1WithAmount,
+  decodeCs1WithAmount,
+  isCs1WithAmount,
+  decodeAnyCs1,
+  isAnyCs1,
   encodeCx1,
   decodeCx1,
   isCx1,
@@ -80,6 +85,98 @@ describe('bech32m codec', () => {
     expect(() =>
       encodeCx1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(31)))
     ).toThrow()
+  })
+})
+
+describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
+  const bytes = hexToBytes('cd'.repeat(65))
+
+  it('round-trips signature and amount together', () => {
+    const cs1 = encodeCs1WithAmount(1000, bytes)
+    // matches 25.md's own Encoding-section example verbatim
+    expect(cs1.startsWith('cs10n1')).toBe(true)
+    expect(decodeCs1WithAmount(cs1)).toEqual({amountMsat: 1000, signature: bytes})
+    expect(isCs1WithAmount(cs1)).toBe(true)
+  })
+
+  // generated via lnurl-mint/.venv/bin/python3, calling
+  // lnurl_mint.bech32m.encode_cs1(amount, bytes([0xcd]*65)) directly - these
+  // are the actual mint's own output (not just self-generated fixtures), so
+  // a match here means this wallet's encoding is byte-for-byte
+  // interoperable with the real service, same cross-check discipline as
+  // deriveNotePubkey's own vectors above
+  it("matches lnurl-mint's own bech32m.encode_cs1 output byte-for-byte", () => {
+    const VECTORS: {amountMsat: number; cs1: string}[] = [
+      {
+        amountMsat: 1000,
+        cs1: 'cs10n1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwd9r35pa'
+      },
+      {
+        amountMsat: 100_000,
+        cs1: 'cs1u1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdjawcqs'
+      },
+      {
+        amountMsat: 1_000_000_000,
+        cs1: 'cs10m1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdry3c6p'
+      },
+      {
+        amountMsat: 1,
+        cs1: 'cs10p1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdsu3he6'
+      },
+      {
+        amountMsat: 25_000,
+        cs1: 'cs250n1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdlzgn44'
+      },
+      {
+        amountMsat: 100_000_000_000,
+        cs1: 'cs11ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdgmtc8q'
+      },
+      {
+        amountMsat: 0,
+        cs1: 'cs01ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwd2ptuwn'
+      },
+      {
+        amountMsat: 21_000,
+        cs1: 'cs210n1ehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwdehxumnwd87mvyq'
+      }
+    ]
+    for (const v of VECTORS) {
+      expect(encodeCs1WithAmount(v.amountMsat, bytes)).toBe(v.cs1)
+      expect(decodeCs1WithAmount(v.cs1)).toEqual({
+        amountMsat: v.amountMsat,
+        signature: bytes
+      })
+    }
+  })
+
+  it('is a distinct wire value from the legacy fixed-HRP cs1 for the same signature', () => {
+    const legacy = encodeCs1(bytes)
+    const current = encodeCs1WithAmount(1000, bytes)
+    expect(current).not.toBe(legacy)
+    expect(isCs1(current)).toBe(false)
+    expect(isCs1WithAmount(legacy)).toBe(false)
+  })
+
+  it('rejects the wrong prefix, garbage, or a truncated amount suffix', () => {
+    expect(decodeCs1WithAmount(encodeCp1(hexToBytes('ab'.repeat(32))))).toBeNull()
+    expect(decodeCs1WithAmount('not bech32m at all')).toBeNull()
+    expect(decodeCs1WithAmount('cs1garbage')).toBeNull()
+  })
+
+  describe('decodeAnyCs1 / isAnyCs1', () => {
+    it('accepts both the current and the legacy wire shape', () => {
+      const legacy = encodeCs1(bytes)
+      const current = encodeCs1WithAmount(21_000, bytes)
+      expect(decodeAnyCs1(legacy)).toEqual(bytes)
+      expect(decodeAnyCs1(current)).toEqual(bytes)
+      expect(isAnyCs1(legacy)).toBe(true)
+      expect(isAnyCs1(current)).toBe(true)
+    })
+
+    it('rejects anything that is neither', () => {
+      expect(decodeAnyCs1(encodeCk1(bytes))).toBeNull()
+      expect(isAnyCs1(encodeCk1(bytes))).toBe(false)
+    })
   })
 })
 

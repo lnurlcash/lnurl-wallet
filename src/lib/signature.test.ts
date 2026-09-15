@@ -11,7 +11,7 @@ import {
   cp1FromCk1,
   signAddressProof
 } from './signature'
-import {encodeCk1, encodeCp1, encodeCs1} from './recoverableNotes'
+import {encodeCk1, encodeCp1, encodeCs1, encodeCs1WithAmount} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 
@@ -135,6 +135,28 @@ describe('offline signature verification', () => {
     expect(verifyNoteSignature('a'.repeat(63), 1000, sigHex, pubHex)).toBe(
       false
     )
+  })
+
+  it('verifies a cs1-with-amount-encoded signature (25.md "encode amount in offline sig") exactly the same as its hex form', () => {
+    // the CURRENT wire shape - amount folded into cs1's own HRP instead of
+    // needing a separate `amount` alongside it (see recoverableNotes.ts's
+    // encodeCs1WithAmount/decodeAnyCs1) - must verify identically to the
+    // legacy cs1 test above, since the signed digest itself never changed,
+    // only the wire encoding around it
+    const priv = secp256k1.utils.randomSecretKey()
+    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
+    const amountMsat = 21000
+    const sigHex = signAsMint(priv, K1, amountMsat)
+    const sigCs1 = encodeCs1WithAmount(amountMsat, hexToBytes(sigHex))
+
+    expect(verifyNoteSignature(K1, amountMsat, sigCs1, pubHex)).toBe(true)
+    expect(
+      verifyNoteSignatureHash(hashK1(K1), amountMsat, sigCs1, pubHex)
+    ).toBe(true)
+    const otherPub = bytesToHex(
+      secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
+    )
+    expect(verifyNoteSignature(K1, amountMsat, sigCs1, otherPub)).toBe(false)
   })
 })
 

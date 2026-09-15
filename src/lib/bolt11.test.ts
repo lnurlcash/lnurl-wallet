@@ -8,7 +8,9 @@ import {
   isBolt11Invoice,
   decodeBolt11AmountMsat,
   decodeBolt11PaymentHash,
-  verifyMeltPreimage
+  verifyMeltPreimage,
+  encodeBolt11AmountSuffix,
+  decodeBolt11AmountSuffix
 } from './bolt11'
 import {toBech32Lnurl} from './urls'
 
@@ -61,6 +63,40 @@ describe('bolt11 invoice', () => {
     expect(decodeBolt11AmountMsat('lnbc1p0examplebech32data')).toBeNull()
     expect(decodeBolt11AmountMsat('lntb1p0examplenoamount')).toBeNull()
     expect(decodeBolt11AmountMsat('not an invoice')).toBeNull()
+  })
+})
+
+describe('bolt11 amount suffix (LUD-25 Part 2 cs1 amount encoding)', () => {
+  it('picks the coarsest multiplier that represents the amount exactly', () => {
+    // cross-checked against lnurl-mint's own bech32m.py doctring example
+    // (via the real `bolt11` Python package's msat_to_amount)
+    expect(encodeBolt11AmountSuffix(1000)).toBe('10n')
+    expect(encodeBolt11AmountSuffix(100_000)).toBe('1u')
+    expect(encodeBolt11AmountSuffix(1_000_000_000)).toBe('10m')
+    expect(encodeBolt11AmountSuffix(1)).toBe('10p')
+    expect(encodeBolt11AmountSuffix(25_000)).toBe('250n')
+    expect(encodeBolt11AmountSuffix(100_000_000_000)).toBe('1')
+    expect(encodeBolt11AmountSuffix(0)).toBe('0')
+  })
+
+  it('round-trips through decodeBolt11AmountSuffix', () => {
+    for (const msat of [1, 1000, 21_000, 100_000, 25_000, 999_999]) {
+      expect(decodeBolt11AmountSuffix(encodeBolt11AmountSuffix(msat))).toBe(
+        msat
+      )
+    }
+  })
+
+  it('rejects a non-integer or negative amount', () => {
+    expect(() => encodeBolt11AmountSuffix(1.5)).toThrow()
+    expect(() => encodeBolt11AmountSuffix(-1)).toThrow()
+  })
+
+  it('returns null for anything that does not parse as a suffix', () => {
+    expect(decodeBolt11AmountSuffix('')).toBeNull()
+    expect(decodeBolt11AmountSuffix('abc')).toBeNull()
+    expect(decodeBolt11AmountSuffix('10x')).toBeNull()
+    expect(decodeBolt11AmountSuffix('-10n')).toBeNull()
   })
 })
 
