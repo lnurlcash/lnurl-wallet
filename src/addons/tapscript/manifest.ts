@@ -479,7 +479,11 @@ const musigUi: UiNode[] = [
         style: 'subheading'
       },
       {type: 'For', each: {var: 'musigResult.signers'}, children: [signerRow]},
-      {type: 'Text', value: 'As a ck1 note-ownership proof', style: 'subheading'},
+      {
+        type: 'Text',
+        value: 'As a ck1 note-ownership proof',
+        style: 'subheading'
+      },
       {
         type: 'Show',
         when: {helper: 'isCk1DemoMessage', args: [{var: 'musigMessage'}]},
@@ -492,7 +496,10 @@ const musigUi: UiNode[] = [
           {
             type: 'Text',
             value: {
-              cat: ['ck1: ', {helper: 'ck1Display', args: [{var: 'musigResult'}]}]
+              cat: [
+                'ck1: ',
+                {helper: 'ck1Display', args: [{var: 'musigResult'}]}
+              ]
             },
             style: 'response-block'
           },
