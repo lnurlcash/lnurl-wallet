@@ -19,7 +19,7 @@ import {
 } from './errors'
 import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
-import {isCk1, isCp1, isAnyCs1, decodeCk1, encodeCp1} from './recoverableNotes'
+import {isCk1, isCp1, isAnyCs1, encodeCp1} from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -178,16 +178,13 @@ export const fetchNoteInfo = async (
   // that doesn't understand cp1/p at all doesn't support this note kind
   // regardless of field name.
   if (isCk1(queried)) {
-    const signatureBytes = decodeCk1(queried)
-    const pubkey = signatureBytes
-      ? recoverNoteOwnershipPubkey(signatureBytes)
-      : null
-    if (!pubkey) {
+    const owner = recoverNoteOwnershipPubkey(queried)
+    if (!owner) {
       throw new Error("This note's ck1 secret is malformed.")
     }
     const info = await fetchNoteInfoByPubkey(
       rawUrl.toString(),
-      encodeCp1(pubkey)
+      encodeCp1(owner.pubkeyXOnly)
     )
     return {...info, k1: queried}
   }
