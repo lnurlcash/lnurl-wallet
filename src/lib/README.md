@@ -39,7 +39,9 @@ Configuration is process-wide. Call `configureNetworkGuard`,
 `configurePubkeySecretProvider` once during application startup, before any
 requests are made. The defaults use the platform `fetch` and secure random
 bytes; the wallet overrides them for offline mode, recoverable outputs and
-host-provided transports.
+host-provided transports. A custom transport must return redirect responses
+without following them so the kit can admit each destination before sending a
+bearer secret.
 
 ## Public modules
 

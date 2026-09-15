@@ -22,6 +22,8 @@ honour its liabilities.
 - Network admission rejects unsafe service URLs and applies the configured
   guard before requests are made.
 - Informational responses are checked against the requested note identity.
+- Response bodies are capped at 1 MiB, and redirects are followed only after
+  each destination passes the same URL-admission policy as the original.
 - Mint signatures bind note identity and value for offline verification.
 - Amounts, invoices, preimages, fees and bound-mint receipts are validated
   before their results are accepted.
