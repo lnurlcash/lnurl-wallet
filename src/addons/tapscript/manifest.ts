@@ -1,4 +1,5 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
+import {hexToBytes} from '@noble/hashes/utils.js'
 import {
   generateKeypair,
   tweakPubkey,
@@ -13,6 +14,10 @@ import {
   type Musig2Participant,
   type Musig2Result
 } from './musig2'
+// pure, permission-free math (encoding + local signature verification, no
+// network/wallet-state access) - same "sandbox stays a sandbox" reasoning
+// bech32Decoder's own addon already relies on for verifyNoteSignature
+import {encodeCk1, recoverNoteOwnershipPubkey} from '../../lnurlcash'
 
 // Taproot pubkey tweaking (BIP341) and MuSig2 (BIP327) - a "play around"
 // sandbox, not wired into this wallet's own note-signing anywhere. All key
@@ -313,6 +318,41 @@ const runMusigRound = (participants: unknown, message: unknown): Musig2Result =>
     trimmedString(message)
   )
 
+// ck1's own fixed message (src/lib/signature.ts's NOTE_OWNERSHIP_MESSAGE) -
+// hardcoded rather than reading `musigMessage`, so the worked example below
+// only lights up once the group has actually signed THIS exact message, the
+// one thing a real ck1 ownership proof is ever checked against
+const CK1_OWNERSHIP_MESSAGE = 'LNURLcash'
+
+const isCk1DemoMessage = (message: unknown): boolean =>
+  trimmedString(message) === CK1_OWNERSHIP_MESSAGE
+
+// takes a completed MuSig2 round and encodes its (group pubkey, final
+// signature) pair exactly the way a real note's ck1 does (see
+// src/lib/recoverableNotes.ts's encodeCk1) - both are already the right
+// shape (32-byte x-only pubkey, 64-byte BIP-340 signature), no reformatting
+// needed. `recoverNoteOwnershipPubkey` is the SAME check src/lib/signature.ts
+// runs on every note this wallet holds; running it here against a value
+// that never touched cashSecrets.ts or a real seed is what actually proves
+// the claim above, rather than just asserting it in prose.
+const ck1FromMusigResult = (result: unknown): string | null => {
+  const r = result as Musig2Result | null
+  if (!r) return null
+  try {
+    return encodeCk1(hexToBytes(r.groupPubkeyHex), hexToBytes(r.finalSigHex))
+  } catch {
+    return null
+  }
+}
+
+const ck1Display = (result: unknown): string =>
+  ck1FromMusigResult(result) ?? '-'
+
+const ck1Accepted = (result: unknown): boolean => {
+  const ck1 = ck1FromMusigResult(result)
+  return ck1 !== null && recoverNoteOwnershipPubkey(ck1) !== null
+}
+
 const participantRow: UiNode = {
   type: 'View',
   style: 'row',
@@ -352,7 +392,7 @@ const musigUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      'Aggregate 2-3 local, ephemeral keypairs into one pubkey, then produce ONE joint Schnorr signature - a verifier only ever sees a single ordinary-looking key and a single ordinary-looking signature, never that multiple people were involved. This is a real, spec-checked implementation (see this addon’s own tests), but it is NOT wired into this wallet’s own notes: a cp1 note’s ownership proof uses ECDSA-with-recovery (src/lib/signature.ts), a different signature algorithm MuSig2 (Schnorr-only) can’t produce - so an aggregate key from this playground can’t yet actually own a spendable note here.'
+      'Aggregate 2-3 local, ephemeral keypairs into one pubkey, then produce ONE joint Schnorr signature - a verifier only ever sees a single ordinary-looking key and a single ordinary-looking signature, never that multiple people were involved. This is a real, spec-checked implementation (see this addon’s own tests). A cp1 note’s own ownership proof (ck1) is the same algorithm - a BIP-340 Schnorr signature over a fixed message, checked directly against the note’s own pubkey (src/lib/signature.ts) - so an aggregate key produced here is cryptographically capable of owning a spendable note; sign the message "LNURLcash" below to see that proven directly against this wallet’s own verification code, not just asserted here. This playground still never touches this wallet’s real notes, seed, or mints, by design (permissions: [] above, not a crypto limitation): wiring an aggregate key into an actual mint/spend flow would be separate, deliberate work.'
   },
   {type: 'Text', value: 'How to use this', style: 'subheading'},
   {
@@ -361,7 +401,7 @@ const musigUi: UiNode[] = [
     each: [
       "Click 'Add participant' 2 or 3 times - each click generates one fresh, ephemeral keypair locally.",
       'Once there are 2 or more participants, the aggregated group pubkey appears automatically below the list.',
-      'Type a message for the group to sign together.',
+      'Type a message for the group to sign together - or type exactly "LNURLcash" to also see the ck1 worked example below.',
       "Click 'Aggregate & sign' - this runs the entire MuSig2 round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation).",
       "Check the result: the final signature's own ✓ verified line, and each signer's individual partial-signature ✓ underneath."
     ],
@@ -438,7 +478,66 @@ const musigUi: UiNode[] = [
         value: 'Per-signer partial signatures',
         style: 'subheading'
       },
-      {type: 'For', each: {var: 'musigResult.signers'}, children: [signerRow]}
+      {type: 'For', each: {var: 'musigResult.signers'}, children: [signerRow]},
+      {
+        type: 'Text',
+        value: 'As a ck1 note-ownership proof',
+        style: 'subheading'
+      },
+      {
+        type: 'Show',
+        when: {helper: 'isCk1DemoMessage', args: [{var: 'musigMessage'}]},
+        children: [
+          {
+            type: 'Text',
+            value:
+              'The group pubkey and final signature above are already the exact shape a real ck1 needs (32-byte x-only pubkey, 64-byte BIP-340 signature) - encoded below and run through this wallet’s own recoverNoteOwnershipPubkey, unchanged.'
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'ck1: ',
+                {helper: 'ck1Display', args: [{var: 'musigResult'}]}
+              ]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Show',
+            when: {helper: 'ck1Accepted', args: [{var: 'musigResult'}]},
+            children: [
+              {
+                type: 'Text',
+                value:
+                  '✓ accepted - this wallet’s note-verification code cannot tell this apart from an ordinary single-signer ck1'
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [{helper: 'ck1Accepted', args: [{var: 'musigResult'}]}]
+            },
+            children: [{type: 'Text', value: '✗ not accepted'}]
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'not',
+          args: [{helper: 'isCk1DemoMessage', args: [{var: 'musigMessage'}]}]
+        },
+        children: [
+          {
+            type: 'Text',
+            value:
+              'Set "Message to sign together" above to exactly "LNURLcash" (ck1’s own fixed message) and sign again to see this pair encoded and accepted as a real ck1 ownership proof.'
+          }
+        ]
+      }
     ]
   }
 ]
@@ -483,7 +582,10 @@ const tapscriptHelpers: Record<string, AddonHelper> = {
   canAddParticipant: canAddParticipant as AddonHelper,
   canAggregate: canAggregate as AddonHelper,
   musigPreview: musigPreview as AddonHelper,
-  runMusigRound: runMusigRound as AddonHelper
+  runMusigRound: runMusigRound as AddonHelper,
+  isCk1DemoMessage: isCk1DemoMessage as AddonHelper,
+  ck1Display: ck1Display as AddonHelper,
+  ck1Accepted: ck1Accepted as AddonHelper
 }
 
 export const tapscriptAddon: Addon = {
