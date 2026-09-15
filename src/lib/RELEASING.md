@@ -3,27 +3,13 @@
 The final package is published from `lnurlcash/lnurl-wallet`, not from a
 workstation and not from the old standalone kit repository.
 
-## One-time scoped-package bootstrap
+## Trusted publisher
 
-npm cannot configure a trusted publisher until the package exists. After this
-package source has been reviewed and merged, an `lnurlcash` npm organisation
-owner must make the one exceptional manual publish:
+The one-time scoped-package bootstrap was completed with `0.14.0-rc.0`, then
+`0.14.0` was published by the reviewed OIDC release workflow. Do not repeat the
+manual bootstrap for later releases.
 
-1. Build, test and pack the merged source from a disposable clean checkout,
-   changing only its package version to `0.14.0-rc.0`.
-2. Publish that tarball as a public prerelease with
-   `npm publish --access public --tag next <tarball>`.
-3. Verify that npm shows `@lnurlcash/kit@0.14.0-rc.0` under the `next` tag and
-   that no `latest` tag has been created.
-
-Do not manually publish `0.14.0`: that version is reserved for the reviewed
-OIDC release. The prerelease only creates the scoped package so its trusted
-publisher can be configured; do not recommend it to production consumers.
-
-## One-time trusted-publisher setup
-
-An npm package owner must configure the trusted publisher for
-`@lnurlcash/kit` as:
+The trusted publisher for `@lnurlcash/kit` is configured as:
 
 - provider: GitHub Actions
 - organisation or user: `lnurlcash`
@@ -32,14 +18,10 @@ An npm package owner must configure the trusted publisher for
 - environment: `npm-publish`
 - allowed actions: enable direct `npm publish`
 
-A GitHub repository or organisation administrator should create the
-`npm-publish` environment, restrict it to `v*` tags and require a maintainer
-review. No npm token or GPG key belongs in GitHub secrets; npm uses the
-workflow's short-lived OIDC identity and records provenance.
-
-Do not create a final release until both sides are configured. A missing or
-mismatched trusted publisher should fail closed, but it is not a useful release
-rehearsal.
+The GitHub `npm-publish` environment restricts deployments to tags matching
+`v*.*.*` and requires a maintainer review. No npm token or GPG key belongs in
+GitHub secrets; npm uses the workflow's short-lived OIDC identity and records
+provenance. A missing or mismatched trusted publisher should fail closed.
 
 ## Each release
 

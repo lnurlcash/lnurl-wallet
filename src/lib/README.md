@@ -82,8 +82,9 @@ npm pack --dry-run
 The package and wallet share a version. A wallet tag named `vX.Y.Z` publishes
 `@lnurlcash/kit@X.Y.Z` from the same commit through
 `.github/workflows/release-kit.yml` and npm trusted publishing; releases must
-not be published from a maintainer workstation. The one-time scoped-package
-bootstrap is documented in [RELEASING.md](./RELEASING.md).
+not be published from a maintainer workstation. The release process and
+trusted-publisher configuration are documented in
+[RELEASING.md](./RELEASING.md).
 
 ## Licence
 
