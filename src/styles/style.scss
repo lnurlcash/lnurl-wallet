@@ -1989,6 +1989,29 @@ nav {
   margin: 4px 0 12px 0;
 }
 
+// AddonRenderer's own scoped ErrorBoundary fallback (see Renderer.tsx's
+// AddonRenderError) - reuses .setup-card's box, accented like the
+// existing warning/error borders (.warning, line ~727) instead of adding
+// a new colour to the palette
+.addon-error {
+  border: 1px solid #f44;
+  border-radius: 5px;
+  padding: 12px 16px;
+  h3 {
+    margin-top: 0;
+  }
+}
+
+.addon-error-details {
+  margin: 8px 0;
+  summary {
+    cursor: pointer;
+  }
+  pre {
+    margin-top: 8px;
+  }
+}
+
 // the addon DSL's 'List' node (see Renderer.tsx) - a real <ol>/<ul>, e.g.
 // LNURL Tools' metadata entries, so it keeps browser-native numbering/
 // markers instead of each addon faking one with a "#N" Text prefix

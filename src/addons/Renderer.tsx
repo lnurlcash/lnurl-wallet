@@ -1,6 +1,7 @@
 import type {Component, JSX} from 'solid-js'
-import {Show, For} from 'solid-js'
+import {Show, For, ErrorBoundary} from 'solid-js'
 import {createStore, produce} from 'solid-js/store'
+import {A} from '@solidjs/router'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
 import {requireDeviceClient} from '../deviceOrchestration'
@@ -430,20 +431,25 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
         )
 
       case 'List': {
-        const Tag = node.ordered ? 'ol' : 'ul'
-        return (
-          <Tag class="addon-list-block">
-            <For each={(resolveExpr(node.each, vars) as unknown[]) ?? []}>
-              {(item, index) => {
-                const itemVars: Vars = {
-                  ...vars,
-                  item: item as object,
-                  __indexOf: index
-                }
-                return <li>{renderChildren(node.children, itemVars)}</li>
-              }}
-            </For>
-          </Tag>
+        // plain conditional, not a variable holding 'ol'/'ul' used as a
+        // JSX tag - a capitalized JSX identifier compiles to a component
+        // call, and a bare string isn't callable ("e is not a function")
+        const items = (
+          <For each={(resolveExpr(node.each, vars) as unknown[]) ?? []}>
+            {(item, index) => {
+              const itemVars: Vars = {
+                ...vars,
+                item: item as object,
+                __indexOf: index
+              }
+              return <li>{renderChildren(node.children, itemVars)}</li>
+            }}
+          </For>
+        )
+        return node.ordered ? (
+          <ol class="addon-list-block">{items}</ol>
+        ) : (
+          <ul class="addon-list-block">{items}</ul>
         )
       }
 
@@ -466,8 +472,69 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
 
   return (
     <div class="addon-root">
-      <Show when={ui}>{node => renderNode(node(), store)}</Show>
+      {/* scoped to this ONE addon's own tree - a bug in one addon's `ui`
+      (bundled or a holder's own hand-authored custom one) must not take
+      down the whole app shell the way it did before this existed (see
+      index.tsx's own app-wide ErrorBoundary, still the backstop for
+      anything thrown outside this addon's own render, e.g. a bad initial
+      state). Logs full details for debugging regardless of build mode -
+      see AddonRenderError below - since a minified production message
+      alone ("e is not a function") is useless for tracking down what
+      actually broke */}
+      <ErrorBoundary
+        fallback={(err, reset) => (
+          <AddonRenderError
+            addon={props.addon}
+            mode={props.mode}
+            error={err}
+            reset={reset}
+          />
+        )}
+      >
+        <Show when={ui}>{node => renderNode(node(), store)}</Show>
+      </ErrorBoundary>
     </div>
   )
 }
 export default AddonRenderer
+
+const AddonRenderError: Component<{
+  addon: Addon
+  mode: 'run' | 'settings'
+  error: unknown
+  reset: () => void
+}> = props => {
+  const error =
+    props.error instanceof Error ? props.error : new Error(String(props.error))
+  // unconditional, not DEV-gated - a holder hitting this in production
+  // still has devtools open more often than not, and this is the only
+  // place the full stack survives; the UI below only ever shows the
+  // message, never the stack, to stay readable for a non-technical holder
+  console.error(
+    `[addon:${props.addon.manifest.id}] failed to render (${props.mode} mode):`,
+    error
+  )
+  return (
+    <div class="setup-card addon-error">
+      <h3>{props.addon.manifest.name} hit an error</h3>
+      <p>
+        This addon couldn't finish rendering ({error.message}). The rest of your
+        wallet is unaffected - your notes are still safe in storage.
+      </p>
+      <details class="addon-error-details">
+        <summary>Technical details</summary>
+        <pre class="addon-response-block">{error.stack ?? error.message}</pre>
+      </details>
+      <div class="btns">
+        <button type="button" onClick={() => props.reset()}>
+          Try again
+        </button>
+        <Show when={props.mode === 'run'}>
+          <A href="/settings" class="hero-btn">
+            Back to Settings
+          </A>
+        </Show>
+      </div>
+    </div>
+  )
+}
