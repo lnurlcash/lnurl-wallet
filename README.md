@@ -124,3 +124,13 @@ and confirm a given version's build artifact.
 ## License
 
 MIT
+
+## Napplet wallet and note designer
+
+This fork adds **LNURLcash Wallet** for managing and spending bearer notes, and
+**LNURLcash Notes** for designing them with uploaded images. Each is an independent
+NIP-5D napplet with its own entry, manifest, storage scope and preview. There is no
+app switcher or cross-app launch button. See [the napplet guide](docs/NAPPLETS.md)
+for separate builds, preview URLs, recovery, and the draft archetype contracts.
+Notes can push appearance-only designs to Wallet through the versioned Note
+interface without changing the active view; Wallet reviews them before import.

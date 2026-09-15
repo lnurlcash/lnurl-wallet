@@ -39,8 +39,28 @@ const newOpId = (): string =>
 // survive a reload without a real localStorage (which every real browser
 // this ships to has).
 let memoryFallback: PendingDeviceOp[] = []
+let mediatedQueue: {
+  entries: PendingDeviceOp[]
+  save(entries: PendingDeviceOp[]): Promise<void>
+} | null = null
+let mediatedWrite: Promise<unknown> = Promise.resolve()
+
+const withQueueLock = <T>(action: () => Promise<T>): Promise<T> => {
+  if (!mediatedQueue) return withStorageLock(STORAGE_KEY, action)
+  // An opaque-origin napplet cannot acquire a browser Web Lock. The shell
+  // hosts one wallet instance; serialize this instance's encrypted writes.
+  const next = mediatedWrite.catch(() => {}).then(action)
+  mediatedWrite = next
+  return next
+}
+
+/** Bind an encrypted shell queue for one authenticated device; web storage remains the default. */
+export const useMediatedDeviceQueue = (queue: typeof mediatedQueue): void => {
+  mediatedQueue = queue
+}
 
 const readStored = (): PendingDeviceOp[] => {
+  if (mediatedQueue) return mediatedQueue.entries
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     const parsed = raw ? JSON.parse(raw) : []
@@ -92,15 +112,23 @@ export const enqueuePendingDeviceOp = async (
   op: Omit<PendingDeviceOp, 'id' | 'createdAt'>
 ): Promise<PendingDeviceOp> => {
   const entry: PendingDeviceOp = {...op, id: newOpId(), createdAt: Date.now()}
-  await withStorageLock(STORAGE_KEY, () => {
-    writeStored([...readStored(), entry])
+  await withQueueLock(async () => {
+    const next = [...readStored(), entry]
+    if (mediatedQueue) {
+      await mediatedQueue.save(next)
+      mediatedQueue.entries = next
+    } else writeStored(next)
   })
   return entry
 }
 
 export const dequeuePendingDeviceOp = async (id: string): Promise<void> => {
-  await withStorageLock(STORAGE_KEY, () => {
-    writeStored(readStored().filter(op => op.id !== id))
+  await withQueueLock(async () => {
+    const next = readStored().filter(op => op.id !== id)
+    if (mediatedQueue) {
+      await mediatedQueue.save(next)
+      mediatedQueue.entries = next
+    } else writeStored(next)
   })
 }
 

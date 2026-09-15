@@ -2,3 +2,16 @@ node_modules
 dist
 *.local
 .DS_Store
+
+dist-napplet/
+*.db
+*.sqlite
+.env
+__pycache__/
+.ruff_cache/
+test-results/
+playwright-report/
+dist-designer/
+dist-notes/
+work/
+outputs/
