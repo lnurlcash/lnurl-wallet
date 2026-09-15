@@ -5,7 +5,7 @@
 // under the next unused key on the registered branch itself) - so the
 // wallet's only remaining job is to come online later and find what
 // arrived, by re-deriving pk_0, pk_1, ... and checking each (see
-// scanForAddressNotes). Registering (when overwriting an already-claimed
+// scanForAddressNotes). Registering (always - even a fresh, unclaimed
 // username) or unregistering one MUST be proven, not just asserted
 // (25.md's Seed & derivation) - see signAddressProof. This mirrors
 // lnurl-mint's own router.py: POST/DELETE `/p/{username}`, never the
@@ -41,18 +41,31 @@ const addressProofUrl = (
 // `server` is the mint's own origin (see urls.ts's serviceOriginOf) - the
 // same identity every other trust decision in this kit is pinned to.
 // `indexZeroSecretKey` is this branch's own index-0 note secret (see
-// cashSecrets.ts's cashAddressSecretAtIndex(server, 0)) - always sent as
-// `sig`, even for a fresh, unclaimed username: SERVICE only checks it
-// against whatever branch is CURRENTLY on file, so it's simply ignored
-// when there's nothing registered yet to prove continued ownership of.
+// cashSecrets.ts's cashAddressSecretAtIndex(server, 0)) - `sig` is
+// mandatory at SERVICE now, even for a fresh, unclaimed username: what it
+// proves differs by case (SERVICE checks a fresh claim's `sig` against the
+// NEW `cx1` in this same request - a self-proof that this wallet actually
+// controls the branch it's registering, not just a public cx1 it copied
+// from someone else - and an overwrite's `sig` against whichever branch is
+// CURRENTLY on file instead), but this wallet always signs with the SAME
+// key either way (its own branch's index-0 secret), which happens to
+// satisfy both. `npub`, if given, doubles this same username as a NIP-05
+// name (see SERVICE's own get_nip05) - sent exactly as typed (NIP-19's
+// own bech32, not bech32m); SERVICE decodes it itself, this package never
+// needs the raw bytes, so validating its shape before ever calling this is
+// entirely the caller's own concern. Omitting it on an overwrite clears
+// any previously registered one - never merges, always replaces wholesale,
+// same as `cx1` itself.
 export const registerUsername = async (
   server: string,
   username: string,
   cx1: string,
-  indexZeroSecretKey: Uint8Array
+  indexZeroSecretKey: Uint8Array,
+  npub?: string
 ): Promise<void> => {
   const url = addressProofUrl(server, username, indexZeroSecretKey, 'register')
   url.searchParams.set('cx1', cx1)
+  if (npub) url.searchParams.set('npub', npub)
   const body = await lnurlFetch(url, 'POST')
   if (body?.status !== 'OK') {
     throw new Error('SERVICE did not confirm the registration.')
@@ -61,8 +74,8 @@ export const registerUsername = async (
 
 // Frees `username` at SERVICE entirely - it goes back to being unclaimed,
 // first-come-first-served for anyone (router.delete_registered_username).
-// Unlike registerUsername, `sig` here is mandatory at SERVICE: there is no
-// proof-free case for deleting an address someone else may depend on.
+// `sig` is mandatory here too - there is no proof-free case for deleting
+// an address someone else may depend on.
 export const unregisterUsername = async (
   server: string,
   username: string,

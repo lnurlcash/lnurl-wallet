@@ -318,8 +318,16 @@ const MeltDialog: Component<MeltDialogProps> = props => {
       // LUD-11: this address says it's meant to be reused for future
       // melts (not this one invoice, which is spent once paid regardless)
       // - save it, kept apart from Mint.tsx's own storeable mints (see
-      // storeableLinks.ts - a melt destination isn't necessarily a mint)
-      if (!result.disposable) addStoreableMeltAddress(lnAddressText())
+      // storeableLinks.ts - a melt destination isn't necessarily a mint).
+      // Records whether it advertised internal-transfer support (text/
+      // xpub) at this same lookup, so the saved-addresses list below can
+      // mark that as a confirmed fact instead of guessing at it later.
+      if (!result.disposable) {
+        addStoreableMeltAddress(
+          lnAddressText(),
+          info.internalTransfer !== undefined
+        )
+      }
       setLnAddressPayRequest(null)
       setLnAddressAmountSats('')
     } catch (err) {
@@ -526,6 +534,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   const internalTransferAvailableMsat = createMemo(() =>
     internalTransferBearers().reduce((sum, b) => sum + b.amount, 0)
   )
+
   const selectedBearers = createMemo(() =>
     bearers().filter(b => selectedIds().has(b.id))
   )
@@ -1222,6 +1231,14 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                   onClick={() => selectSavedAddress(link.address)}
                 >
                   {link.address}
+                  <Show when={link.internalTransfer}>
+                    <span
+                      class="mint-picker-transfer-badge"
+                      title="This address advertised LUD-25 internal transfer support last time it was looked up - paying it can skip Lightning entirely if you still hold notes at its mint"
+                    >
+                      &nbsp;· internal transfer
+                    </span>
+                  </Show>
                 </button>
                 <button
                   class="icon-btn"

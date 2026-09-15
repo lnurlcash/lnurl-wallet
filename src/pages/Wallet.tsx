@@ -25,11 +25,13 @@ import {
   IoReturnDownForwardSharp,
   IoEllipsisVerticalSharp,
   IoSwapVerticalSharp,
-  IoPricetagsSharp
+  IoPricetagsSharp,
+  IoAtCircleSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
 
 import {useWallet, groupByServer} from '../WalletContext'
+import {storeableMeltAddresses} from '../storeableLinks'
 import type {Bearer} from '../storage'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {
@@ -232,6 +234,13 @@ const Wallet: Component = () => {
   const [meltHandoffAddress, setMeltHandoffAddress] = createSignal<
     string | null
   >(null)
+  // the hero widget's own picker for a saved (LUD-11) melt address, opened
+  // via the '@' button next to it - only ever shown when there's at least
+  // one to pick (see storeableLinks.ts's storeableMeltAddresses), same
+  // list MeltDialog's own saved-addresses section already offers, just
+  // reachable straight from the hero without opening that dialog blank
+  // first
+  const [showSavedAddresses, setShowSavedAddresses] = createSignal(false)
 
   const closeMelt = () => {
     setOpenDialog(null)
@@ -307,6 +316,42 @@ const Wallet: Component = () => {
     setHeroValue(raw)
     handleHeroValue(raw)
   }
+
+  // click-to-select from the '@' picker below - same dispatch a typed/
+  // pasted/scanned Lightning Address already goes through
+  const selectSavedAddress = (address: string) => {
+    setShowSavedAddresses(false)
+    handleHeroValue(address)
+  }
+
+  const savedAddressPicker = () => (
+    <Show when={showSavedAddresses()}>
+      <Dialog onClose={() => setShowSavedAddresses(false)}>
+        <>
+          <h4>Pay a saved address</h4>
+          <div class="mint-picker">
+            <For each={storeableMeltAddresses()}>
+              {link => (
+                <span class="mint-picker-entry">
+                  <button onClick={() => selectSavedAddress(link.address)}>
+                    {link.address}
+                    <Show when={link.internalTransfer}>
+                      <span
+                        class="mint-picker-transfer-badge"
+                        title="This address advertised LUD-25 internal transfer support last time it was looked up - paying it can skip Lightning entirely if you still hold notes at its mint"
+                      >
+                        &nbsp;· internal transfer
+                      </span>
+                    </Show>
+                  </button>
+                </span>
+              )}
+            </For>
+          </div>
+        </>
+      </Dialog>
+    </Show>
+  )
 
   // the hero's balance/mint count is always the spendable view (excludes
   // spent notes) - "Total balance" shouldn't count sats that aren't
@@ -1272,6 +1317,16 @@ const Wallet: Component = () => {
                       >
                         <IoClipboardSharp />
                       </button>
+                      <Show when={storeableMeltAddresses().length > 0}>
+                        <button
+                          type="button"
+                          class="icon-btn paste-at-btn"
+                          title="Pay a saved address"
+                          onClick={() => setShowSavedAddresses(true)}
+                        >
+                          <IoAtCircleSharp />
+                        </button>
+                      </Show>
                       <button
                         type="button"
                         class="icon-btn paste-keyboard-btn"
@@ -1329,6 +1384,7 @@ const Wallet: Component = () => {
                     onClose={closeMelt}
                   />
                 </Show>
+                {savedAddressPicker()}
               </section>
             </div>
           }
@@ -1405,6 +1461,16 @@ const Wallet: Component = () => {
                     >
                       <IoClipboardSharp />
                     </button>
+                    <Show when={storeableMeltAddresses().length > 0}>
+                      <button
+                        type="button"
+                        class="icon-btn paste-at-btn"
+                        title="Pay a saved address"
+                        onClick={() => setShowSavedAddresses(true)}
+                      >
+                        <IoAtCircleSharp />
+                      </button>
+                    </Show>
                     <button
                       type="button"
                       class="icon-btn paste-keyboard-btn"
@@ -1463,6 +1529,7 @@ const Wallet: Component = () => {
                 onClose={closeMelt}
               />
             </Show>
+            {savedAddressPicker()}
 
             <section class="list-controls">
               <div class="list-controls-row">

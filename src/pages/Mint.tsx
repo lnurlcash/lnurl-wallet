@@ -20,7 +20,8 @@ import {
   IoLockClosedSharp,
   IoHelpCircleSharp,
   IoCopySharp,
-  IoSearchSharp
+  IoSearchSharp,
+  IoAtCircleSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
 
@@ -113,6 +114,7 @@ import NfcToggle from '../components/NfcToggle'
 import RequireWallet from '../components/RequireWallet'
 import Dialog from '../components/Dialog'
 import FiatValue from '../components/FiatValue'
+import ClaimAddressDialog from '../components/ClaimAddressDialog'
 
 // LUD-21 auto-poll interval, in seconds - both the countdown shown on the
 // button and the cadence of the automatic check
@@ -1036,6 +1038,13 @@ const Mint: Component = () => {
     null
   )
   const [rescanIndex, setRescanIndex] = createSignal(0)
+  // which trusted mint's own "Claim address" button opened
+  // ClaimAddressDialog (LUD-25 Part 2's cx1 registration, see that
+  // component) - at most one at a time, same single-flow-at-a-time
+  // convention every other mint-card action here follows
+  const [claimAddressFor, setClaimAddressFor] = createSignal<string | null>(
+    null
+  )
 
   const addByAddress = async (value: string) => {
     const url = resolveMintInput(value)
@@ -1253,6 +1262,14 @@ const Mint: Component = () => {
   return (
     <div id="mint" class="page">
       <h2>Mint a bearer note</h2>
+      <Show when={claimAddressFor()}>
+        {server => (
+          <ClaimAddressDialog
+            server={server()}
+            onClose={() => setClaimAddressFor(null)}
+          />
+        )}
+      </Show>
       <div class="two-columns">
         <div class="two-col">
           <RequireWallet>
@@ -1816,6 +1833,20 @@ const Mint: Component = () => {
                             <IoRefreshSharp class="spin" />
                           </Show>
                           &nbsp;Rescan
+                        </button>
+                        <button
+                          disabled={offlineMode() || !hasCashRoot()}
+                          title={
+                            offlineMode()
+                              ? 'Offline mode is on'
+                              : !hasCashRoot()
+                                ? 'No seed loaded for this wallet - restore your seed again first'
+                                : 'Claim a username@mint address here (LUD-25)'
+                          }
+                          onClick={() => setClaimAddressFor(mint.server)}
+                        >
+                          <IoAtCircleSharp />
+                          &nbsp;Claim address
                         </button>
                       </div>
                     </Show>

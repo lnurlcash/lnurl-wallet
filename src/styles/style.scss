@@ -1511,6 +1511,15 @@ nav {
   overflow-wrap: anywhere;
 }
 
+// flags a saved address as likely payable via LUD-25 internal transfer
+// (MeltDialog/Wallet's own saved-addresses pickers) - same positive-signal
+// green as .bearer-signed above, reused here rather than merged into that
+// selector group since this isn't a bearer-card badge
+.mint-picker-transfer-badge {
+  font-size: 0.85em;
+  color: #6c6;
+}
+
 // the holder's own free-text note (see BearerCard's editingLabel) - styled
 // as a caption under the amount, distinct from the protocol-derived badges
 // around it (unverified/signed/spent) so it reads as "yours", not status

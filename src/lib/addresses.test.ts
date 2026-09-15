@@ -33,6 +33,39 @@ describe('registerUsername', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('omits npub entirely when not given', async () => {
+    const proofKey = schnorr.utils.randomSecretKey()
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.has('npub')).toBe(false)
+      return {json: async () => ({status: 'OK'})} as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await registerUsername(
+      'https://mint.example.com',
+      'alice',
+      'cx1fakevalue',
+      proofKey
+    )
+  })
+
+  it('sends npub exactly as given, when provided', async () => {
+    const proofKey = schnorr.utils.randomSecretKey()
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.get('npub')).toBe('npub1fakevalue')
+      return {json: async () => ({status: 'OK'})} as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await registerUsername(
+      'https://mint.example.com',
+      'alice',
+      'cx1fakevalue',
+      proofKey,
+      'npub1fakevalue'
+    )
+  })
+
   it('throws on a rejected registration, with the service reason', async () => {
     vi.stubGlobal(
       'fetch',
