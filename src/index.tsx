@@ -15,6 +15,7 @@ import './styles/background.scss'
 
 import Nav from './components/Nav'
 import Footer from './components/Footer'
+import AddressAutoScanner from './components/AddressAutoScanner'
 import Hero from './pages/Hero'
 import Wallet from './pages/Wallet'
 import Setup from './pages/Setup'
@@ -48,6 +49,12 @@ const App = (props: any) => {
           containerStyle={{top: '64px'}}
         />
         <Nav />
+        {/* mounted once, wallet-wide, regardless of which page is open -
+        same reasoning as WalletContext.tsx's own auto-lock ticking effect
+        (this needs useWallet(), so it can't live inside WalletContext
+        itself) - see the component's own top comment for what it does and
+        does not cover */}
+        <AddressAutoScanner />
         {/* a render-time throw (e.g. one malformed stored record) must
         never take down the whole app shell - show a recoverable error
         instead of a permanently blank page */}

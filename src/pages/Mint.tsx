@@ -59,7 +59,8 @@ import {
   requireMintComment,
   requireBoundMintQuote,
   validateBoundMintReceipt,
-  AmbiguousMutationError
+  AmbiguousMutationError,
+  unregisterUsername
 } from '../lnurlcash'
 import {
   deviceMint,
@@ -101,7 +102,22 @@ import {
   type PendingDeviceMint
 } from '../pendingDeviceMint'
 import {scanMintForNotes} from '../recovery'
-import {hasCashRoot, mergeCashSecretIndices} from '../cashSecrets'
+import {
+  hasCashRoot,
+  mergeCashSecretIndices,
+  cashAddressSecretAtIndex
+} from '../cashSecrets'
+import {
+  registeredAddresses,
+  removeRegisteredAddress,
+  setAddressAutoScan,
+  ADDRESS_SCAN_OPTIONS,
+  ADDRESS_SCAN_LABEL,
+  type RegisteredAddress,
+  type AddressScanMinutes
+} from '../addressRegistry'
+import {runAddressScan} from '../addressRecovery'
+import {requestNotificationPermission} from '../notifications'
 import {
   storeableMints,
   addStoreableMint,
@@ -1045,6 +1061,86 @@ const Mint: Component = () => {
   const [claimAddressFor, setClaimAddressFor] = createSignal<string | null>(
     null
   )
+  // per-mint-server busy flags for the registered-address actions below
+  // (unclaim / check notes / rescan all) - a bare boolean would be shared
+  // across every card; keyed by server the same way rescanningServer/
+  // refreshingServer already are elsewhere on this page
+  const [addressActionFor, setAddressActionFor] = createSignal<string | null>(
+    null
+  )
+
+  // the "check notes"/"rescan all" split TODO.md asks for: "check notes"
+  // resumes from wherever this address's own nextScanIndex (or SERVICE's
+  // own metadata hint) left off, "rescan all" always re-walks from 0 -
+  // both funnel through the same runAddressScan (addressRecovery.ts),
+  // which claims anything found and persists the new resume point either
+  // way (markAddressScanned)
+  const checkRegisteredAddress = async (
+    addr: RegisteredAddress,
+    mode: 'incremental' | 'all'
+  ) => {
+    if (addressActionFor()) return
+    setAddressActionFor(addr.server)
+    try {
+      const result = await runAddressScan(
+        addr.server,
+        addr.username,
+        bearers(),
+        {addBearer, logActivity},
+        {startIndex: mode === 'incremental' ? (addr.nextScanIndex ?? 0) : 0}
+      )
+      if (result.error) {
+        notify(result.error, NotifyKind.ERROR)
+      } else {
+        const total = result.recovered.reduce((sum, n) => sum + n.amount, 0)
+        notify(
+          result.recovered.length > 0
+            ? `Found ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(total)} sats).`
+            : 'No new notes found.',
+          NotifyKind.SUCCESS
+        )
+      }
+    } finally {
+      setAddressActionFor(null)
+    }
+  }
+
+  const unclaimRegisteredAddress = async (addr: RegisteredAddress) => {
+    if (addressActionFor()) return
+    const proofKey = cashAddressSecretAtIndex(addr.server, 0)
+    if (!proofKey) {
+      notify(
+        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
+        NotifyKind.ERROR
+      )
+      return
+    }
+    setAddressActionFor(addr.server)
+    try {
+      await unregisterUsername(addr.server, addr.username, proofKey)
+      removeRegisteredAddress(addr.server, addr.username)
+      notify(
+        `Freed ${addr.username}@${serverOf(addr.server)}.`,
+        NotifyKind.SUCCESS
+      )
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    } finally {
+      setAddressActionFor(null)
+    }
+  }
+
+  // enabling auto-scan is the one user gesture this feature has to hang a
+  // Notification permission prompt off of (TODO.md) - most browsers
+  // silently drop a request made outside a direct gesture, so this can't
+  // wait until the first scan actually finds something
+  const setAddressAutoScanWithPrompt = (
+    addr: RegisteredAddress,
+    minutes: AddressScanMinutes
+  ) => {
+    setAddressAutoScan(addr.server, addr.username, minutes)
+    if (minutes > 0) void requestNotificationPermission()
+  }
 
   const addByAddress = async (value: string) => {
     const url = resolveMintInput(value)
@@ -1261,7 +1357,7 @@ const Mint: Component = () => {
 
   return (
     <div id="mint" class="page">
-      <h2>Mint a bearer note</h2>
+      <h2>Trusted Mints</h2>
       <Show when={claimAddressFor()}>
         {server => (
           <ClaimAddressDialog
@@ -1272,7 +1368,523 @@ const Mint: Component = () => {
       </Show>
       <div class="two-columns">
         <div class="two-col">
+          <h4>Trusted mints</h4>
+          <Show when={trustedMints().length > 0}>
+            <div class="btns">
+              <button
+                type="button"
+                disabled={addressBusy() || offlineMode()}
+                title={
+                  offlineMode()
+                    ? 'Offline mode is on'
+                    : "Refresh every trusted mint's cached info, one at a time"
+                }
+                onClick={refreshAllMints}
+              >
+                <IoRefreshSharp classList={{spin: addressBusy()}} />
+                &nbsp;Refresh all
+              </button>
+              <Show when={state() === 'unlocked'}>
+                <button
+                  type="button"
+                  disabled={
+                    offlineMode() ||
+                    !hasCashRoot() ||
+                    rescanningServer() !== null
+                  }
+                  title={
+                    offlineMode()
+                      ? 'Offline mode is on'
+                      : !hasCashRoot()
+                        ? 'No seed loaded for this wallet - restore your seed again first'
+                        : 'Rescan every trusted mint for missing notes, one at a time'
+                  }
+                  onClick={rescanAllMints}
+                >
+                  <Show
+                    when={rescanningServer() !== null}
+                    fallback={<IoSearchSharp />}
+                  >
+                    <IoRefreshSharp class="spin" />
+                  </Show>
+                  &nbsp;Rescan all
+                </button>
+              </Show>
+            </div>
+          </Show>
+          <Show
+            when={trustedMints().length > 0}
+            fallback={<p>No trusted mints yet.</p>}
+          >
+            <div class="mint-list">
+              <For each={trustedMints()}>
+                {mint => {
+                  // at most one registered address per mint server in
+                  // practice - a device's LUD-25 Part 2 registration is
+                  // scoped to one seed-derived branch per server (see
+                  // cashSecrets.ts's cashAddressBranch), so there's never
+                  // more than one to pick between here
+                  const registered = () =>
+                    registeredAddresses().find(a => a.server === mint.server)
+                  return (
+                    <figure class="mint-card">
+                      <h4>
+                        <span class="mint-card-title">
+                          <Show when={mint.nodeColor}>
+                            <span
+                              class="mint-color-dot"
+                              style={{'background-color': mint.nodeColor!}}
+                            />
+                          </Show>
+                          {mint.nodeAlias || serverOf(mint.server)}
+                        </span>
+                        <Show when={hasNotesFrom(mint.server)}>
+                          <span
+                            class="mint-trusted-badge"
+                            title="You hold a bearer note from here."
+                          >
+                            <IoLockClosedSharp />
+                            &nbsp;trusted
+                          </span>
+                        </Show>
+                      </h4>
+                      {/* always shown, same prominence .mint-pubkey used to
+                    give the signing key before that moved to a copy button
+                    in .btns below - the URL is what's left to visually
+                    anchor on here, alias or not. serverOf(), not mint.server
+                    directly - the latter retains the scheme (see
+                    serviceOriginOf's own comment), which reads fine as a
+                    security identity but not appended after "username@" */}
+                      <p class="mint-pubkey">
+                        {mint.username
+                          ? `${mint.username}@${serverOf(mint.server)}`
+                          : serverOf(mint.server)}
+                      </p>
+                      <p class="mint-date">
+                        <Show when={mint.nodeCapacityMsat !== undefined}>
+                          Channel capacity: {msatToSats(mint.nodeCapacityMsat!)}{' '}
+                          sats
+                          <br />
+                        </Show>
+                        <Show
+                          when={
+                            mint.nodeNumChannels !== undefined ||
+                            mint.nodeNumPeers !== undefined
+                          }
+                        >
+                          <Show when={mint.nodeNumChannels !== undefined}>
+                            {mint.nodeNumChannels} channels
+                          </Show>
+                          <Show
+                            when={
+                              mint.nodeNumChannels !== undefined &&
+                              mint.nodeNumPeers !== undefined
+                            }
+                          >
+                            &nbsp;·&nbsp;
+                          </Show>
+                          <Show when={mint.nodeNumPeers !== undefined}>
+                            {mint.nodeNumPeers} peers
+                          </Show>
+                          <br />
+                        </Show>
+                        <Show when={mint.outstandingNotesMsat !== undefined}>
+                          Outstanding notes:{' '}
+                          {Math.round(
+                            mint.outstandingNotesMsat! / 1000
+                          ).toLocaleString()}{' '}
+                          sats
+                          <br />
+                        </Show>
+                        added {formatDate(mint.addedAt)}
+                      </p>
+                      {/* advance warning of a planned shutdown (see
+                    trustedMints.ts's TrustedMint.sunsetDate) - shown for any
+                    mint this wallet holds notes from, prompting a move
+                    before that day rather than only once minting/splitting
+                    there actually stops */}
+                      <Show when={mint.sunsetDate}>
+                        {date => (
+                          <p class="warning">
+                            This mint plans to sunset on{' '}
+                            {new Date(date()).toLocaleDateString()} - rotate,
+                            transfer, or melt any notes held here before then.
+                          </p>
+                        )}
+                      </Show>
+                      {/* a pin that came from a backup or a stored note rather
+                    than a live response (see TrustedMint.unconfirmed) - said
+                    so plainly, since "signed" badges deliberately ignore it
+                    until the mint advertises the same key online */}
+                      <Show when={mint.unconfirmed}>
+                        <p class="warning">
+                          Restored from a backup or a stored note - not yet
+                          confirmed against this mint live, so signatures are
+                          not verified against it. Any refresh or mint lookup
+                          that advertises the same key confirms it.
+                        </p>
+                      </Show>
+                      {/* a staged key change (see trustedMints.ts). The pinned
+                    key keeps deciding the "signed" badge until the holder
+                    explicitly approves the candidate here */}
+                      <Show when={mint.pendingMintPubkey}>
+                        <p class="warning">
+                          This mint advertises a different signing key. It is
+                          not trusted yet because an unsigned response cannot
+                          authorise its own replacement. Only accept it after
+                          checking an announcement from the mint. Notes signed
+                          under the old key stop verifying offline - refresh
+                          them to re-sign under the new one:
+                        </p>
+                        <p class="mint-pubkey">{mint.pendingMintPubkey}</p>
+                        <div class="btns">
+                          <button onClick={() => rekey(mint.server)}>
+                            Trust the new key
+                          </button>
+                          <button onClick={() => dismissRekey(mint.server)}>
+                            Keep the current key
+                          </button>
+                        </div>
+                      </Show>
+                      {/* only meaningful with an unlocked wallet - this whole
+                    section otherwise stays usable locked/offline (see the
+                    top-of-file comment), but starting a mint needs the AES
+                    key to store the resulting bearer, and rescanning needs
+                    the seed-derived cash root - split onto its own row
+                    (with labels) since it's a different .btns block, rather
+                    than crammed unlabeled among the icon-only row below */}
+                      <Show when={state() === 'unlocked'}>
+                        <div class="btns">
+                          <button
+                            disabled={busy() || offlineMode()}
+                            onClick={() =>
+                              selectMint(mintAddressFor(mint.server))
+                            }
+                          >
+                            Mint
+                          </button>
+                          <button
+                            disabled={
+                              offlineMode() ||
+                              !hasCashRoot() ||
+                              rescanningServer() !== null
+                            }
+                            title={
+                              offlineMode()
+                                ? 'Offline mode is on'
+                                : !hasCashRoot()
+                                  ? 'No seed loaded for this wallet - restore your seed again first'
+                                  : 'Rescan this mint for seed-derived notes missing from this wallet (LUD-25)'
+                            }
+                            onClick={() => rescanMint(mint)}
+                          >
+                            <Show
+                              when={rescanningServer() === mint.server}
+                              fallback={<IoSearchSharp />}
+                            >
+                              <IoRefreshSharp class="spin" />
+                            </Show>
+                            &nbsp;Rescan
+                          </button>
+                          <Show
+                            when={registered()}
+                            fallback={
+                              <button
+                                disabled={offlineMode() || !hasCashRoot()}
+                                title={
+                                  offlineMode()
+                                    ? 'Offline mode is on'
+                                    : !hasCashRoot()
+                                      ? 'No seed loaded for this wallet - restore your seed again first'
+                                      : 'Claim a username@mint address here (LUD-25)'
+                                }
+                                onClick={() => setClaimAddressFor(mint.server)}
+                              >
+                                <IoAtCircleSharp />
+                                &nbsp;Claim address
+                              </button>
+                            }
+                          >
+                            {addr => (
+                              <>
+                                <button
+                                  disabled={
+                                    offlineMode() ||
+                                    !hasCashRoot() ||
+                                    addressActionFor() !== null
+                                  }
+                                  title={
+                                    offlineMode()
+                                      ? 'Offline mode is on'
+                                      : `Check ${addr().username}@${serverOf(addr().server)} for new notes, resuming from where the last check left off`
+                                  }
+                                  onClick={() =>
+                                    checkRegisteredAddress(
+                                      addr(),
+                                      'incremental'
+                                    )
+                                  }
+                                >
+                                  <Show
+                                    when={addressActionFor() === mint.server}
+                                    fallback={<IoSearchSharp />}
+                                  >
+                                    <IoRefreshSharp class="spin" />
+                                  </Show>
+                                  &nbsp;Check notes
+                                </button>
+                                <button
+                                  disabled={addressActionFor() !== null}
+                                  title={`Unclaim ${addr().username}@${serverOf(addr().server)} - frees the username at the mint`}
+                                  onClick={() =>
+                                    unclaimRegisteredAddress(addr())
+                                  }
+                                >
+                                  <IoTrashSharp />
+                                  &nbsp;Unclaim
+                                </button>
+                                <button
+                                  class="icon-btn icon-btn-gap"
+                                  disabled={
+                                    offlineMode() ||
+                                    !hasCashRoot() ||
+                                    addressActionFor() !== null
+                                  }
+                                  title="Rescan all - re-walk every index from 0, ignoring what's already been checked"
+                                  onClick={() =>
+                                    checkRegisteredAddress(addr(), 'all')
+                                  }
+                                >
+                                  <IoRefreshSharp />
+                                </button>
+                              </>
+                            )}
+                          </Show>
+                        </div>
+                        <Show when={registered()}>
+                          {addr => (
+                            <label>
+                              Auto-check {addr().username}
+                              <select
+                                value={addr().autoScanMinutes ?? 0}
+                                onChange={e =>
+                                  setAddressAutoScanWithPrompt(
+                                    addr(),
+                                    Number(
+                                      e.currentTarget.value
+                                    ) as AddressScanMinutes
+                                  )
+                                }
+                              >
+                                <For each={ADDRESS_SCAN_OPTIONS}>
+                                  {option => (
+                                    <option value={option}>
+                                      {ADDRESS_SCAN_LABEL[option]}
+                                    </option>
+                                  )}
+                                </For>
+                              </select>
+                            </label>
+                          )}
+                        </Show>
+                      </Show>
+                      <div class="btns">
+                        <button
+                          class="icon-btn"
+                          disabled={addressBusy() || offlineMode()}
+                          title={
+                            offlineMode() ? 'Offline mode is on' : 'Refresh'
+                          }
+                          onClick={() => refreshMint(mint)}
+                        >
+                          <IoRefreshSharp
+                            classList={{
+                              spin: refreshingServer() === mint.server
+                            }}
+                          />
+                        </button>
+                        <button
+                          class="icon-btn icon-btn-gap"
+                          title="Copy signing pubkey"
+                          onClick={() => copyToClipboard(mint.mintPubkey)}
+                        >
+                          <IoCopySharp />
+                        </button>
+                        <a
+                          class="icon-btn icon-btn-gap"
+                          title="Open this mint"
+                          href={mint.server}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <IoGlobeSharp />
+                        </a>
+                        <Show when={mint.nodePubkey}>
+                          {nodePubkey => (
+                            <a
+                              class="icon-btn icon-btn-gap"
+                              title="Look up this Lightning node on mempool.space"
+                              href={mempoolNodeUrl(nodePubkey())}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <IoOpenSharp />
+                            </a>
+                          )}
+                        </Show>
+                        <Show
+                          when={
+                            !hasNotesFrom(mint.server) &&
+                            confirmDelete() !== mint.server
+                          }
+                        >
+                          <button
+                            class="icon-btn icon-btn-gap"
+                            title="Remove"
+                            onClick={() => setConfirmDelete(mint.server)}
+                          >
+                            <IoTrashSharp />
+                          </button>
+                        </Show>
+                      </div>
+                      <Show when={rescanningServer() === mint.server}>
+                        <p class="bearer-hint">
+                          checking index {rescanIndex()}...
+                        </p>
+                      </Show>
+                      <Show
+                        when={
+                          !hasNotesFrom(mint.server) &&
+                          confirmDelete() === mint.server
+                        }
+                      >
+                        <p class="warning">
+                          Remove this mint? Its notes will no longer show as
+                          offline-verified.
+                        </p>
+                        <div class="btns">
+                          <button onClick={() => removeMint(mint.server)}>
+                            Yes, remove
+                          </button>
+                          <button onClick={() => setConfirmDelete(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </Show>
+                    </figure>
+                  )
+                }}
+              </For>
+            </div>
+          </Show>
+        </div>
+        <div class="two-col">
+          <Show when={state() === 'unlocked' && storeableMints().length > 0}>
+            <div class="setup-card">
+              <h4>
+                Your storeable mints
+                <span
+                  class="help-icon"
+                  title="These mints said their own address is meant to be reused, not a one-time link (LUD-11) - saved here for a one-click return trip."
+                >
+                  <IoHelpCircleSharp />
+                </span>
+              </h4>
+              <div class="mint-picker">
+                <For each={storeableMints()}>
+                  {link => (
+                    <span class="mint-picker-entry">
+                      <button
+                        disabled={busy() || offlineMode()}
+                        onClick={() => selectMint(link.address)}
+                      >
+                        {link.address}
+                      </button>
+                      <button
+                        class="icon-btn"
+                        title="Forget this mint"
+                        onClick={() => removeStoreableMint(link.address)}
+                      >
+                        <IoTrashSharp />
+                      </button>
+                    </span>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+          <div class="setup-card">
+            <h4>
+              Public mints
+              <span
+                class="help-icon"
+                title="A small curated list, for a quick start - click one to look up and trust its signing key via its mint-address discovery endpoint, or refresh it if it's already trusted. The globe icon opens the mint's own site instead, to look it up by hand first."
+              >
+                <IoHelpCircleSharp />
+              </span>
+            </h4>
+            <div class="mint-picker">
+              <For each={PUBLIC_MINTS}>
+                {address => {
+                  const url = resolveMintInput(address)
+                  const alreadyTrusted = () =>
+                    !!url && isMintTrusted(serviceOriginOf(url))
+                  return (
+                    <Show when={url}>
+                      <span class="mint-picker-entry">
+                        <button
+                          disabled={addressBusy() || offlineMode()}
+                          title={
+                            offlineMode()
+                              ? 'Offline mode is on'
+                              : alreadyTrusted()
+                                ? "Refresh this mint's cached info"
+                                : 'Look up and trust this mint'
+                          }
+                          onClick={() => addByAddress(address)}
+                        >
+                          <Show when={alreadyTrusted()}>
+                            <IoLockClosedSharp />
+                            &nbsp;
+                          </Show>
+                          {address}
+                        </button>
+                        <a
+                          class="icon-btn"
+                          title="Open this mint's site"
+                          href={`https://${serverOf(url!)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <IoGlobeSharp />
+                        </a>
+                      </span>
+                    </Show>
+                  )
+                }}
+              </For>
+            </div>
+          </div>
+          <Show when={addressTrust()}>
+            {pending => (
+              <div class="setup-card">
+                <h4>Trust this mint?</h4>
+                <p>
+                  {pending().server} advertises the signing key below. It will
+                  decide whether notes from this mint show the "signed" badge -
+                  only trust it if you reached this address from the mint itself
+                  (its own site, not a forwarded link).
+                </p>
+                <p class="mint-pubkey">{pending().pubkey}</p>
+                <div class="btns">
+                  <button onClick={confirmAddressTrust}>Trust this key</button>
+                  <button onClick={cancelAddressTrust}>Cancel</button>
+                </div>
+              </div>
+            )}
+          </Show>
           <RequireWallet>
+            <h4>Scan or paste mint address</h4>
             <figure class="paste-widget">
               <div class="paste-input-row">
                 <ScanToggle
@@ -1635,417 +2247,6 @@ const Mint: Component = () => {
               </Dialog>
             </Show>
           </RequireWallet>
-          <h4>Trusted mints</h4>
-          <Show when={trustedMints().length > 0}>
-            <div class="btns">
-              <button
-                type="button"
-                disabled={addressBusy() || offlineMode()}
-                title={
-                  offlineMode()
-                    ? 'Offline mode is on'
-                    : "Refresh every trusted mint's cached info, one at a time"
-                }
-                onClick={refreshAllMints}
-              >
-                <IoRefreshSharp classList={{spin: addressBusy()}} />
-                &nbsp;Refresh all
-              </button>
-              <Show when={state() === 'unlocked'}>
-                <button
-                  type="button"
-                  disabled={
-                    offlineMode() ||
-                    !hasCashRoot() ||
-                    rescanningServer() !== null
-                  }
-                  title={
-                    offlineMode()
-                      ? 'Offline mode is on'
-                      : !hasCashRoot()
-                        ? 'No seed loaded for this wallet - restore your seed again first'
-                        : 'Rescan every trusted mint for missing notes, one at a time'
-                  }
-                  onClick={rescanAllMints}
-                >
-                  <Show
-                    when={rescanningServer() !== null}
-                    fallback={<IoSearchSharp />}
-                  >
-                    <IoRefreshSharp class="spin" />
-                  </Show>
-                  &nbsp;Rescan all
-                </button>
-              </Show>
-            </div>
-          </Show>
-          <Show
-            when={trustedMints().length > 0}
-            fallback={<p>No trusted mints yet.</p>}
-          >
-            <div class="mint-list">
-              <For each={trustedMints()}>
-                {mint => (
-                  <figure class="mint-card">
-                    <h4>
-                      <Show when={mint.nodeColor}>
-                        <span
-                          class="mint-color-dot"
-                          style={{'background-color': mint.nodeColor!}}
-                        />
-                      </Show>
-                      {mint.nodeAlias || serverOf(mint.server)}
-                    </h4>
-                    {/* always shown, same prominence .mint-pubkey used to
-                    give the signing key before that moved to a copy button
-                    in .btns below - the URL is what's left to visually
-                    anchor on here, alias or not. serverOf(), not mint.server
-                    directly - the latter retains the scheme (see
-                    serviceOriginOf's own comment), which reads fine as a
-                    security identity but not appended after "username@" */}
-                    <p class="mint-pubkey">
-                      {mint.username
-                        ? `${mint.username}@${serverOf(mint.server)}`
-                        : serverOf(mint.server)}
-                    </p>
-                    <p class="mint-date">
-                      <Show when={mint.nodeCapacityMsat !== undefined}>
-                        Channel capacity: {msatToSats(mint.nodeCapacityMsat!)}{' '}
-                        sats
-                        <br />
-                      </Show>
-                      <Show
-                        when={
-                          mint.nodeNumChannels !== undefined ||
-                          mint.nodeNumPeers !== undefined
-                        }
-                      >
-                        <Show when={mint.nodeNumChannels !== undefined}>
-                          {mint.nodeNumChannels} channels
-                        </Show>
-                        <Show
-                          when={
-                            mint.nodeNumChannels !== undefined &&
-                            mint.nodeNumPeers !== undefined
-                          }
-                        >
-                          &nbsp;·&nbsp;
-                        </Show>
-                        <Show when={mint.nodeNumPeers !== undefined}>
-                          {mint.nodeNumPeers} peers
-                        </Show>
-                        <br />
-                      </Show>
-                      <Show when={mint.outstandingNotesMsat !== undefined}>
-                        Outstanding notes:{' '}
-                        {Math.round(
-                          mint.outstandingNotesMsat! / 1000
-                        ).toLocaleString()}{' '}
-                        sats
-                        <br />
-                      </Show>
-                      added {formatDate(mint.addedAt)}
-                    </p>
-                    {/* advance warning of a planned shutdown (see
-                    trustedMints.ts's TrustedMint.sunsetDate) - shown for any
-                    mint this wallet holds notes from, prompting a move
-                    before that day rather than only once minting/splitting
-                    there actually stops */}
-                    <Show when={mint.sunsetDate}>
-                      {date => (
-                        <p class="warning">
-                          This mint plans to sunset on{' '}
-                          {new Date(date()).toLocaleDateString()} - rotate,
-                          transfer, or melt any notes held here before then.
-                        </p>
-                      )}
-                    </Show>
-                    {/* a pin that came from a backup or a stored note rather
-                    than a live response (see TrustedMint.unconfirmed) - said
-                    so plainly, since "signed" badges deliberately ignore it
-                    until the mint advertises the same key online */}
-                    <Show when={mint.unconfirmed}>
-                      <p class="warning">
-                        Restored from a backup or a stored note - not yet
-                        confirmed against this mint live, so signatures are not
-                        verified against it. Any refresh or mint lookup that
-                        advertises the same key confirms it.
-                      </p>
-                    </Show>
-                    {/* a staged key change (see trustedMints.ts). The pinned
-                    key keeps deciding the "signed" badge until the holder
-                    explicitly approves the candidate here */}
-                    <Show when={mint.pendingMintPubkey}>
-                      <p class="warning">
-                        This mint advertises a different signing key. It is not
-                        trusted yet because an unsigned response cannot
-                        authorise its own replacement. Only accept it after
-                        checking an announcement from the mint. Notes signed
-                        under the old key stop verifying offline - refresh them
-                        to re-sign under the new one:
-                      </p>
-                      <p class="mint-pubkey">{mint.pendingMintPubkey}</p>
-                      <div class="btns">
-                        <button onClick={() => rekey(mint.server)}>
-                          Trust the new key
-                        </button>
-                        <button onClick={() => dismissRekey(mint.server)}>
-                          Keep the current key
-                        </button>
-                      </div>
-                    </Show>
-                    {/* only meaningful with an unlocked wallet - this whole
-                    section otherwise stays usable locked/offline (see the
-                    top-of-file comment), but starting a mint needs the AES
-                    key to store the resulting bearer, and rescanning needs
-                    the seed-derived cash root - split onto its own row
-                    (with labels) since it's a different .btns block, rather
-                    than crammed unlabeled among the icon-only row below */}
-                    <Show when={state() === 'unlocked'}>
-                      <div class="btns">
-                        <button
-                          disabled={busy() || offlineMode()}
-                          onClick={() =>
-                            selectMint(mintAddressFor(mint.server))
-                          }
-                        >
-                          Mint
-                        </button>
-                        <button
-                          disabled={
-                            offlineMode() ||
-                            !hasCashRoot() ||
-                            rescanningServer() !== null
-                          }
-                          title={
-                            offlineMode()
-                              ? 'Offline mode is on'
-                              : !hasCashRoot()
-                                ? 'No seed loaded for this wallet - restore your seed again first'
-                                : 'Rescan this mint for seed-derived notes missing from this wallet (LUD-25)'
-                          }
-                          onClick={() => rescanMint(mint)}
-                        >
-                          <Show
-                            when={rescanningServer() === mint.server}
-                            fallback={<IoSearchSharp />}
-                          >
-                            <IoRefreshSharp class="spin" />
-                          </Show>
-                          &nbsp;Rescan
-                        </button>
-                        <button
-                          disabled={offlineMode() || !hasCashRoot()}
-                          title={
-                            offlineMode()
-                              ? 'Offline mode is on'
-                              : !hasCashRoot()
-                                ? 'No seed loaded for this wallet - restore your seed again first'
-                                : 'Claim a username@mint address here (LUD-25)'
-                          }
-                          onClick={() => setClaimAddressFor(mint.server)}
-                        >
-                          <IoAtCircleSharp />
-                          &nbsp;Claim address
-                        </button>
-                      </div>
-                    </Show>
-                    <div class="btns">
-                      <button
-                        class="icon-btn"
-                        disabled={addressBusy() || offlineMode()}
-                        title={offlineMode() ? 'Offline mode is on' : 'Refresh'}
-                        onClick={() => refreshMint(mint)}
-                      >
-                        <IoRefreshSharp
-                          classList={{spin: refreshingServer() === mint.server}}
-                        />
-                      </button>
-                      <button
-                        class="icon-btn icon-btn-gap"
-                        title="Copy signing pubkey"
-                        onClick={() => copyToClipboard(mint.mintPubkey)}
-                      >
-                        <IoCopySharp />
-                      </button>
-                      <a
-                        class="icon-btn icon-btn-gap"
-                        title="Open this mint"
-                        href={mint.server}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <IoGlobeSharp />
-                      </a>
-                      <Show when={mint.nodePubkey}>
-                        {nodePubkey => (
-                          <a
-                            class="icon-btn icon-btn-gap"
-                            title="Look up this Lightning node on mempool.space"
-                            href={mempoolNodeUrl(nodePubkey())}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <IoOpenSharp />
-                          </a>
-                        )}
-                      </Show>
-                      <Show
-                        when={
-                          !hasNotesFrom(mint.server) &&
-                          confirmDelete() !== mint.server
-                        }
-                      >
-                        <button
-                          class="icon-btn icon-btn-gap"
-                          title="Remove"
-                          onClick={() => setConfirmDelete(mint.server)}
-                        >
-                          <IoTrashSharp />
-                        </button>
-                      </Show>
-                    </div>
-                    <Show when={rescanningServer() === mint.server}>
-                      <p class="bearer-hint">
-                        checking index {rescanIndex()}...
-                      </p>
-                    </Show>
-                    <Show when={hasNotesFrom(mint.server)}>
-                      <p class="mint-locked">
-                        <IoLockClosedSharp />
-                        &nbsp;trusted - you hold a bearer note from here
-                      </p>
-                    </Show>
-                    <Show
-                      when={
-                        !hasNotesFrom(mint.server) &&
-                        confirmDelete() === mint.server
-                      }
-                    >
-                      <p class="warning">
-                        Remove this mint? Its notes will no longer show as
-                        offline-verified.
-                      </p>
-                      <div class="btns">
-                        <button onClick={() => removeMint(mint.server)}>
-                          Yes, remove
-                        </button>
-                        <button onClick={() => setConfirmDelete(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </Show>
-                  </figure>
-                )}
-              </For>
-            </div>
-          </Show>
-        </div>
-        <div class="two-col">
-          <Show when={state() === 'unlocked' && storeableMints().length > 0}>
-            <div class="setup-card">
-              <h4>
-                Your storeable mints
-                <span
-                  class="help-icon"
-                  title="These mints said their own address is meant to be reused, not a one-time link (LUD-11) - saved here for a one-click return trip."
-                >
-                  <IoHelpCircleSharp />
-                </span>
-              </h4>
-              <div class="mint-picker">
-                <For each={storeableMints()}>
-                  {link => (
-                    <span class="mint-picker-entry">
-                      <button
-                        disabled={busy() || offlineMode()}
-                        onClick={() => selectMint(link.address)}
-                      >
-                        {link.address}
-                      </button>
-                      <button
-                        class="icon-btn"
-                        title="Forget this mint"
-                        onClick={() => removeStoreableMint(link.address)}
-                      >
-                        <IoTrashSharp />
-                      </button>
-                    </span>
-                  )}
-                </For>
-              </div>
-            </div>
-          </Show>
-          <div class="setup-card">
-            <h4>
-              Public mints
-              <span
-                class="help-icon"
-                title="A small curated list, for a quick start - click one to look up and trust its signing key via its mint-address discovery endpoint, or refresh it if it's already trusted. The globe icon opens the mint's own site instead, to look it up by hand first."
-              >
-                <IoHelpCircleSharp />
-              </span>
-            </h4>
-            <div class="mint-picker">
-              <For each={PUBLIC_MINTS}>
-                {address => {
-                  const url = resolveMintInput(address)
-                  const alreadyTrusted = () =>
-                    !!url && isMintTrusted(serviceOriginOf(url))
-                  return (
-                    <Show when={url}>
-                      <span class="mint-picker-entry">
-                        <button
-                          disabled={addressBusy() || offlineMode()}
-                          title={
-                            offlineMode()
-                              ? 'Offline mode is on'
-                              : alreadyTrusted()
-                                ? "Refresh this mint's cached info"
-                                : 'Look up and trust this mint'
-                          }
-                          onClick={() => addByAddress(address)}
-                        >
-                          <Show when={alreadyTrusted()}>
-                            <IoLockClosedSharp />
-                            &nbsp;
-                          </Show>
-                          {address}
-                        </button>
-                        <a
-                          class="icon-btn"
-                          title="Open this mint's site"
-                          href={`https://${serverOf(url!)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <IoGlobeSharp />
-                        </a>
-                      </span>
-                    </Show>
-                  )
-                }}
-              </For>
-            </div>
-          </div>
-          <Show when={addressTrust()}>
-            {pending => (
-              <div class="setup-card">
-                <h4>Trust this mint?</h4>
-                <p>
-                  {pending().server} advertises the signing key below. It will
-                  decide whether notes from this mint show the "signed" badge -
-                  only trust it if you reached this address from the mint itself
-                  (its own site, not a forwarded link).
-                </p>
-                <p class="mint-pubkey">{pending().pubkey}</p>
-                <div class="btns">
-                  <button onClick={confirmAddressTrust}>Trust this key</button>
-                  <button onClick={cancelAddressTrust}>Cancel</button>
-                </div>
-              </div>
-            )}
-          </Show>
           <div class="setup-card">
             <h4>Add a mint manually</h4>
             <label>SERVICE origin</label>

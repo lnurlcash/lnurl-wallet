@@ -5,7 +5,8 @@ import {
   IoCodeSlashSharp,
   IoKeySharp,
   IoGlobeSharp,
-  IoRadioSharp
+  IoRadioSharp,
+  IoGiftSharp
 } from 'solid-icons/io'
 
 // manifests reference an icon by name, never a component - keeps a
@@ -17,5 +18,6 @@ export const ADDON_ICONS: Record<string, Component> = {
   code: IoCodeSlashSharp,
   key: IoKeySharp,
   globe: IoGlobeSharp,
-  radio: IoRadioSharp
+  radio: IoRadioSharp,
+  gift: IoGiftSharp
 }

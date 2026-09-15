@@ -12,7 +12,8 @@ import {
   IoShieldCheckmarkSharp,
   IoSearchSharp,
   IoInformationCircleSharp,
-  IoCogSharp
+  IoCogSharp,
+  IoHardwareChipSharp
 } from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
@@ -42,6 +43,8 @@ import {notify, NotifyKind} from '../helpers'
 import {MIN_PASSWORD_LENGTH} from './Setup'
 import {allAddons, isBundledAddon} from '../addons/registry'
 import {enabledAddonIds, setAddonEnabled} from '../addons/enabled'
+import {effectiveNavPosition, setAddonNavPosition} from '../addons/navPosition'
+import {vaultEnabled, setVaultEnabled} from '../vaultFeature'
 import {addonSettingsStore} from '../addons/settingsStore'
 import {
   saveCustomAddon,
@@ -440,6 +443,30 @@ const Settings: Component = () => {
               </button>
             </div>
           </div>
+          <div class="setup-card">
+            <h4>
+              <IoHardwareChipSharp />
+              &nbsp;Vault (alpha)
+            </h4>
+            <p>
+              Pairing + read-only visibility for an LNURLvault hardware device
+              (USB/Bluetooth) - still alpha, off by default. Turning this on
+              adds a "Vault" link to the nav bar.
+            </p>
+            <div class="btns">
+              <button
+                type="button"
+                classList={{active: vaultEnabled()}}
+                onClick={() => setVaultEnabled(!vaultEnabled())}
+              >
+                <IoHardwareChipSharp />
+                &nbsp;
+                <Show when={vaultEnabled()} fallback="Turn on">
+                  Turn off
+                </Show>
+              </button>
+            </div>
+          </div>
           <Show when={state() === 'unlocked'}>
             <div class="setup-card">
               <h4>
@@ -712,6 +739,25 @@ const Settings: Component = () => {
                       >
                         Open
                       </A>
+                    </Show>
+                    <Show when={enabled() && addon.manifest.nav}>
+                      <button
+                        type="button"
+                        class="icon-btn"
+                        title={`Nav position: ${effectiveNavPosition(addon) === 'left' ? 'left, alongside Wallet/Mint/Vault' : 'right, alongside Docs/Settings'} - click to switch sides`}
+                        onClick={() =>
+                          setAddonNavPosition(
+                            addon.manifest.id,
+                            effectiveNavPosition(addon) === 'left'
+                              ? 'right'
+                              : 'left'
+                          )
+                        }
+                      >
+                        {effectiveNavPosition(addon) === 'left'
+                          ? 'Left'
+                          : 'Right'}
+                      </button>
                     </Show>
                     <Show when={enabled() && addon.manifest.settings}>
                       <button

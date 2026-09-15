@@ -1,5 +1,6 @@
 import type {Component} from 'solid-js'
 import {For, Show, createSignal} from 'solid-js'
+import {A} from '@solidjs/router'
 import {
   IoBanSharp,
   IoDownloadSharp,
@@ -20,6 +21,7 @@ import {
 } from '../deviceGuidance'
 import {identityWarning} from '../devicePinning'
 import {msatToSats, notify, NotifyKind} from '../helpers'
+import {vaultEnabled} from '../vaultFeature'
 
 // get_info's `storage` (docs/PROTOCOL.md) - only 'ok' (or absent, meaning
 // this build has no persistent storage to worry about) means note_count
@@ -208,331 +210,355 @@ const Vault: Component = () => {
       A device-backed note's own secret never even reaches the browser, so
       this can't be bridged from this side - shown regardless of connection
       state, since it's true whether or not one is currently paired. */}
-      <p class="warning">
-        This vault has not been migrated to LUD-25 Part 2's pubkey-based notes
-        yet - it only generates and holds legacy hash-keyed secrets. Address
-        page registrations and any other pubkey-keyed notes stay browser-only
-        for now; keep using this device for its existing note types.
-      </p>
-      {/* the pairing call to action has to go once a vault is paired -
-          left standing next to "No notes on this device yet" it reads as
-          "you still have not paired", on a page that just did */}
       <Show
-        when={connectionState() === 'connected'}
+        when={vaultEnabled()}
         fallback={
-          <>
+          <div class="setup-card">
             <p>
-              Pair an LNURLvault hardware device over USB or Bluetooth. The
-              device generates and holds note secrets itself - this page only
-              reads its state, it never sees a plaintext secret unless you
-              explicitly export one on the device (which requires a physical
-              button press there).
+              Vault is still an alpha feature, opt-in only - turn it on in
+              Settings to pair a hardware device.
             </p>
-            <p>
-              Don't have a vault yet? See{' '}
-              <a
-                href="https://vault.lnurlcash.com"
-                target="_blank"
-                rel="noreferrer"
-              >
-                vault.lnurlcash.com
-              </a>{' '}
-              for setup instructions and supported hardware.
-            </p>
-          </>
+            <A href="/settings" class="hero-btn hero-btn-primary">
+              Go to Settings
+            </A>
+          </div>
         }
       >
-        <p>
-          This vault generates and holds its note secrets itself. This page only
-          reads its state, and never sees a plaintext secret unless you export
-          one on the device, which requires a physical button press there.
+        <p class="warning">
+          This vault has not been migrated to LUD-25 Part 2's pubkey-based notes
+          yet - it only generates and holds legacy hash-keyed secrets. Address
+          page registrations and any other pubkey-keyed notes stay browser-only
+          for now; keep using this device for its existing note types.
         </p>
-      </Show>
-      <div class="two-columns">
-        <div class="two-col">
-          <Show
-            when={connectionState() === 'connected'}
-            fallback={
-              <div class="setup-card">
-                <Show
-                  when={serialSupported || bleSupported}
-                  fallback={
-                    <p class="warning">
-                      This browser supports neither WebSerial nor Web Bluetooth
-                      - try Chrome or Edge on desktop or Android.
-                    </p>
-                  }
+        {/* the pairing call to action has to go once a vault is paired -
+          left standing next to "No notes on this device yet" it reads as
+          "you still have not paired", on a page that just did */}
+        <Show
+          when={connectionState() === 'connected'}
+          fallback={
+            <>
+              <p>
+                Pair an LNURLvault hardware device over USB or Bluetooth. The
+                device generates and holds note secrets itself - this page only
+                reads its state, it never sees a plaintext secret unless you
+                explicitly export one on the device (which requires a physical
+                button press there).
+              </p>
+              <p>
+                Don't have a vault yet? See{' '}
+                <a
+                  href="https://vault.lnurlcash.com"
+                  target="_blank"
+                  rel="noreferrer"
                 >
+                  vault.lnurlcash.com
+                </a>{' '}
+                for setup instructions and supported hardware.
+              </p>
+            </>
+          }
+        >
+          <p>
+            This vault generates and holds its note secrets itself. This page
+            only reads its state, and never sees a plaintext secret unless you
+            export one on the device, which requires a physical button press
+            there.
+          </p>
+        </Show>
+        <div class="two-columns">
+          <div class="two-col">
+            <Show
+              when={connectionState() === 'connected'}
+              fallback={
+                <div class="setup-card">
                   <Show
-                    when={!reconnecting()}
+                    when={serialSupported || bleSupported}
                     fallback={
-                      <p class="bearer-hint">Looking for your vault...</p>
+                      <p class="warning">
+                        This browser supports neither WebSerial nor Web
+                        Bluetooth - try Chrome or Edge on desktop or Android.
+                      </p>
                     }
                   >
-                    <div class="btns">
-                      <Show when={serialSupported}>
-                        <button
-                          disabled={connectionState() === 'connecting'}
-                          onClick={() => withBusy(connectSerial)}
-                        >
-                          Connect vault over USB
-                        </button>
-                      </Show>
-                      <Show when={bleSupported}>
-                        <button
-                          disabled={connectionState() === 'connecting'}
-                          onClick={() => withBusy(connectBle)}
-                        >
-                          Connect vault over Bluetooth
-                        </button>
-                      </Show>
-                    </div>
+                    <Show
+                      when={!reconnecting()}
+                      fallback={
+                        <p class="bearer-hint">Looking for your vault...</p>
+                      }
+                    >
+                      <div class="btns">
+                        <Show when={serialSupported}>
+                          <button
+                            disabled={connectionState() === 'connecting'}
+                            onClick={() => withBusy(connectSerial)}
+                          >
+                            Connect vault over USB
+                          </button>
+                        </Show>
+                        <Show when={bleSupported}>
+                          <button
+                            disabled={connectionState() === 'connecting'}
+                            onClick={() => withBusy(connectBle)}
+                          >
+                            Connect vault over Bluetooth
+                          </button>
+                        </Show>
+                      </div>
+                    </Show>
                   </Show>
-                </Show>
-              </div>
-            }
-          >
-            <div class="setup-card">
-              <h4>
-                {info()
-                  ? `Vault ${info()!.fw_version}${info()!.board ? ` (${info()!.board})` : ''}`
-                  : 'Connected'}
-              </h4>
-              <Show when={identity() && identityWarning(identity()!)}>
-                {message => (
-                  <>
-                    <p class="warning">{message()}</p>
-                    <div class="btns">
-                      <Show when={identity()?.kind === 'changed'}>
+                </div>
+              }
+            >
+              <div class="setup-card">
+                <h4>
+                  {info()
+                    ? `Vault ${info()!.fw_version}${info()!.board ? ` (${info()!.board})` : ''}`
+                    : 'Connected'}
+                </h4>
+                <Show when={identity() && identityWarning(identity()!)}>
+                  {message => (
+                    <>
+                      <p class="warning">{message()}</p>
+                      <div class="btns">
+                        <Show when={identity()?.kind === 'changed'}>
+                          <button
+                            disabled={busy()}
+                            onClick={trustCurrentIdentity}
+                          >
+                            Trust this vault from now on
+                          </button>
+                        </Show>
                         <button
                           disabled={busy()}
-                          onClick={trustCurrentIdentity}
+                          onClick={() => withBusy(disconnect)}
                         >
-                          Trust this vault from now on
+                          Disconnect
                         </button>
+                      </div>
+                    </>
+                  )}
+                </Show>
+                <Show when={info()}>
+                  {i => (
+                    <>
+                      <Show when={storageWarning(i().storage)}>
+                        {message => <p class="warning">{message()}</p>}
                       </Show>
-                      <button
-                        disabled={busy()}
-                        onClick={() => withBusy(disconnect)}
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  </>
-                )}
-              </Show>
-              <Show when={info()}>
-                {i => (
-                  <>
-                    <Show when={storageWarning(i().storage)}>
-                      {message => <p class="warning">{message()}</p>}
-                    </Show>
-                    <Show when={inputWarning(i())}>
-                      {message => <p class="warning">{message()}</p>}
-                    </Show>
-                    <p class="bearer-hint">
-                      {i().note_count} note{i().note_count === 1 ? '' : 's'} on
-                      device, {i().pending_count} pending.
-                    </p>
-                    <p class="bearer-hint">{approvalInstruction(i())}</p>
-                    <Show when={i().capabilities && !canShowQrHandoff(i())}>
+                      <Show when={inputWarning(i())}>
+                        {message => <p class="warning">{message()}</p>}
+                      </Show>
                       <p class="bearer-hint">
-                        This vault's screen is too small to show a note as a QR
-                        code, so notes on it can't be handed over in person.
+                        {i().note_count} note{i().note_count === 1 ? '' : 's'}{' '}
+                        on device, {i().pending_count} pending.
                       </p>
-                    </Show>
-                  </>
-                )}
-              </Show>
-              <div class="btns">
-                <button disabled={busy()} onClick={() => withBusy(refresh)}>
-                  Refresh
-                </button>
-                <Show
-                  when={spentCount() > 0 && !gatedCommandsUnavailable(info())}
-                >
+                      <p class="bearer-hint">{approvalInstruction(i())}</p>
+                      <Show when={i().capabilities && !canShowQrHandoff(i())}>
+                        <p class="bearer-hint">
+                          This vault's screen is too small to show a note as a
+                          QR code, so notes on it can't be handed over in
+                          person.
+                        </p>
+                      </Show>
+                    </>
+                  )}
+                </Show>
+                <div class="btns">
+                  <button disabled={busy()} onClick={() => withBusy(refresh)}>
+                    Refresh
+                  </button>
+                  <Show
+                    when={spentCount() > 0 && !gatedCommandsUnavailable(info())}
+                  >
+                    <button
+                      disabled={busy()}
+                      onClick={() => withBusy(clearSpent)}
+                    >
+                      Clear {spentCount()} spent
+                    </button>
+                  </Show>
                   <button
                     disabled={busy()}
-                    onClick={() => withBusy(clearSpent)}
+                    onClick={() => withBusy(disconnect)}
                   >
-                    Clear {spentCount()} spent
+                    Disconnect
                   </button>
-                </Show>
-                <button disabled={busy()} onClick={() => withBusy(disconnect)}>
-                  Disconnect
-                </button>
+                </div>
               </div>
-            </div>
-            <Show
-              when={notes().length > 0}
-              fallback={
-                <p>
-                  {storageWarning(info()?.storage)
-                    ? "Can't reliably read this device's notes right now - see the warning above."
-                    : 'No notes on this device yet.'}
-                </p>
-              }
-            >
-              <div class="bearer-list">
-                <For each={notes()}>
-                  {note => (
-                    <figure class="bearer-card">
-                      <div class="bearer-head">
-                        <div class="bearer-title">
-                          <span class="bearer-amount">
-                            {msatToSats(note.amount_msat)} sats
-                          </span>
-                          <Show when={note.label}>
-                            <span class="bearer-label">{note.label}</span>
-                          </Show>
-                          <Show when={note.state === 'pending'}>
-                            <span class="bearer-pending">pending</span>
-                          </Show>
-                          <Show when={note.state === 'spent'}>
-                            <span class="bearer-spent">
-                              <IoBanSharp />
-                              &nbsp;spent
+              <Show
+                when={notes().length > 0}
+                fallback={
+                  <p>
+                    {storageWarning(info()?.storage)
+                      ? "Can't reliably read this device's notes right now - see the warning above."
+                      : 'No notes on this device yet.'}
+                  </p>
+                }
+              >
+                <div class="bearer-list">
+                  <For each={notes()}>
+                    {note => (
+                      <figure class="bearer-card">
+                        <div class="bearer-head">
+                          <div class="bearer-title">
+                            <span class="bearer-amount">
+                              {msatToSats(note.amount_msat)} sats
                             </span>
-                          </Show>
-                          <span class="bearer-server">{note.host}</span>
-                        </div>
-                      </div>
-                      <Show
-                        when={editingId() === note.id}
-                        fallback={
-                          <div class="btns">
-                            <button
-                              class="icon-btn"
-                              title="Rename"
-                              onClick={() => startRename(note)}
-                            >
-                              <IoPencilSharp />
-                            </button>
-                            <Show when={isOrphan(note)}>
-                              <button
-                                class="icon-btn"
-                                title="Adopt into this wallet - this browser has no record of this note, so it has no card on the wallet page"
-                                disabled={busy()}
-                                onClick={() => withBusy(() => adopt(note))}
-                              >
-                                <IoDownloadSharp />
-                              </button>
+                            <Show when={note.label}>
+                              <span class="bearer-label">{note.label}</span>
+                            </Show>
+                            <Show when={note.state === 'pending'}>
+                              <span class="bearer-pending">pending</span>
                             </Show>
                             <Show when={note.state === 'spent'}>
-                              <button
-                                class="icon-btn"
-                                title="Delete from device"
-                                disabled={busy()}
-                                onClick={() =>
-                                  withBusy(() => deleteNote(note.id))
-                                }
-                              >
-                                <IoTrashSharp />
-                              </button>
+                              <span class="bearer-spent">
+                                <IoBanSharp />
+                                &nbsp;spent
+                              </span>
                             </Show>
-                          </div>
-                        }
-                      >
-                        <div class="form-item">
-                          <input
-                            type="text"
-                            placeholder="label"
-                            value={labelInput()}
-                            onInput={e => setLabelInput(e.currentTarget.value)}
-                            onKeyDown={e =>
-                              e.key === 'Enter' && saveRename(note.id)
-                            }
-                          />
-                          <div class="btns">
-                            <button
-                              disabled={busy()}
-                              onClick={() => saveRename(note.id)}
-                            >
-                              Save
-                            </button>
-                            <button onClick={() => setEditingId(null)}>
-                              Cancel
-                            </button>
+                            <span class="bearer-server">{note.host}</span>
                           </div>
                         </div>
-                      </Show>
-                    </figure>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </Show>
-        </div>
-        <div class="two-col">
-          <div class="setup-card">
-            <h4>Device console</h4>
-            <p>
-              Send a raw command straight to the paired vault and see its raw
-              response - the same low-level access as the console at{' '}
-              <a
-                href="https://vault.lnurlcash.com"
-                target="_blank"
-                rel="noreferrer"
-              >
-                vault.lnurlcash.com
-              </a>
-              . For debugging and advanced use only - everything the buttons on
-              this page already do is safer and easier.
-            </p>
-            <Show
-              when={client()}
-              fallback={
-                <p class="bearer-hint">Connect a vault to use the console.</p>
-              }
-            >
-              <div class="btns">
-                <button onClick={() => setConsoleInput('{"cmd": "get_info"}')}>
-                  get_info
-                </button>
-                <button
-                  onClick={() => setConsoleInput('{"cmd": "list_notes"}')}
-                >
-                  list_notes
-                </button>
-              </div>
-              <label>Command (raw JSON)</label>
-              <textarea
-                rows="3"
-                spellcheck={false}
-                value={consoleInput()}
-                onInput={e => setConsoleInput(e.currentTarget.value)}
-              />
-              <div class="btns">
-                <button disabled={consoleBusy()} onClick={sendConsoleCommand}>
-                  <Show when={consoleBusy()}>
-                    <IoRefreshSharp class="spin" />
-                    &nbsp;
-                  </Show>
-                  Send
-                </button>
-                <Show when={consoleLog().length > 0}>
-                  <button onClick={() => setConsoleLog([])}>Clear log</button>
-                </Show>
-              </div>
-              <Show when={consoleLog().length > 0}>
-                <div class="console-log">
-                  <For each={consoleLog()}>
-                    {entry => (
-                      <div
-                        class="console-entry"
-                        classList={{'console-entry-error': !entry.ok}}
-                      >
-                        <p class="console-request">&gt; {entry.request}</p>
-                        <pre class="console-response">{entry.response}</pre>
-                      </div>
+                        <Show
+                          when={editingId() === note.id}
+                          fallback={
+                            <div class="btns">
+                              <button
+                                class="icon-btn"
+                                title="Rename"
+                                onClick={() => startRename(note)}
+                              >
+                                <IoPencilSharp />
+                              </button>
+                              <Show when={isOrphan(note)}>
+                                <button
+                                  class="icon-btn"
+                                  title="Adopt into this wallet - this browser has no record of this note, so it has no card on the wallet page"
+                                  disabled={busy()}
+                                  onClick={() => withBusy(() => adopt(note))}
+                                >
+                                  <IoDownloadSharp />
+                                </button>
+                              </Show>
+                              <Show when={note.state === 'spent'}>
+                                <button
+                                  class="icon-btn"
+                                  title="Delete from device"
+                                  disabled={busy()}
+                                  onClick={() =>
+                                    withBusy(() => deleteNote(note.id))
+                                  }
+                                >
+                                  <IoTrashSharp />
+                                </button>
+                              </Show>
+                            </div>
+                          }
+                        >
+                          <div class="form-item">
+                            <input
+                              type="text"
+                              placeholder="label"
+                              value={labelInput()}
+                              onInput={e =>
+                                setLabelInput(e.currentTarget.value)
+                              }
+                              onKeyDown={e =>
+                                e.key === 'Enter' && saveRename(note.id)
+                              }
+                            />
+                            <div class="btns">
+                              <button
+                                disabled={busy()}
+                                onClick={() => saveRename(note.id)}
+                              >
+                                Save
+                              </button>
+                              <button onClick={() => setEditingId(null)}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        </Show>
+                      </figure>
                     )}
                   </For>
                 </div>
               </Show>
             </Show>
           </div>
+          <div class="two-col">
+            <div class="setup-card">
+              <h4>Device console</h4>
+              <p>
+                Send a raw command straight to the paired vault and see its raw
+                response - the same low-level access as the console at{' '}
+                <a
+                  href="https://vault.lnurlcash.com"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  vault.lnurlcash.com
+                </a>
+                . For debugging and advanced use only - everything the buttons
+                on this page already do is safer and easier.
+              </p>
+              <Show
+                when={client()}
+                fallback={
+                  <p class="bearer-hint">Connect a vault to use the console.</p>
+                }
+              >
+                <div class="btns">
+                  <button
+                    onClick={() => setConsoleInput('{"cmd": "get_info"}')}
+                  >
+                    get_info
+                  </button>
+                  <button
+                    onClick={() => setConsoleInput('{"cmd": "list_notes"}')}
+                  >
+                    list_notes
+                  </button>
+                </div>
+                <label>Command (raw JSON)</label>
+                <textarea
+                  rows="3"
+                  spellcheck={false}
+                  value={consoleInput()}
+                  onInput={e => setConsoleInput(e.currentTarget.value)}
+                />
+                <div class="btns">
+                  <button disabled={consoleBusy()} onClick={sendConsoleCommand}>
+                    <Show when={consoleBusy()}>
+                      <IoRefreshSharp class="spin" />
+                      &nbsp;
+                    </Show>
+                    Send
+                  </button>
+                  <Show when={consoleLog().length > 0}>
+                    <button onClick={() => setConsoleLog([])}>Clear log</button>
+                  </Show>
+                </div>
+                <Show when={consoleLog().length > 0}>
+                  <div class="console-log">
+                    <For each={consoleLog()}>
+                      {entry => (
+                        <div
+                          class="console-entry"
+                          classList={{'console-entry-error': !entry.ok}}
+                        >
+                          <p class="console-request">&gt; {entry.request}</p>
+                          <pre class="console-response">{entry.response}</pre>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </Show>
+            </div>
+          </div>
         </div>
-      </div>
+      </Show>
     </div>
   )
 }

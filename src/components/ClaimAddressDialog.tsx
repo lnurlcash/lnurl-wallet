@@ -60,7 +60,7 @@ const ClaimAddressDialog: Component<ClaimAddressDialogProps> = props => {
         proofKey,
         npubValue || undefined
       )
-      addRegisteredAddress(props.server, name)
+      addRegisteredAddress(props.server, name, npubValue || undefined)
       notify(
         `Registered ${name}@${serverOf(props.server)}.`,
         NotifyKind.SUCCESS

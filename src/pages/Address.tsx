@@ -1,12 +1,17 @@
 import type {Component} from 'solid-js'
 import {For, Show, createSignal} from 'solid-js'
 import {A} from '@solidjs/router'
-import {IoSearchSharp, IoRefreshSharp, IoTrashSharp} from 'solid-icons/io'
+import {
+  IoSearchSharp,
+  IoRefreshSharp,
+  IoTrashSharp,
+  IoCopySharp
+} from 'solid-icons/io'
 
 import Dialog from '../components/Dialog'
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
-import {notify, NotifyKind} from '../helpers'
+import {notify, NotifyKind, copyToClipboard} from '../helpers'
 import {msatToSats} from '../helpers'
 import {serverOf, unregisterUsername} from '../lnurlcash'
 import {cashAddressSecretAtIndex, hasCashRoot} from '../cashSecrets'
@@ -15,7 +20,7 @@ import {
   removeRegisteredAddress,
   type RegisteredAddress
 } from '../addressRegistry'
-import {scanRegisteredAddress} from '../addressRecovery'
+import {runAddressScan} from '../addressRecovery'
 
 // LUD-25 Part 2's cx1 registration (see 25.md's Seed & derivation) - lets a
 // holder claim username@mint as an ordinary Lightning Address that mints
@@ -58,22 +63,22 @@ const Address: Component = () => {
     }
   }
 
+  // Address.tsx's own "Check for new notes" always walks from 0 - this
+  // page has no incremental/"rescan all" distinction of its own (that
+  // lives on the Mint page's trusted-mint card instead, alongside the
+  // auto-scan toggle) - but it still records progress via
+  // markAddressScanned (inside runAddressScan) so a LATER incremental
+  // check elsewhere doesn't re-walk ground this already covered
   const scan = async (addr: RegisteredAddress) => {
     if (scanningServer()) return
     setScanningServer(addr.server)
     try {
-      const result = await scanRegisteredAddress(
+      const result = await runAddressScan(
         addr.server,
         addr.username,
-        bearers()
+        bearers(),
+        {addBearer, logActivity}
       )
-      for (const note of result.recovered) {
-        await addBearer(note)
-        logActivity(
-          'recovered',
-          `Received ${msatToSats(note.amount)} sats at ${addr.username}@${serverOf(addr.server)}.`
-        )
-      }
       if (result.error) {
         notify(result.error, NotifyKind.ERROR)
       } else {
@@ -150,6 +155,20 @@ const Address: Component = () => {
                 <p class="mint-date">
                   registered {new Date(addr.registeredAt).toLocaleDateString()}
                 </p>
+                <Show when={addr.npub}>
+                  {npub => (
+                    <p class="address-npub">
+                      Nostr: <code>{npub()}</code>
+                      <button
+                        class="icon-btn icon-btn-gap"
+                        title="Copy npub"
+                        onClick={() => copyToClipboard(npub())}
+                      >
+                        <IoCopySharp />
+                      </button>
+                    </p>
+                  )}
+                </Show>
                 <div class="btns">
                   <button
                     disabled={

@@ -4,7 +4,7 @@ import {
   IoMenuSharp,
   IoCloseSharp,
   IoWalletSharp,
-  IoAddCircleSharp,
+  IoLibrarySharp,
   IoLockClosedSharp,
   IoBookSharp,
   IoCogSharp,
@@ -17,17 +17,21 @@ import {useDevice} from '../DeviceContext'
 import {allAddons} from '../addons/registry'
 import {enabledAddonIds} from '../addons/enabled'
 import {ADDON_ICONS} from '../addons/icons'
+import {effectiveNavPosition} from '../addons/navPosition'
+import {vaultEnabled} from '../vaultFeature'
 
 // enabled addons (bundled or custom) that asked for a nav entry (see
 // addons/types.ts's AddonNavEntry) - 'left' joins Wallet/Mint/Vault
 // (.nav-links), 'right' joins Docs/Activity/Settings (.nav-persistent),
 // same as any other link there. Disabled addons contribute nothing here
-// regardless of what their manifest declares.
+// regardless of what their manifest declares. Position itself is a
+// holder-overridable preference (Settings.tsx), not fixed by the addon's
+// own manifest - see navPosition.ts's effectiveNavPosition.
 const addonsWithNav = (position: 'left' | 'right') =>
   allAddons().filter(
     a =>
       enabledAddonIds().has(a.manifest.id) &&
-      a.manifest.nav?.position === position
+      effectiveNavPosition(a) === position
   )
 
 const Nav = () => {
@@ -81,7 +85,7 @@ const Nav = () => {
             class="nav-link"
             title="Mint a note, or manage trusted mints"
           >
-            <IoAddCircleSharp />
+            <IoLibrarySharp />
             &nbsp;Mint
           </A>
           {/* claiming/checking a registered username needs this wallet's
@@ -98,18 +102,22 @@ const Nav = () => {
               &nbsp;Address
             </A>
           </Show>
-          <A
-            href="/vault"
-            class="nav-link"
-            title={
-              connectionState() === 'connected'
-                ? 'LNURLvault - connected'
-                : 'LNURLvault - pair a hardware device'
-            }
-          >
-            <IoHardwareChipSharp />
-            &nbsp;Vault
-          </A>
+          {/* still alpha (TODO.md) - off by default, a holder opts in via
+          Settings instead of this permanently occupying a nav slot */}
+          <Show when={vaultEnabled()}>
+            <A
+              href="/vault"
+              class="nav-link"
+              title={
+                connectionState() === 'connected'
+                  ? 'LNURLvault - connected'
+                  : 'LNURLvault - pair a hardware device'
+              }
+            >
+              <IoHardwareChipSharp />
+              &nbsp;Vault
+            </A>
+          </Show>
           <Show when={state() !== 'none'}>
             <For each={addonsWithNav('left')}>
               {addon => {

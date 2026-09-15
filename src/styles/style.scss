@@ -1657,8 +1657,16 @@ nav {
 .mint-card {
   display: block;
   h4 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     overflow-wrap: anywhere;
   }
+}
+
+.mint-card-title {
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 700px) {
@@ -1682,6 +1690,20 @@ nav {
   margin: 4px 0 0 0;
 }
 
+// the npub a holder optionally attached to a claimed address (see
+// ClaimAddressDialog.tsx / addressRegistry.ts's own `npub` field) - shown
+// on its Address.tsx card only when one was actually given
+.address-npub {
+  font-size: 0.8em;
+  margin: 4px 0 0 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  code {
+    overflow-wrap: anywhere;
+  }
+}
+
 // node.color swatch on the mint-address discovery card (Mint.tsx) - same
 // "#rrggbb" the mint's own node self-reports, already validated server-side
 .mint-color-dot {
@@ -1693,13 +1715,17 @@ nav {
   vertical-align: middle;
 }
 
-.mint-locked {
-  display: flex;
+// inline on the trusted-mint card's own h4 (see Mint.tsx) - "trusted" is
+// the badge, the fuller "you hold a bearer note from here" wording moved
+// to its title/tooltip instead of sitting as its own always-visible line
+.mint-trusted-badge {
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.85em;
+  flex-shrink: 0;
+  font-size: 0.7em;
+  font-weight: normal;
   opacity: 0.8;
-  margin: 10px 0 0 0;
 }
 
 // click-to-select mint lists on the Mint page (trusted + public)
@@ -1737,6 +1763,13 @@ nav {
 // TransferDialog puts a .mint-picker directly under a .btns row (Mint.tsx's
 // copies sit under their own h4 instead, which already has spacing below it)
 .btns + .mint-picker {
+  margin-top: 10px;
+}
+
+// the "Refresh all"/"Rescan all" row directly above the trusted-mints
+// list itself (Mint.tsx) - without this the first .mint-card sits flush
+// against the buttons above it
+.btns + .mint-list {
   margin-top: 10px;
 }
 

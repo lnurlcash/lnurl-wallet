@@ -4,6 +4,7 @@ import type {Bearer} from './storage'
 import {
   deriveNotePubkey,
   encodeCp1,
+  encodeCx1,
   decodeCk1,
   noteK1,
   noteSignature,
@@ -48,7 +49,7 @@ const jsonResponse = (body: unknown) =>
 // indices on the address branch cashAddressBranch(SERVER) actually derives -
 // mirrors recovery.test.ts's own fakeMint shape, adapted for p=cp1<pk>
 // instead of h=sha256(k1)
-const fakeMint = (liveIndices: number[], sig?: string) => {
+const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
   const branch = cashSecrets.cashAddressBranch(SERVER)!
   const liveCp1 = new Set(
     liveIndices.map(i =>
@@ -63,7 +64,7 @@ const fakeMint = (liveIndices: number[], sig?: string) => {
         callback: `${SERVER}/p/cb?username=${USERNAME}`,
         minSendable: 1000,
         maxSendable: 100_000_000,
-        metadata: '[]',
+        metadata: xpubHint ? JSON.stringify([['text/xpub', xpubHint]]) : '[]',
         withdrawLink: `${SERVER}/w`
       })
     }
@@ -152,5 +153,74 @@ describe('scanRegisteredAddress', () => {
     expect(result.recovered).toHaveLength(0)
     expect(result.highestIndex).toBeNull()
     expect(result.error).toBeUndefined()
+  })
+})
+
+// TODO.md's "differentiation between rescan all and check notes where you
+// remember the last checked index or get the index from the lightning
+// address xpub in metadata" - nextScanIndex is what a "check notes" pass
+// (Mint.tsx, AddressAutoScanner.tsx) resumes from next time; opts.startIndex
+// is how a caller applies that resume point (or forces 0 for "rescan all")
+describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
+  it('resumes past the highest index this pass actually found', async () => {
+    vi.stubGlobal('fetch', fakeMint([2]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.highestIndex).toBe(2)
+    expect(result.nextScanIndex).toBe(3)
+  })
+
+  it('never regresses below the caller-supplied floor when nothing is found', async () => {
+    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 5}
+    )
+    expect(result.recovered).toHaveLength(0)
+    expect(result.nextScanIndex).toBe(5)
+  })
+
+  it('opts.startIndex skips indices below it, even ones that are live', async () => {
+    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 1}
+    )
+    expect(result.recovered).toHaveLength(0)
+    expect(result.nextScanIndex).toBe(1)
+  })
+
+  it("raises the scan floor from SERVICE's own text/xpub metadata hint", async () => {
+    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([0], undefined, `${cx1}:3`) as unknown as typeof fetch
+    )
+    // index 0 is live, but the hint says SERVICE already knows up to 3 -
+    // a bare "check notes" (no local nextScanIndex yet) should still skip
+    // straight past it instead of re-finding something already claimed
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.recovered).toHaveLength(0)
+    expect(result.nextScanIndex).toBeGreaterThanOrEqual(3)
+  })
+
+  it('the metadata hint only ever raises the floor, never lowers a higher local one', async () => {
+    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:2`) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 10}
+    )
+    expect(result.nextScanIndex).toBe(10)
   })
 })
