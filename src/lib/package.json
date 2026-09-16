@@ -60,9 +60,11 @@
   "dependencies": {
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
-    "@scure/base": "^2.4.0"
+    "@scure/base": "^2.4.0",
+    "@scure/bip32": "^2.4.0"
   },
   "devDependencies": {
+    "@scure/bip39": "^2.4.0",
     "@types/node": "^26.2.0",
     "esbuild": "^0.27.7",
     "typescript": "^7.0.2",

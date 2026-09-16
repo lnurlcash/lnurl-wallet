@@ -107,6 +107,16 @@ export type AddressScanOptions = {
   // called as each note is found, so a caller can surface progress (or
   // start acting on a note) without waiting for the whole scan to finish
   onFound?: (result: AddressScanResult) => void
+  // called right before each index is probed (including a rate-limited
+  // retry of the same index) - unlike onFound, which only ever fires on a
+  // hit, this lets a caller show live "checking index N" progress across
+  // the whole scan, hit or not
+  onProgress?: (index: number) => void
+  // called when an index is confirmed used but already spent - distinct
+  // from onFound (which only ever fires for a still-live, recoverable
+  // note): lets a caller track the true highest-used index for its own
+  // "next index" bookkeeping even past one it can no longer recover
+  onSpent?: (index: number) => void
   // ms to wait before retrying a rate-limited probe - never counted
   // toward the gap limit itself (25.md: "WALLET MUST NOT count a rate
   // limit response as one of the gap limit's 'unknown' ones")
@@ -139,6 +149,7 @@ export const scanForAddressNotes = async (
   let index = opts.startIndex ?? 0
 
   while (consecutiveUnknown < gapLimit) {
+    opts.onProgress?.(index)
     const pubkey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index)
     const cp1 = encodeCp1(pubkey)
     try {
@@ -166,6 +177,7 @@ export const scanForAddressNotes = async (
       // already received and spent must not hide a later, still-unspent
       // one sitting at a higher index right behind it.
       if (err instanceof NoteSpentError) {
+        opts.onSpent?.(index)
         consecutiveUnknown = 0
         index++
         continue

@@ -1,5 +1,11 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import {hashK1 as sha256Hex} from './lnurlcash'
+import {bytesToHex} from '@noble/hashes/utils.js'
+import {
+  deriveNotePubkey,
+  encodeCp1,
+  noteK1,
+  recoverNoteOwnershipPubkey
+} from './lnurlcash'
 import type {Bearer} from './storage'
 
 // same in-memory localStorage stand-in as cashSecrets.test.ts/storage.test.ts -
@@ -37,9 +43,6 @@ beforeEach(async () => {
   cashSecrets.setCashRoot(keys.deriveLud25CashRootNode(SEED))
 })
 
-// mocked fetch response shape matches mockMint.test.ts's own convention -
-// lnurlFetch only ever calls .json() on the result, never inspects
-// status/ok, so a bare {json} stand-in is enough
 // LUD-25 made offline verification mandatory on 2026-09-02: a SERVICE MUST
 // publish the key its notes verify against on every withdrawRequest, and this
 // wallet refuses one that does not. A stand-in mint has to publish it too, or
@@ -49,19 +52,23 @@ const MINT_PUBKEY = '02' + 'cd'.repeat(32)
 const jsonResponse = (body: unknown) =>
   Promise.resolve({json: async () => body} as unknown as Response)
 
-// a minimal LUD-25 mint fake: `liveAtIndex`'s secret is a live outstanding
-// note, `spentAtIndex`'s (if given) is already spent, every other index was
-// never minted - enough to exercise recovery/spent/gap-limit handling
-// without pulling in mockMint.test.ts's much larger stateful mock
-const fakeMint = (liveAtIndex: number, spentAtIndex: number | null) => {
-  const liveSecret = cashSecrets.cashSecretAtIndex(SERVER, liveAtIndex)!
-  const spentSecret =
-    spentAtIndex === null
-      ? null
-      : cashSecrets.cashSecretAtIndex(SERVER, spentAtIndex)!
+// a minimal LUD-25 Part 2 mint fake, mirroring addressRecovery.test.ts's own
+// fakeMint: `liveIndices`' pubkeys are live outstanding notes, `spentIndex`
+// (if given) is already spent, every other index was never minted - enough
+// to exercise recovery/spent/gap-limit handling without pulling in
+// mockMint.test.ts's much larger stateful mock
+const fakeMint = (
+  liveIndices: number[],
+  spentIndex: number | null,
+  sig?: string
+) => {
+  const branch = cashSecrets.cashAddressBranch(SERVER)!
+  const cp1At = (i: number) =>
+    encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, i))
+  const liveCp1 = new Set(liveIndices.map(cp1At))
+  const spentCp1 = spentIndex === null ? null : cp1At(spentIndex)
   return (input: string | URL) => {
     const url = new URL(input.toString())
-    console.log('REQ', url.pathname, url.search)
     if (url.pathname === '/.well-known/lnurlp/mint') {
       return jsonResponse({
         tag: 'payRequest',
@@ -73,34 +80,18 @@ const fakeMint = (liveAtIndex: number, spentAtIndex: number | null) => {
       })
     }
     if (url.pathname === '/w') {
-      // This wallet asks by h=hex(sha256(k1)) first, so a note's bearer
-      // secret never goes on the wire just to read its value. Both live
-      // mints answer that lookup, so the stand-in does too - answering only
-      // k1 would make it a mint this wallet deliberately never sends a
-      // secret to, and every index would read as an empty gap.
-      const askedHash = url.searchParams.get('h')
-      const k1 =
-        url.searchParams.get('k1') ??
-        (askedHash === sha256Hex(liveSecret)
-          ? liveSecret
-          : spentSecret && askedHash === sha256Hex(spentSecret)
-            ? spentSecret
-            : null)
-      if (k1 === liveSecret) {
+      const p = url.searchParams.get('p')
+      if (p && liveCp1.has(p)) {
         return jsonResponse({
           tag: 'withdrawRequest',
           callback: WITHDRAW_CALLBACK,
           mintPubkey: MINT_PUBKEY,
-          // LUD-25: the hash lookup's response omits k1. The convenience it
-          // normally serves does not apply - a wallet asking by hash already
-          // holds the value it hashed - and echoing it back would hand over a
-          // bearer secret nobody asked for.
-          ...(askedHash ? {} : {k1}),
           minWithdrawable: 21000,
-          maxWithdrawable: 21000
+          maxWithdrawable: 21000,
+          ...(sig ? {sig} : {})
         })
       }
-      if (spentSecret && k1 === spentSecret) {
+      if (p && spentCp1 && p === spentCp1) {
         return jsonResponse({status: 'ERROR', reason: 'Note already spent.'})
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
@@ -110,62 +101,44 @@ const fakeMint = (liveAtIndex: number, spentAtIndex: number | null) => {
 }
 
 describe('scanMintForNotes', () => {
-  it('recovers a live note and stops after the gap limit', async () => {
-    vi.stubGlobal('fetch', fakeMint(0, null) as unknown as typeof fetch)
+  it('recovers a live note and signs its own ck1', async () => {
+    vi.stubGlobal('fetch', fakeMint([0], null) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.error).toBeUndefined()
     expect(result.recovered).toHaveLength(1)
-    expect(result.recovered[0].amount).toBe(21000)
+    expect(result.recovered[0]!.amount).toBe(21000)
     expect(result.highestUsedIndex).toBe(0)
+    // the recovered bearer's own k1 is a well-formed ck1 that actually
+    // recovers to the same index's derived pubkey
+    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const expectedPk = bytesToHex(
+      deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, 0)
+    )
+    const k1 = noteK1(result.recovered[0]!.url)!
+    expect(k1.startsWith('ck1')).toBe(true)
+    const owner = recoverNoteOwnershipPubkey(k1)
+    expect(owner?.legacy).toBe(false)
+    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
   })
 
   it('attaches an already-disclosed offline-verification sig immediately, no separate rotate needed', async () => {
     const sig = 'ab'.repeat(65)
-    const liveSecret = cashSecrets.cashSecretAtIndex(SERVER, 0)!
-    vi.stubGlobal('fetch', ((input: string | URL) => {
-      const url = new URL(input.toString())
-      if (url.pathname === '/.well-known/lnurlp/mint') {
-        return jsonResponse({
-          tag: 'payRequest',
-          callback: `https://${SERVER}/pay/cb`,
-          minSendable: 1000,
-          maxSendable: 100_000_000,
-          metadata: '[]',
-          withdrawLink: `https://${SERVER}/w`
-        })
-      }
-      if (url.pathname === '/w') {
-        if (url.searchParams.get('h') === sha256Hex(liveSecret)) {
-          return jsonResponse({
-            tag: 'withdrawRequest',
-            callback: WITHDRAW_CALLBACK,
-            mintPubkey: MINT_PUBKEY,
-            minWithdrawable: 21000,
-            maxWithdrawable: 21000,
-            sig
-          })
-        }
-        return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
-      }
-      return jsonResponse({status: 'ERROR', reason: 'not found'})
-    }) as unknown as typeof fetch)
+    vi.stubGlobal('fetch', fakeMint([0], null, sig) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)
-    expect(new URL(result.recovered[0].url).searchParams.get('sig')).toBe(sig)
+    expect(new URL(result.recovered[0]!.url).searchParams.get('sig')).toBe(sig)
   })
 
   it("a spent index doesn't count toward the gap, but yields nothing", async () => {
-    vi.stubGlobal(
-      'fetch',
-      fakeMint(0, gapLimit.gapLimit()) as unknown as typeof fetch
-    )
+    const spentIndex = gapLimit.gapLimit()
+    vi.stubGlobal('fetch', fakeMint([0], spentIndex) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)
-    expect(result.highestUsedIndex).toBe(gapLimit.gapLimit())
+    expect(result.highestUsedIndex).toBe(spentIndex)
   })
 
   it('a mint with nothing outstanding stops at the gap limit and finds nothing', async () => {
-    vi.stubGlobal('fetch', fakeMint(-1, null) as unknown as typeof fetch)
+    vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(0)
     expect(result.highestUsedIndex).toBeNull()
@@ -173,13 +146,13 @@ describe('scanMintForNotes', () => {
   })
 
   it('does not re-recover a note already held locally, but still counts it used', async () => {
-    vi.stubGlobal('fetch', fakeMint(0, null) as unknown as typeof fetch)
-    const liveSecret = cashSecrets.cashSecretAtIndex(SERVER, 0)!
+    vi.stubGlobal('fetch', fakeMint([0], null) as unknown as typeof fetch)
+    const first = await recovery.scanMintForNotes(`mint@${SERVER}`)
     const alreadyHeld: Bearer = {
       id: 'existing',
-      url: `${WITHDRAW_CALLBACK}?k1=${liveSecret}&amount=21000`,
-      callback: WITHDRAW_CALLBACK,
-      amount: 21000,
+      url: first.recovered[0]!.url,
+      callback: first.recovered[0]!.callback,
+      amount: first.recovered[0]!.amount,
       verified: true,
       createdAt: 0,
       updatedAt: 0
@@ -192,6 +165,16 @@ describe('scanMintForNotes', () => {
     expect(result.error).toBeUndefined()
     expect(result.recovered).toHaveLength(0)
     expect(result.highestUsedIndex).toBe(0)
+  })
+
+  it('reports an error and no crash when no cash root is loaded', async () => {
+    // build the fixture (needs the branch derived) before clearing the root
+    const mock = fakeMint([0], null)
+    cashSecrets.setCashRoot(null)
+    vi.stubGlobal('fetch', mock as unknown as typeof fetch)
+    const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
+    expect(result.recovered).toHaveLength(0)
+    expect(result.error).toMatch(/seed-derived/)
   })
 
   it('reports an unresolvable address without ever calling fetch', async () => {
@@ -207,19 +190,11 @@ describe('scanMintForNotes', () => {
     vi.stubGlobal('fetch', ((input: string | URL) => {
       const url = new URL(input.toString())
       if (url.pathname === '/.well-known/lnurlp/mint') {
-        return fakeMint(0, null)(input)
+        return fakeMint([0], null)(input)
       }
       calls++
       if (calls === 1) {
-        // answered as the hash lookup this wallet actually sends, so k1 is
-        // omitted - see the note in fakeMint
-        return jsonResponse({
-          tag: 'withdrawRequest',
-          callback: WITHDRAW_CALLBACK,
-          mintPubkey: MINT_PUBKEY,
-          minWithdrawable: 21000,
-          maxWithdrawable: 21000
-        })
+        return fakeMint([0], null)(input)
       }
       return Promise.reject(new Error('network down'))
     }) as unknown as typeof fetch)
@@ -227,5 +202,13 @@ describe('scanMintForNotes', () => {
     // the first index (live) was recovered before the second call blew up
     expect(result.recovered).toHaveLength(1)
     expect(result.error).toBeTruthy()
+  })
+
+  it('reports progress before every probe', async () => {
+    vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
+    const seen: number[] = []
+    await recovery.scanMintForNotes(`mint@${SERVER}`, index => seen.push(index))
+    expect(seen.length).toBe(gapLimit.gapLimit())
+    expect(seen[0]).toBe(0)
   })
 })

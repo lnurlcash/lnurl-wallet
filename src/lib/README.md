@@ -56,6 +56,7 @@ The root export includes:
 - mint invoice and bound-receipt checks in `mintRequest.ts`
 - LN address registration and gap-limit recovery scans in `addresses.ts`
 - cp1, ck1, cs1 and cx1 codecs and derivation in `recoverableNotes.ts`
+- the `m/139'`-rooted domain-branch derivation in `branchDerivation.ts`
 - injectable output-secret providers in `secrets.ts`
 
 The implementation has no dependency on Solid, browser storage or any other

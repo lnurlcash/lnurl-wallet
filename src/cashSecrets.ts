@@ -1,33 +1,39 @@
-import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
-import {bytesToHex} from '@noble/hashes/utils.js'
-import {lud05PathSuffix} from './keys'
+import {HDKey} from '@scure/bip32'
+import {deriveDomainBranchNode} from './lib/branchDerivation'
 import {deriveNoteSecretKey, encodeCk1, type Cx1} from './lib/recoverableNotes'
 import {signNoteOwnership} from './lib/signature'
 
-// LUD-25 Seed-recoverable note secrets: deterministic secrets for the notes
-// this wallet mints/rotates/splits/merges, derived from the seed instead of
-// drawn at random, so a lost/reinstalled wallet can reconstruct them from
-// nothing but the seed phrase plus a small, non-secret per-SERVICE index
-// (see nextCashSecret below) - no per-note secret ever needs backing up on
-// its own. https://github.com/lnurl/luds/blob/lnurlcash/25.md
+// LUD-25 Part 2 seed-recoverable note secrets: deterministic secrets for the
+// cp1/ck1 notes this wallet mints/rotates/splits/merges, derived from the
+// seed instead of drawn at random, so a lost/reinstalled wallet can
+// reconstruct them from nothing but the seed phrase plus a small, non-secret
+// per-SERVICE index. https://github.com/lnurl/luds/blob/lnurlcash/25.md
 //
 //   cashHashingKey = derive(cashRoot, 0)                         // LUD-05's step 1, own purpose
 //   domainMaterial = hmacSha256(cashHashingKey, full SERVICE domain)  // LUD-05's steps 2-3, unchanged
 //   (d1, d2, d3, d4) = first 16 bytes of domainMaterial as 4 uint32   // exactly as LUD-05
-//   secret_i       = derive(cashRoot, d1/d2/d3/d4/i')             // i-th secret for this SERVICE
+//   p, chaincode   = derive(cashRoot, d1/d2/d3/d4)                // this SERVICE's branch root
 //
+// This is the literal path 25.md's own "Seed & derivation" section defines -
+// no extra purpose hop beyond `cashRoot` (see src/lib/branchDerivation.ts).
 // `cashRoot` here is already the wallet's own m/139' node (see keys.ts's
 // deriveLud25CashRootNode) - the spec's `masterKey` with the fixed `m/139'`
 // prefix already applied, since that's as much of the true BIP32 master as
 // this wallet ever keeps around (see cashRoot below).
+//
+// 25.md's Part 1 (plain hash-preimage bearer notes) defines no derivation of
+// its own at all - a WALLET may generate that secret however it likes. This
+// wallet generates it with plain randomness (see lnurlcash.ts's
+// generateNoteSecret/generateMintSecret), not a seed-derived branch, so
+// there is nothing here for Part 1 to compete with Part 2 over.
 
 // the decrypted cash root node, held in memory only for as long as the
 // wallet is unlocked - set by WalletContext (activate/lock/forgetWallet),
-// read by generateNoteSecret below. A module-level plain variable, not a
-// Solid signal: nothing here needs to trigger a re-render, and lnurlcash.ts
-// (which reads it) is plain protocol code, not a component - same reason
-// offlineMode.ts and trustedMints.ts keep their own state at module level
-// rather than behind React/Solid context.
+// read by generateMintPubkeySecret below. A module-level plain variable, not
+// a Solid signal: nothing here needs to trigger a re-render, and
+// lnurlcash.ts (which reads it) is plain protocol code, not a component -
+// same reason offlineMode.ts and trustedMints.ts keep their own state at
+// module level rather than behind React/Solid context.
 let cashRoot: HDKey | null = null
 
 export const setCashRoot = (node: HDKey | null): void => {
@@ -36,18 +42,13 @@ export const setCashRoot = (node: HDKey | null): void => {
 
 export const hasCashRoot = (): boolean => cashRoot !== null
 
-// per-SERVICE "next index to use" counters - not secret (an index reveals
-// nothing without the cash root key itself), so plain localStorage, same
-// as trustedMints.ts. `Object.create(null)` sidesteps prototype-pollution
+// per-SERVICE "next index to use" counter for a wallet-initiated Part 2
+// output (see nextCashAddressSecret below) - not secret (an index reveals
+// nothing without the cash root key itself), so plain localStorage, same as
+// trustedMints.ts. `Object.create(null)` sidesteps prototype-pollution
 // entirely rather than filtering key names one at a time: a malformed or
-// crafted backup (see mergeCashSecretIndices) can populate this object with
-// arbitrary string keys without ever touching Object.prototype.
-const STORAGE_KEY = 'lnurlcash_cash_indices'
-// LUD-25 Part 2: a wallet-initiated mint/transfer's own "next index" on the
-// same address branch cashAddressSecretAtIndex below already derives (see
-// nextCashAddressSecret) - a separate namespace from STORAGE_KEY's legacy
-// counter, since the two schemes walk different HD branches for the same
-// domain and have nothing to share or collide over.
+// crafted backup (see mergeCashAddressSecretIndices) can populate this
+// object with arbitrary string keys without ever touching Object.prototype.
 const ADDRESS_STORAGE_KEY = 'lnurlcash_cash_address_indices'
 type Indices = Record<string, number>
 
@@ -74,64 +75,25 @@ const writeIndices = (key: string, indices: Indices): void => {
   localStorage.setItem(key, JSON.stringify(indices))
 }
 
-export const readCashSecretIndices = (): Indices => readIndices(STORAGE_KEY)
-
 export const readCashAddressSecretIndices = (): Indices =>
   readIndices(ADDRESS_STORAGE_KEY)
 
-export const clearCashSecretIndices = (): void => {
-  localStorage.removeItem(STORAGE_KEY)
+export const clearCashAddressSecretIndices = (): void => {
   localStorage.removeItem(ADDRESS_STORAGE_KEY)
 }
 
-// the domain-bound subtree both cashSecretAtIndex and a future from-seed
-// recovery scan hang their per-index children off - null whenever no cash
-// root is loaded (locked, or a wallet that hasn't re-entered its seed since
-// this feature shipped)
-const domainNode = (domain: string): HDKey | null => {
-  if (!cashRoot) return null
-  const hashingNode = cashRoot.deriveChild(0)
-  if (!hashingNode.privateKey) return null
-  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = cashRoot
-  for (const index of suffix) node = node.deriveChild(index)
-  return node
-}
-
-// pure - no counter side effect, so this doubles as the primitive a future
-// "recover with nothing but the seed" scan would probe index by index
-// (LUD-25's gap-limit convention) without disturbing this device's own
-// next-index bookkeeping below
-export const cashSecretAtIndex = (
-  domain: string,
-  index: number
-): string | null => {
-  const node = domainNode(domain)?.deriveChild(index + HARDENED_OFFSET)
-  return node?.privateKey ? bytesToHex(node.privateKey) : null
-}
-
-// LUD-25 Part 2: a second, sibling purpose under the same m/139' root -
-// m/139'/1' - dedicated to watch-only address branches (a domain's cx1
-// export), so it never shares key material with m/139'/0 (cashHashingKey
-// above). Nothing about the existing m/139'/0/d1/d2/d3/d4/i' hardened-
-// secret derivation changes - this is purely additive, and every existing
-// note/backup derived under it keeps working byte-for-byte forever.
-const addressDomainNode = (domain: string): HDKey | null => {
-  if (!cashRoot) return null
-  const addressRoot = cashRoot.deriveChild(1 + HARDENED_OFFSET) // m/139'/1'
-  const hashingNode = addressRoot.deriveChild(0) // m/139'/1'/0
-  if (!hashingNode.privateKey) return null
-  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = addressRoot
-  for (const index of suffix) node = node.deriveChild(index)
-  return node // m/139'/1'/d1/d2/d3/d4
-}
+// the domain-bound subtree cashAddressBranch/cashAddressSecretAtIndex below
+// hang their per-index children off - null whenever no cash root is loaded
+// (locked, or a wallet that hasn't re-entered its seed since this feature
+// shipped)
+const addressDomainNode = (domain: string): HDKey | null =>
+  cashRoot ? deriveDomainBranchNode(cashRoot, domain) : null
 
 // the watch-only branch this domain's cx1 export names - null whenever no
-// cash root is loaded, same as domainNode above. `pubkeyXOnly` drops the
-// HDKey publicKey's leading 02/03 compressed-form byte: a plain x-
-// coordinate is exactly BIP-340's x-only encoding regardless of which y
-// the underlying point actually has (see deriveNoteSecretKey's own parity
+// cash root is loaded, same as addressDomainNode above. `pubkeyXOnly` drops
+// the HDKey publicKey's leading 02/03 compressed-form byte: a plain x-
+// coordinate is exactly BIP-340's x-only encoding regardless of which y the
+// underlying point actually has (see deriveNoteSecretKey's own parity
 // handling in src/lib/recoverableNotes.ts, which takes the raw, unmodified
 // private key and corrects for this internally - nothing here needs to).
 export const cashAddressBranch = (domain: string): Cx1 | null => {
@@ -143,13 +105,12 @@ export const cashAddressBranch = (domain: string): Cx1 | null => {
 }
 
 // this note's own bearer secret on the address branch - an actual
-// secp256k1 scalar (see deriveNoteSecretKey), never a hex preimage the way
-// cashSecretAtIndex's legacy notes are. Pure - no counter side effect, so
-// a recovery scan can probe index by index (LUD-25's gap-limit convention)
-// without any bookkeeping of its own: unlike a wallet-initiated secret
-// (nextCashSecret below), a note here arrives unsolicited - the mint picks
-// the index, not this wallet - so there is nothing to "claim" ahead of
-// time, only ever a range to check.
+// secp256k1 scalar (see deriveNoteSecretKey). Pure - no counter side effect,
+// so a recovery scan can probe index by index (LUD-25's gap-limit
+// convention, see recovery.ts) without any bookkeeping of its own: unlike a
+// wallet-initiated secret (nextCashAddressSecret below), a note here arrives
+// unsolicited - the mint picks the index, not this wallet - so there is
+// nothing to "claim" ahead of time, only ever a range to check.
 export const cashAddressSecretAtIndex = (
   domain: string,
   index: number
@@ -159,48 +120,13 @@ export const cashAddressSecretAtIndex = (
   return deriveNoteSecretKey(node.privateKey, node.chainCode, index)
 }
 
-export const nextCashSecretIndex = (domain: string): number =>
-  readIndices(STORAGE_KEY)[domain] ?? 0
-
-// claims the next index for `domain`, persists the advance, and returns the
-// secret at it - null whenever no cash root is loaded, in which case the
-// index is never consumed (nothing was generated to consume it for)
-export const nextCashSecret = (domain: string): string | null => {
-  const i = nextCashSecretIndex(domain)
-  const secret = cashSecretAtIndex(domain, i)
-  if (secret === null) return null
-  const indices = readIndices(STORAGE_KEY)
-  indices[domain] = i + 1
-  writeIndices(STORAGE_KEY, indices)
-  return secret
-}
-
-// Mint and cross-mint transfer quotes become payable promises to create a
-// specific output. Their secret must survive a reload before an invoice is
-// shown, so those paths may not use generateNoteSecret's in-memory random
-// fallback. The derived index is persisted by nextCashSecret before this
-// returns and can be scanned again from the wallet seed during recovery.
-export const requireRecoverableCashSecret = (domain: string): string => {
-  const secret = nextCashSecret(domain)
-  if (secret === null) {
-    throw new Error(
-      'This wallet cannot safely create a mint invoice until its seed-derived cash key is unlocked. Restore or re-enter the wallet seed first.'
-    )
-  }
-  return secret
-}
-
-// LUD-25 Part 2 counterpart to nextCashSecretIndex/nextCashSecret above -
-// same per-SERVICE "next index" convention, just walked over
-// cashAddressSecretAtIndex (m/139'/1'/domain) instead of the legacy
-// m/139'/0 branch, and returned as this note's actual bearer secret (a
-// ck1 ownership signature - see signNoteOwnership) rather than a raw
-// preimage. A wallet-INITIATED mint/transfer reaching for a pubkey-bound
-// output uses this; it is otherwise unrelated to (and never shares an
-// index with) a registered address's mint-auto-derived notes on the same
-// branch - the mint's own claim_next_index already skips past any index
-// this wallet has already used, on either side, so there is nothing to
-// coordinate here.
+// LUD-25 Part 2's own "next index" convention - a wallet-INITIATED
+// mint/transfer's own pubkey-bound output, returned as its actual bearer
+// secret (a ck1 ownership signature - see signNoteOwnership) rather than a
+// raw preimage. This is otherwise unrelated to (and never shares an index
+// with) a registered address's mint-auto-derived notes on the same branch -
+// the mint's own claim_next_index already skips past any index this wallet
+// has already used, on either side, so there is nothing to coordinate here.
 export const nextCashAddressSecretIndex = (domain: string): number =>
   readIndices(ADDRESS_STORAGE_KEY)[domain] ?? 0
 
@@ -215,8 +141,12 @@ export const nextCashAddressSecret = (domain: string): string | null => {
   return encodeCk1(pubkeyXOnly, signature)
 }
 
-// same reload-survival reasoning as requireRecoverableCashSecret above -
-// a wallet-initiated Part 2 mint/transfer quote is a payable promise too
+// Mint and cross-mint transfer quotes become payable promises to create a
+// specific output. Their secret must survive a reload before an invoice is
+// shown, so this may not use generateNoteSecret's in-memory random
+// fallback. The derived index is persisted by nextCashAddressSecret before
+// this returns and can be scanned again from the wallet seed during
+// recovery (recovery.ts).
 export const requireRecoverableCashAddressSecret = (domain: string): string => {
   const secret = nextCashAddressSecret(domain)
   if (secret === null) {
@@ -258,8 +188,84 @@ const mergeIndicesInto = (key: string, incoming: unknown): void => {
   if (changed) writeIndices(key, current)
 }
 
-export const mergeCashSecretIndices = (incoming: unknown): void =>
-  mergeIndicesInto(STORAGE_KEY, incoming)
-
 export const mergeCashAddressSecretIndices = (incoming: unknown): void =>
   mergeIndicesInto(ADDRESS_STORAGE_KEY, incoming)
+
+// Part 1's own reload-survival - deliberately NOT seed-derived (25.md's
+// Part 1 defines no derivation at all, see this file's header comment).
+// generateMintSecret (lnurlcash.ts) generates a plain random secret for a
+// mint/transfer quote and records it here before the invoice leaves the
+// wallet, so a reload between "invoice shown" and "payment settled" doesn't
+// strand the note SERVICE will credit under sha256(secret) - the UI can
+// still recover it from this flat, per-domain, append-only list even though
+// component state (and any deterministic re-derivation) is gone. This is a
+// same-device, same-localStorage guarantee only: unlike Part 2's cx1
+// branch, nothing here survives a lost device or a fresh reinstall - that
+// trade is exactly what dropping Part 1's non-spec seed-derivation buys
+// back (see 25.md's own Part 1, which never promised recoverability
+// either).
+const PENDING_MINT_SECRETS_KEY = 'lnurlcash_pending_mint_secrets'
+type PendingMintSecrets = Record<string, string[]>
+
+const readPendingMintSecrets = (): PendingMintSecrets => {
+  try {
+    const raw = localStorage.getItem(PENDING_MINT_SECRETS_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const result: PendingMintSecrets = {}
+    for (const [domain, secrets] of Object.entries(parsed)) {
+      if (
+        typeof domain === 'string' &&
+        Array.isArray(secrets) &&
+        secrets.every(s => typeof s === 'string')
+      ) {
+        result[domain] = secrets
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+const writePendingMintSecrets = (secrets: PendingMintSecrets): void => {
+  localStorage.setItem(PENDING_MINT_SECRETS_KEY, JSON.stringify(secrets))
+}
+
+export const recordPendingMintSecret = (
+  domain: string,
+  secret: string
+): void => {
+  const all = readPendingMintSecrets()
+  const list = all[domain] ?? []
+  if (list.includes(secret)) return
+  writePendingMintSecrets({...all, [domain]: [...list, secret]})
+}
+
+// called once a pending secret is no longer in flight - claimed into the
+// wallet as a note, or the quote it belonged to was abandoned/replaced -
+// so this list only ever grows with genuinely still-open quotes
+export const clearPendingMintSecret = (
+  domain: string,
+  secret: string
+): void => {
+  const all = readPendingMintSecrets()
+  const list = all[domain]
+  if (!list) return
+  const next = list.filter(s => s !== secret)
+  const rest = {...all}
+  if (next.length > 0) rest[domain] = next
+  else delete rest[domain]
+  writePendingMintSecrets(rest)
+}
+
+export const pendingMintSecretsFor = (domain: string): string[] =>
+  readPendingMintSecrets()[domain] ?? []
+
+// WalletContext's forgetWallet - wipes this device-local bookkeeping along
+// with everything else the wallet leaves behind, same as
+// clearCashAddressSecretIndices above
+export const clearPendingMintSecrets = (): void => {
+  localStorage.removeItem(PENDING_MINT_SECRETS_KEY)
+}
