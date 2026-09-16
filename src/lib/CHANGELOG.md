@@ -7,6 +7,16 @@
 - Include LN address registration and recovery scanning, Part 2 public-key
   notes, configurable transports, offline note verification, fee handling,
   and bound mint receipts.
+- Add `branchDerivation.ts`: the LUD-25 `m/139'`-rooted domain-branch walk
+  (`deriveDomainBranchNode`, `CASH_ROOT_PURPOSE`, `ADDRESS_BRANCH_PURPOSE`,
+  `lud05PathSuffix`), exported so another LUD-25 Part 2 implementation can
+  reproduce a wallet's watch-only branch for a given seed and domain
+  byte-for-byte rather than reverse-engineering it - see
+  `branchDerivation.test.ts`'s cross-implementation vector, cross-checked
+  against an independent JVM client. Adds `@scure/bip32` as a real
+  dependency of this package (this is the one piece of the kit that touches
+  BIP32 nodes - "seed phrase -> `m/139'` root" stays wallet policy, outside
+  the kit).
 - Replace the separate pre-0.14 `lnurlcash-kit` implementation with the scoped
   `@lnurlcash/kit` package. This is an intentional package-name and API
   boundary: callers must change their dependency and imports, then review the

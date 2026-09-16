@@ -1,6 +1,9 @@
 import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {lud05PathSuffix} from './keys'
+import {
+  deriveDomainBranchNode,
+  ADDRESS_BRANCH_PURPOSE
+} from './lib/branchDerivation'
 import {deriveNoteSecretKey, encodeCk1, type Cx1} from './lib/recoverableNotes'
 import {signNoteOwnership} from './lib/signature'
 
@@ -88,15 +91,8 @@ export const clearCashSecretIndices = (): void => {
 // recovery scan hang their per-index children off - null whenever no cash
 // root is loaded (locked, or a wallet that hasn't re-entered its seed since
 // this feature shipped)
-const domainNode = (domain: string): HDKey | null => {
-  if (!cashRoot) return null
-  const hashingNode = cashRoot.deriveChild(0)
-  if (!hashingNode.privateKey) return null
-  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = cashRoot
-  for (const index of suffix) node = node.deriveChild(index)
-  return node
-}
+const domainNode = (domain: string): HDKey | null =>
+  cashRoot ? deriveDomainBranchNode(cashRoot, domain) : null
 
 // pure - no counter side effect, so this doubles as the primitive a future
 // "recover with nothing but the seed" scan would probe index by index
@@ -118,13 +114,8 @@ export const cashSecretAtIndex = (
 // note/backup derived under it keeps working byte-for-byte forever.
 const addressDomainNode = (domain: string): HDKey | null => {
   if (!cashRoot) return null
-  const addressRoot = cashRoot.deriveChild(1 + HARDENED_OFFSET) // m/139'/1'
-  const hashingNode = addressRoot.deriveChild(0) // m/139'/1'/0
-  if (!hashingNode.privateKey) return null
-  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = addressRoot
-  for (const index of suffix) node = node.deriveChild(index)
-  return node // m/139'/1'/d1/d2/d3/d4
+  const addressRoot = cashRoot.deriveChild(ADDRESS_BRANCH_PURPOSE) // m/139'/1'
+  return deriveDomainBranchNode(addressRoot, domain) // m/139'/1'/d1/d2/d3/d4
 }
 
 // the watch-only branch this domain's cx1 export names - null whenever no

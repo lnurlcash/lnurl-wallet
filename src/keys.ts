@@ -5,9 +5,11 @@ import {
 } from '@scure/bip39'
 import {wordlist} from '@scure/bip39/wordlists/english.js'
 import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
-import {hmac} from '@noble/hashes/hmac.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {lud05PathSuffix} from './lib/branchDerivation'
+
+export {lud05PathSuffix}
 
 // The wallet's identity is derived against this fixed domain rather than
 // window.location.hostname, so the same seed phrase always yields the same
@@ -19,13 +21,6 @@ export const generateSeedPhrase = (): string => generateMnemonic(wordlist, 128)
 
 export const isValidSeedPhrase = (phrase: string): boolean =>
   validateMnemonic(phrase.trim().toLowerCase(), wordlist)
-
-const readUint32BE = (bytes: Uint8Array, offset: number): number =>
-  ((bytes[offset] << 24) |
-    (bytes[offset + 1] << 16) |
-    (bytes[offset + 2] << 8) |
-    bytes[offset + 3]) >>>
-  0
 
 // LUD-05: BIP32-based linking-key derivation, same scheme as lnurl_server -
 // a seed restored there or here produces the same identity for a given domain
@@ -49,17 +44,6 @@ export const deriveLud05LinkingKey = (
   }
   if (!node.privateKey) throw new Error('Could not derive linking key')
   return node.privateKey
-}
-
-// the HMAC half of the derivation, split out so the LUD-05 test vector
-// (which starts from a fixed hashingPrivKey, not a seed phrase) can pin it
-// directly - see keys.test.ts
-export const lud05PathSuffix = (
-  hashingKey: Uint8Array,
-  domain: string
-): number[] => {
-  const material = hmac(sha256, hashingKey, utf8ToBytes(domain))
-  return [0, 4, 8, 12].map(i => readUint32BE(material, i))
 }
 
 // Legacy: this wallet's original bearer-encryption root, a full LUD-05
