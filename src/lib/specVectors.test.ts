@@ -318,6 +318,7 @@ describe('LUD-25 Test Vectors - vector 3 (ck1 wallet-side ownership proof)', () 
       'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc62s0003psm2kxx7p8dsal9arwd7e6usu04cjens0qhywer99jc5sz9zqptmg4gyjlgg2zpglhl8atjj6zsfsh5ffnzn4k73naafcukpgdezzqx'
     )
     const owner = recoverNoteOwnershipPubkey(ck1)
+    expect(owner?.legacy).toBe(false)
     expect(owner && bytesToHex(owner.pubkeyXOnly)).toBe(PK)
   })
 })

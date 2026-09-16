@@ -27,25 +27,36 @@
   `@lnurlcash/kit` package. This is an intentional package-name and API
   boundary: callers must change their dependency and imports, then review the
   exported surface before upgrading from `lnurlcash-kit@0.13.x`.
-- **Breaking:** `ck1` (a note's own wallet-side ownership signature) is a
+- **Breaking:** `ck1` (a note's own wallet-side ownership signature) is now a
   32-byte BIP-340 x-only pubkey concatenated with a 64-byte Schnorr
-  signature over `sha256("LNURLcash")` (`encodeCk1`/`signNoteOwnership`
-  signatures changed accordingly; `recoverNoteOwnershipPubkey` now takes the
-  `ck1` string directly and returns `{pubkeyXOnly}` rather than raw recovered
-  bytes). No other `ck1` shape is recognized - a note minted under any
-  earlier scheme (a bare recoverable-ECDSA signature, or the current
-  `pk||sig` shape signed over the raw un-hashed message) is not decodable or
-  verifiable by this package; a `SERVICE`/mint MAY keep its own transitional
-  fallback for redeeming such a note (never a `WALLET` concern - a `WALLET`
-  only ever needs to recognize `ck1` values it itself produced), but this
-  package deliberately does not.
+  signature (`encodeCk1`/`signNoteOwnership` signatures changed accordingly;
+  `recoverNoteOwnershipPubkey` now takes the `ck1` string directly and
+  returns `{pubkeyXOnly, legacy}` rather than raw recovered bytes), replacing
+  the previous 65-byte recoverable-ECDSA signature. `decodeCk1`/`isCk1` still
+  read the OLD shape for interop with a note minted before this change - see
+  `isLegacyCk1` - but this is TODO(deprecated) and will be removed once no
+  such notes are expected to remain in the wild; callers should warn holders
+  and prompt a rotate for any note where `isLegacyCk1` is true.
 - **Breaking:** `signAddressProof` (LN address un-/registration) is now a
-  plain 64-byte BIP-340 Schnorr signature over `sha256(message)`, instead of
-  a 65-byte recoverable ECDSA one over the raw message. Most conforming
+  plain 64-byte BIP-340 Schnorr signature instead of a 65-byte recoverable
+  ECDSA one, matching the same scheme change.
+- **Breaking:** `signNoteOwnership` (`ck1`) and `signAddressProof`
+  (register/unregister) now sign `sha256(message)` - a 32-byte digest -
+  instead of the raw, variable-length message bytes. Most conforming
   Schnorr signers (`libsecp256k1`'s `schnorrsig` module included) only
-  accept a 32-byte message; signing the raw string only ever worked in this
-  package because `@noble/curves`' own `schnorr.sign` is more permissive
-  than that, and would not have interoperated with an off-the-shelf signer.
+  accept a 32-byte message; signing the raw string only ever worked here
+  because `@noble/curves`' own `schnorr.sign` is more permissive than that,
+  and would not have interoperated with an off-the-shelf signer. Neither
+  function ever produces a signature under the old raw-message scheme
+  anymore. `recoverNoteOwnershipPubkey` (`ck1` only, reading an
+  already-minted note back) TODO(deprecated) still falls back to verifying
+  against the old raw message when the current digest doesn't match, so a
+  note minted before this change stays readable/redeemable until it's
+  rotated - remove that fallback once no such notes are expected to remain
+  in the wild. `signAddressProof`'s registration proof has no equivalent
+  fallback: registering/unregistering is a fresh action a `WALLET`
+  initiates itself, never a stored bearer secret read back later, so there
+  is no old value that would ever need re-verifying.
 
 Existing `lnurlcash-kit` installations are unaffected and do not select the
 new scoped package.
