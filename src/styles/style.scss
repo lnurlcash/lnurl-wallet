@@ -1468,7 +1468,6 @@ nav {
 .bearer-spent,
 .bearer-device,
 .bearer-sunset,
-.bearer-legacy-ck1,
 .bearer-plain {
   display: inline-flex;
   align-items: center;
@@ -1503,14 +1502,6 @@ nav {
 }
 
 .bearer-sunset {
-  color: #e4c567;
-}
-
-// TODO(deprecated): flags a note still using the old bare recoverable-ECDSA
-// ck1 shape (src/lib/recoverableNotes.ts's isLegacyCk1) - same warning
-// color as .bearer-sunset since both ask the holder to act (rotate) before
-// something stops working
-.bearer-legacy-ck1 {
   color: #e4c567;
 }
 

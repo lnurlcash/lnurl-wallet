@@ -9,7 +9,6 @@ import {
   encodeCk1,
   decodeCk1,
   isCk1,
-  isLegacyCk1,
   encodeCs1,
   decodeCs1,
   isCs1,
@@ -47,28 +46,18 @@ describe('bech32m codec', () => {
     const signature = hexToBytes('cd'.repeat(64))
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     expect(ck1.length).toBeGreaterThan(90)
-    expect(decodeCk1(ck1)).toEqual({legacy: false, pubkeyXOnly, signature})
+    expect(decodeCk1(ck1)).toEqual({pubkeyXOnly, signature})
     expect(isCk1(ck1)).toBe(true)
   })
 
-  it('TODO(deprecated): still decodes the OLD bare 65-byte recoverable-ECDSA ck1 shape', () => {
-    const legacySignature = hexToBytes('ef'.repeat(65))
+  it('rejects a wrong-length ck1 payload rather than misparsing it', () => {
     const encoded = bech32m.encode(
       'ck',
-      bech32m.toWords(legacySignature),
+      bech32m.toWords(hexToBytes('ef'.repeat(65))),
       false
     )
-    expect(decodeCk1(encoded)).toEqual({
-      legacy: true,
-      signature: legacySignature
-    })
-    expect(isCk1(encoded)).toBe(true)
-    expect(isLegacyCk1(encoded)).toBe(true)
-    const current = encodeCk1(
-      hexToBytes('ab'.repeat(32)),
-      hexToBytes('cd'.repeat(64))
-    )
-    expect(isLegacyCk1(current)).toBe(false)
+    expect(decodeCk1(encoded)).toBeNull()
+    expect(isCk1(encoded)).toBe(false)
   })
 
   it('round-trips a cx1 (64 bytes: pubkey || chain code)', () => {

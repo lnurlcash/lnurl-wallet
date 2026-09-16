@@ -2,7 +2,6 @@ import {describe, expect, it} from 'vitest'
 import {secp256k1, schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {bech32m} from '@scure/base'
 import {
   verifyNoteSignature,
   verifyNoteSignatureHash,
@@ -173,11 +172,12 @@ describe('offline signature verification', () => {
 
 describe('signNoteOwnership (LUD-25 Part 2, ck1)', () => {
   // independently recomputes what signNoteOwnership signs - a plain
-  // BIP-340 Schnorr signature over the fixed message "LNURLcash", no
-  // Lightning-signmessage digest wrapping - deliberately not importing any
-  // internal helper, so this test would actually fail if the construction
-  // ever silently drifted
-  const FIXED_MESSAGE = utf8ToBytes('LNURLcash')
+  // BIP-340 Schnorr signature over sha256("LNURLcash"), no Lightning-
+  // signmessage digest wrapping - deliberately not importing any internal
+  // helper, so this test would actually fail if the construction ever
+  // silently drifted. Hashed rather than the raw 9-byte string because
+  // most conforming Schnorr signers only accept a 32-byte message.
+  const FIXED_DIGEST = sha256(utf8ToBytes('LNURLcash'))
 
   it("produces a (pubkey, signature) pair that verifies against the signer's own x-only pubkey", () => {
     const secretKey = schnorr.utils.randomSecretKey()
@@ -185,7 +185,7 @@ describe('signNoteOwnership (LUD-25 Part 2, ck1)', () => {
     const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
     expect(bytesToHex(pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
     expect(signature).toHaveLength(64)
-    expect(schnorr.verify(signature, FIXED_MESSAGE, pubkeyXOnly)).toBe(true)
+    expect(schnorr.verify(signature, FIXED_DIGEST, pubkeyXOnly)).toBe(true)
   })
 
   it('produces a different signature for a different secret key', () => {
@@ -259,7 +259,6 @@ describe('recoverNoteOwnershipPubkey', () => {
     const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     const owner = recoverNoteOwnershipPubkey(ck1)
-    expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
   })
 
@@ -275,34 +274,16 @@ describe('recoverNoteOwnershipPubkey', () => {
     expect(recoverNoteOwnershipPubkey(K1)).toBeNull()
   })
 
-  // TODO(deprecated): the OLD bare recoverable-ECDSA ck1 shape (no embedded
-  // pubkey) still decodes via ecrecover, flagged legacy:true so a caller
-  // (BearerCard.tsx) can warn the holder and prompt a rotate
-  it('TODO(deprecated): still recovers a pubkey from the OLD recoverable-ECDSA ck1 shape', () => {
-    const priv = secp256k1.utils.randomSecretKey()
-    const expectedPubkey = secp256k1.getPublicKey(priv, true).subarray(1)
-    const message = utf8ToBytes('LNURLcash')
-    const digest = sha256(
-      sha256(
-        new Uint8Array([
-          ...utf8ToBytes('Lightning Signed Message:'),
-          ...message
-        ])
-      )
+  it('rejects a ck1 signed over the old raw (un-hashed) message - the wallet only accepts the current digest scheme', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const rawMessageSignature = schnorr.sign(
+      utf8ToBytes('LNURLcash'),
+      secretKey,
+      new Uint8Array(32)
     )
-    const libSig = secp256k1.sign(digest, priv, {
-      format: 'recovered',
-      prehash: false
-    })
-    const legacySignature = new Uint8Array([...libSig.subarray(1), libSig[0]!])
-    const legacyCk1 = bech32m.encode(
-      'ck',
-      bech32m.toWords(legacySignature),
-      false
-    )
-    const owner = recoverNoteOwnershipPubkey(legacyCk1)
-    expect(owner?.legacy).toBe(true)
-    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
+    const oldCk1 = encodeCk1(pubkeyXOnly, rawMessageSignature)
+    expect(recoverNoteOwnershipPubkey(oldCk1)).toBeNull()
   })
 })
 
@@ -322,11 +303,12 @@ describe('cp1FromCk1', () => {
 })
 
 describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
-  // independently recomputes the per-action/username message signAddressProof
-  // signs - a plain BIP-340 Schnorr signature, no digest wrapping -
-  // deliberately not importing any internal helper
-  const messageFor = (action: 'register' | 'unregister', username: string) =>
-    utf8ToBytes(`LNURLcash:${action}:${username}`)
+  // independently recomputes the per-action/username digest signAddressProof
+  // signs - a plain BIP-340 Schnorr signature over sha256(message), no
+  // Lightning-signmessage digest wrapping - deliberately not importing any
+  // internal helper
+  const digestFor = (action: 'register' | 'unregister', username: string) =>
+    sha256(utf8ToBytes(`LNURLcash:${action}:${username}`))
 
   it("verifies against the branch key's own pubkey for the exact action/username signed", () => {
     const secretKey = schnorr.utils.randomSecretKey()
@@ -334,7 +316,7 @@ describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
     const sig = signAddressProof(secretKey, 'register', 'alice')
     expect(sig).toHaveLength(64)
     expect(
-      schnorr.verify(sig, messageFor('register', 'alice'), pubkeyXOnly)
+      schnorr.verify(sig, digestFor('register', 'alice'), pubkeyXOnly)
     ).toBe(true)
   })
 
@@ -343,7 +325,7 @@ describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
     const sig = signAddressProof(secretKey, 'register', 'alice')
     expect(
-      schnorr.verify(sig, messageFor('unregister', 'alice'), pubkeyXOnly)
+      schnorr.verify(sig, digestFor('unregister', 'alice'), pubkeyXOnly)
     ).toBe(false)
   })
 
@@ -351,9 +333,9 @@ describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
     const sig = signAddressProof(secretKey, 'register', 'alice')
-    expect(
-      schnorr.verify(sig, messageFor('register', 'bob'), pubkeyXOnly)
-    ).toBe(false)
+    expect(schnorr.verify(sig, digestFor('register', 'bob'), pubkeyXOnly)).toBe(
+      false
+    )
   })
 
   it('is deterministic for the same key/action/username', () => {

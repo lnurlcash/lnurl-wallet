@@ -91,9 +91,16 @@ export type Musig2Result = {
 // it independently with @noble/curves - the same signature-verification
 // code this wallet already uses everywhere else, since a MuSig2-aggregated
 // signature is - by design - indistinguishable from a single signer's.
-export const aggregateAndSign = (
+//
+// Takes the message as raw bytes, not text: aggregateAndSign below is the
+// UTF-8-string convenience wrapper the UI's free-text "message to sign"
+// field uses, but the ck1 worked example (manifest.ts) needs to sign a
+// pre-hashed 32-byte digest instead (src/lib/signature.ts's
+// NOTE_OWNERSHIP_DIGEST - ck1 signs sha256("LNURLcash"), not the raw
+// string), which UTF-8-encoding a string could never produce.
+export const aggregateAndSignBytes = (
   participants: Musig2Participant[],
-  messageUtf8: string
+  message: Uint8Array
 ): Musig2Result => {
   if (participants.length < 2) {
     throw new Error('Need at least 2 participants to sign together.')
@@ -102,7 +109,6 @@ export const aggregateAndSign = (
     parseHex(p.secretKeyHex, 32, 'Secret key')
   )
   const pubkeys = participants.map(p => parseHex(p.pubkeyHex, 33, 'Pubkey'))
-  const message = utf8ToBytes(messageUtf8)
 
   const agg = keyAggregate(pubkeys)
   const groupPubkey = keyAggExport(agg)
@@ -132,3 +138,10 @@ export const aggregateAndSign = (
     signers
   }
 }
+
+// the UI's free-text "message to sign" field's own entry point - UTF-8
+// encodes whatever was typed and delegates to aggregateAndSignBytes above
+export const aggregateAndSign = (
+  participants: Musig2Participant[],
+  messageUtf8: string
+): Musig2Result => aggregateAndSignBytes(participants, utf8ToBytes(messageUtf8))
