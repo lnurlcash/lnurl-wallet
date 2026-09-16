@@ -109,17 +109,29 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('propagates a failure when no cash root is loaded at all (neither scheme can generate a secret)', async () => {
+  it('falls back to the legacy hash comment when no cash root is loaded at all', async () => {
+    // Part 2's pubkey secret needs a cash root (requireRecoverableCashAddressSecret
+    // throws without one); Part 1's plain secret does not (25.md's Part 1
+    // defines no derivation at all - see cashSecrets.ts's header comment),
+    // so the legacy fallback still succeeds even fully locked
     const cashSecrets = await import('./cashSecrets')
     cashSecrets.setCashRoot(null)
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const comment = new URL(input.toString()).searchParams.get('comment')!
+      expect(comment).toMatch(/^[0-9a-f]{64}$/)
+      return {json: async () => ({pr: 'lnbc1testinvoice'})} as Response
+    })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(
-      lnurlcash.requestMintInvoice(CALLBACK, 1000, 'mint.example.com')
-    ).rejects.toThrow(/seed-derived cash key/)
-    // neither attempt ever reaches the network - both secret generators
-    // fail before any invoice request is made
-    expect(fetchMock).not.toHaveBeenCalled()
+    const {result, secret} = await lnurlcash.requestMintInvoice(
+      CALLBACK,
+      1000,
+      'mint.example.com'
+    )
+    expect(isPreimage(secret)).toBe(true)
+    expect(result.pr).toBe('lnbc1testinvoice')
+    // the Part 2 attempt fails locally (no cash root) before ever reaching
+    // the network, so only the legacy request is ever sent
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

@@ -355,9 +355,12 @@ export const clearSavedStorageRootKey = (): void => {
 // derived and saved alongside it (WalletContext's setup), so there's no
 // separate password to ask for. Absent on a wallet set up before this
 // feature existed until its seed phrase is entered again (Setup.tsx's
-// "Restore from seed" already calls the same setup() path); every note
-// secret this wallet generates falls back to plain randomness until then
-// (see lnurlcash.ts's generateNoteSecret).
+// "Restore from seed" already calls the same setup() path); every Part 2
+// (cp1/ck1) note secret this wallet generates falls back to plain, non-
+// recoverable randomness until then (see lnurlcash.ts's
+// generateMintPubkeySecret/configurePubkeySecretProvider) - Part 1 secrets
+// (generateNoteSecret/generateMintSecret) never needed this key to begin
+// with, they're plain randomness unconditionally.
 const CASH_ROOT_KEY_STORAGE_KEY = 'lnurlwallet_cash_root_key'
 const CASH_ROOT_KEY_HEX_LENGTH = 128 // privateKey (32B) || chainCode (32B)
 

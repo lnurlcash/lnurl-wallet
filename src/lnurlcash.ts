@@ -1,8 +1,7 @@
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {offlineMode} from './offlineMode'
 import {
-  nextCashSecret,
-  requireRecoverableCashSecret,
+  recordPendingMintSecret,
   requireRecoverableCashAddressSecret
 } from './cashSecrets'
 import {msatToSats} from './helpers'
@@ -78,27 +77,29 @@ configureNetworkGuard(() => {
 //
 // `domain` is the issuing SERVICE's own host (see serverOf) - every call
 // site already has it in scope from the callback/payRequest URL it's about
-// to use. Seed-recoverable note secrets (LUD-25): prefers a deterministic
-// secret derived from this wallet's seed (see cashSecrets.ts) so a
-// lost/reinstalled wallet can reconstruct it from nothing but the seed
-// phrase plus a small per-domain index, falling back to plain randomness
-// only when no seed-derived root is loaded (locked, or a wallet that
-// hasn't re-entered its seed since this feature shipped). Wired into
-// src/lib's rotateNote/splitNote/mergeNotes via configureSecretProvider,
-// so this is the ONLY place in the app that needs to know about
-// cashSecrets.ts's existence for that purpose.
+// to use. LUD-25 Part 1 defines no derivation of its own (unlike Part 2's
+// cx1 branch below): plain randomness is fully spec-compliant. Wired into
+// src/lib's rotateNote/splitNote/mergeNotes via configureSecretProvider, so
+// this is the ONLY place in the app that needs to know about cashSecrets.ts.
 export const generateNoteSecret = (domain: string): string =>
-  nextCashSecret(domain) ??
   bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
 
 configureSecretProvider(generateNoteSecret)
 
 // New mint invoices and cross-mint transfers must survive a reload after
-// payment. Unlike an ordinary mutation output, they cannot safely use the
-// in-memory random fallback: require a seed-derived secret whose counter was
-// persisted before the quote leaves this wallet.
-export const generateMintSecret = (domain: string): string =>
-  requireRecoverableCashSecret(domain)
+// payment. Unlike an ordinary mutation output, they cannot safely use
+// generateNoteSecret's bare in-memory randomness with nothing recorded: the
+// note SERVICE will credit under sha256(secret) would become permanently
+// unclaimable if a reload wipes this page's component state first. Part 1
+// has no seed-derivation to fall back on (see generateNoteSecret above), so
+// this persists the plain random secret directly instead - a same-device,
+// same-localStorage guarantee, not a from-seed one (see
+// cashSecrets.ts's recordPendingMintSecret for what that trade buys back).
+export const generateMintSecret = (domain: string): string => {
+  const secret = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  recordPendingMintSecret(domain, secret)
+  return secret
+}
 
 // LUD-25 Part 2 counterpart to generateMintSecret above - a wallet-
 // initiated mint/transfer's own pubkey-bound secret (a ck1 ownership

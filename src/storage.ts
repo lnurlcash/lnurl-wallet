@@ -18,8 +18,6 @@ import {
 import type {TrustedMint} from './trustedMints'
 import {trustedMints, mergeTrustedMints} from './trustedMints'
 import {
-  readCashSecretIndices,
-  mergeCashSecretIndices,
   readCashAddressSecretIndices,
   mergeCashAddressSecretIndices
 } from './cashSecrets'
@@ -286,12 +284,15 @@ export const reencryptAllRecords = async (
 // both keys are always saved under the same password, see WalletContext's
 // setup, so there's never a case where one qualifies and the other
 // doesn't). Trusted mints are plain (not secret - a mintPubkey is public),
-// included as-is. `cashIndices` (LUD-25, see cashSecrets.ts) are the
-// per-SERVICE "next index" counters behind every seed-derived note secret
-// this wallet has generated - also plain (an index alone is worthless
-// without the cash root key), and, unlike a bearer's own secret, small
-// enough that backing up every note this wallet will ever hold never grows
-// this beyond one integer per mint ever used.
+// included as-is. `cashAddressIndices` (LUD-25 Part 2, see cashSecrets.ts's
+// nextCashAddressSecret) is the per-SERVICE "next index" counter behind
+// every seed-derived cp1/ck1 note secret this wallet has generated - also
+// plain (an index alone is worthless without the cash root key), and,
+// unlike a bearer's own secret, small enough that backing up every note
+// this wallet will ever hold never grows this beyond one integer per mint
+// ever used. Part 1's own secrets are plain randomness, not seed-derived
+// (see cashSecrets.ts's header comment), so there is no equivalent counter
+// for them to back up.
 export type BackupFile = {
   type: 'lnurlwallet-backup'
   version: 1
@@ -305,12 +306,6 @@ export type BackupFile = {
   linkingKey?: StoredSecret
   storageRootKey?: StoredSecret
   cashRootKey?: StoredSecret
-  cashIndices?: Record<string, number>
-  // LUD-25 Part 2's own counter (see cashSecrets.ts's
-  // nextCashAddressSecret) - a separate namespace from cashIndices above,
-  // absent entirely on a backup taken before this feature existed (merge
-  // already no-ops gracefully on undefined, same as any other optional
-  // field here)
   cashAddressIndices?: Record<string, number>
   bearers: EncryptedBearerRecord[]
   trustedMints?: TrustedMint[]
@@ -323,7 +318,6 @@ export const buildBackup = (): BackupFile => {
     createdAt: Date.now(),
     bearers: readEncryptedBearers(),
     trustedMints: trustedMints(),
-    cashIndices: readCashSecretIndices(),
     cashAddressIndices: readCashAddressSecretIndices()
   }
   if (savedStorageRootKeyIsEncrypted()) {
@@ -465,10 +459,12 @@ export const applyBackup = (data: unknown): RestoreResult => {
     ? mergeTrustedMints(backup.trustedMints)
     : 0
 
-  // per-SERVICE indices (LUD-25) merge in regardless of the linking-key
-  // outcome above - they're non-secret bookkeeping, safe to raise even for
-  // a device keeping its own existing wallet (see mergeCashSecretIndices)
-  mergeCashSecretIndices(backup.cashIndices)
+  // per-SERVICE Part 2 index (LUD-25) merges in regardless of the
+  // linking-key outcome above - non-secret bookkeeping, safe to raise even
+  // for a device keeping its own existing wallet (see
+  // mergeCashAddressSecretIndices). A backup taken before this field
+  // existed, or one still carrying the removed Part 1 `cashIndices` field,
+  // just has nothing (or an ignored extra field) here.
   mergeCashAddressSecretIndices(backup.cashAddressIndices)
 
   return {

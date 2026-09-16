@@ -205,6 +205,35 @@ describe('scanForAddressNotes', () => {
     expect(results.map(r => r.index)).toEqual([0, 1, 2])
   })
 
+  it('calls onProgress before every probe, hit or not', async () => {
+    // index 0 exists, then a clean run of unknowns closes the scan
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      const p = request.searchParams.get('p')!
+      if (p === encodeCp1(pubkeyAt(0))) {
+        return {
+          json: async () => ({
+            tag: 'withdrawRequest',
+            callback: 'https://mint.example.com/w/cb',
+            minWithdrawable: 1000,
+            maxWithdrawable: 1000,
+            mintPubkey: MINT_KEY
+          })
+        } as Response
+      }
+      return {
+        json: async () => ({status: 'ERROR', reason: 'Unknown note.'})
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const progressed: number[] = []
+    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
+      gapLimit: 2,
+      onProgress: index => progressed.push(index)
+    })
+    expect(progressed).toEqual([0, 1, 2])
+  })
+
   it('retries (without counting toward the gap) on a rate-limited response', async () => {
     let calls = 0
     const fetchMock = vi.fn(async () => {
@@ -257,15 +286,19 @@ describe('scanForAddressNotes', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
+    const spent: number[] = []
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
-      {gapLimit: 3}
+      {gapLimit: 3, onSpent: index => spent.push(index)}
     )
     // the spent note at 0 is never returned as something to recover, but
     // it also must not have counted toward (or reset past) the gap limit
     // in a way that hides the real note at 2
     expect(results.map(r => r.index)).toEqual([2])
+    // onSpent still reports it, so a caller can track the true
+    // highest-used index past a note it can no longer recover
+    expect(spent).toEqual([0])
   })
 
   it('propagates an unexpected error rather than silently truncating the scan', async () => {

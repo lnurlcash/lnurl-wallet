@@ -175,10 +175,10 @@ describe('buildBackup', () => {
     expect(keys.savedKeyIsEncrypted()).toBe(true)
   })
 
-  it('always includes the (non-secret) per-SERVICE cash indices', () => {
-    cashSecrets.mergeCashSecretIndices({'mint.example': 3})
+  it('always includes the (non-secret) per-SERVICE cash address indices', () => {
+    cashSecrets.mergeCashAddressSecretIndices({'mint.example': 3})
     const backup = storage.buildBackup()
-    expect(backup.cashIndices).toEqual({'mint.example': 3})
+    expect(backup.cashAddressIndices).toEqual({'mint.example': 3})
   })
 
   it('never exports a plaintext-stored cash root key', async () => {
@@ -271,15 +271,15 @@ describe('applyBackup cash root key handling (LUD-25)', () => {
     expect(keys.getPlainCashRootKeyHex()).toBe('dd'.repeat(64))
   })
 
-  it('merges cash indices regardless of whether the linking key was skipped', async () => {
+  it('merges cash address indices regardless of whether the linking key was skipped', async () => {
     await keys.saveLinkingKey(new Uint8Array(32).fill(1))
     storage.applyBackup(
       validBackup({
         linkingKey: {enc: false, value: LINKING_HEX_B},
-        cashIndices: {'mint.example': 4}
+        cashAddressIndices: {'mint.example': 4}
       })
     )
-    expect(cashSecrets.nextCashSecretIndex('mint.example')).toBe(4)
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(4)
   })
 })
 

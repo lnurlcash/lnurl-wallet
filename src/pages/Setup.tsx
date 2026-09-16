@@ -10,7 +10,7 @@ import {resolveMintInput} from '../lnurlcash'
 import {PUBLIC_MINTS} from '../trustedMints'
 import {scanMintForNotes} from '../recovery'
 import {gapLimit} from '../gapLimit'
-import {mergeCashSecretIndices} from '../cashSecrets'
+import {mergeCashAddressSecretIndices} from '../cashSecrets'
 
 type Tab = 'create' | 'restore'
 
@@ -364,7 +364,7 @@ const MintRecovery: Component<{onDone: () => void}> = props => {
           )
         }
         if (result.highestUsedIndex !== null) {
-          mergeCashSecretIndices({
+          mergeCashAddressSecretIndices({
             [result.server]: result.highestUsedIndex + 1
           })
         }
@@ -396,17 +396,19 @@ const MintRecovery: Component<{onDone: () => void}> = props => {
       <h2>Recover notes</h2>
       <div class="setup-card">
         <p>
-          Re-derives every note secret this wallet would have generated at each
-          mint below (LUD-25's seed-recoverable secrets) and checks which ones
-          are still outstanding. This only finds notes minted, rotated, split or
+          Re-derives every pub/sig-bound note key (LUD-25 Part 2) this wallet
+          would have generated at each mint below and checks which ones are
+          still outstanding. This only finds notes minted, rotated, split or
           merged by a seed-aware version of this wallet - not ones simply
-          received from someone else, and not ones minted while offline or with
-          an older version that predates this feature. Each mint is checked
-          index by index until {gapLimit()} in a row turn up nothing, the same
-          gap-limit convention HD wallets already use for address recovery
-          (configurable under Settings &gt; Recovery scan gap limit). Pick every
-          mint you remember using; nothing is lost by skipping one now, the same
-          seed can scan it again later.
+          received from someone else, not ones minted while offline or with an
+          older version that predates this feature, and not a legacy hash-keyed
+          note (those are plain randomness, never seed-derived, so there is
+          nothing here to re-derive them from). Each mint is checked index by
+          index until {gapLimit()} in a row turn up nothing, the same gap-limit
+          convention HD wallets already use for address recovery (configurable
+          under Settings &gt; Recovery scan gap limit). Pick every mint you
+          remember using; nothing is lost by skipping one now, the same seed can
+          scan it again later.
         </p>
         <label>Public mints</label>
         <div class="form-item">

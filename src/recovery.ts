@@ -1,37 +1,34 @@
-import {cashSecretAtIndex} from './cashSecrets'
+import {cashAddressBranch, cashAddressSecretAtIndex} from './cashSecrets'
 import {
   resolveMintInput,
   fetchPayRequest,
-  fetchNoteInfo,
-  buildNoteUrl,
   withNewK1,
   serverOf,
   noteK1,
-  NoteSpentError,
-  NoteUnknownError
+  scanForAddressNotes,
+  encodeCk1,
+  signNoteOwnership
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import type {Bearer} from './storage'
 
-// LUD-25 "Seed-recoverable note secrets" recovery: cashSecrets.ts already
-// derives every note secret_i this wallet ever mints/rotates/splits/merges
-// deterministically from the seed plus a small per-SERVICE index
-// (cashSecretAtIndex), specifically so a lost/reinstalled wallet can
-// reconstruct them from nothing but the seed phrase and a list of mints to
-// try - this module is that reconstruction: for a given mint, it re-derives
-// secret_0, secret_1, ... and probes each with the ordinary informational
-// GET, exactly as 25.md's own recovery paragraph describes: "WALLET stops
-// scanning a given SERVICE after some gap limit of consecutive unknown
-// indices, the same convention HD wallets already use for address
-// recovery." There is no way to discover *which* mints to scan from the
-// seed alone (a domain name isn't recoverable from an HMAC over it) - the
-// holder has to supply that list themselves (Setup.tsx's restore flow),
-// picking from known public mints or typing an address by hand.
+// LUD-25 "Seed & derivation" (25.md) recovery, scoped to a mint directly
+// (as opposed to addressRecovery.ts's scanRegisteredAddress, which resolves
+// a registered username@host first) - this is the spec's own general
+// recovery paragraph: "WALLET re-derives pk_0, pk_1, ... for each known
+// SERVICE and, for each, GETs the withdraw LNURL with ?p=cp1<pk_i>", so a
+// lost/reinstalled wallet can reconstruct any Part 2 note it minted directly
+// from nothing but the seed phrase and a list of mints to try. There is no
+// way to discover *which* mints to scan from the seed alone (a domain name
+// isn't recoverable from an HMAC over it) - the holder has to supply that
+// list themselves (Setup.tsx's restore flow), picking from known public
+// mints or typing an address by hand.
 //
-// Only ever finds notes whose secret was actually seed-derived to begin
-// with - nothing here recovers a note minted while unlocked without a cash
-// root loaded (falls back to plain randomness, see
-// lnurlcash.ts's generateNoteSecret) or one accepted from a third party.
+// Only ever finds notes whose secret was actually derived on this wallet's
+// own cx1 branch to begin with - nothing here recovers a Part 1 note
+// (generateNoteSecret/generateMintSecret are plain, non-seed-derived
+// randomness - see cashSecrets.ts's own header comment for why) or one
+// accepted from a third party.
 
 export type RecoveredNote = {
   url: string
@@ -46,7 +43,7 @@ export type MintScanResult = {
   recovered: RecoveredNote[]
   // highest index this scan confirmed was ever used (live or spent) - null
   // when nothing was ever found. The caller should bump this domain's
-  // stored next-index counter (cashSecrets.ts's mergeCashSecretIndices)
+  // stored next-index counter (cashSecrets.ts's mergeCashAddressSecretIndices)
   // past it, so a note this wallet mints here next never reuses an index a
   // past incarnation already consumed.
   highestUsedIndex: number | null
@@ -59,10 +56,8 @@ export type MintScanResult = {
 
 // scans one mint (a public-mint entry, a Lightning Address, a bech32 LNURL,
 // or a bare domain - anything resolveMintInput already accepts) for
-// recoverable notes. Sequential, one index at a time: this wallet has no
-// batched informational-GET endpoint, and probing a mint's outstanding
-// notes is exactly the kind of thing that shouldn't be parallelized against
-// a service that didn't ask for a burst of requests. onProgress, when
+// recoverable Part 2 notes, via the shared gap-limit primitive
+// (scanForAddressNotes) addressRecovery.ts also builds on. onProgress, when
 // given, is called with each index right before it's probed, so a caller
 // can show live scanning progress. existing (the wallet's current bearers,
 // same shape as receive.ts's own dedup) is checked so an index still held
@@ -84,6 +79,17 @@ export const scanMintForNotes = async (
     }
   }
   const server = serverOf(payUrl)
+
+  const branch = cashAddressBranch(server)
+  if (!branch) {
+    return {
+      server,
+      recovered: [],
+      highestUsedIndex: null,
+      error:
+        'No seed-derived key is loaded for this wallet - restore your seed again first.'
+    }
+  }
 
   let withdrawLink: string
   try {
@@ -108,64 +114,57 @@ export const scanMintForNotes = async (
 
   const recovered: RecoveredNote[] = []
   let highestUsedIndex: number | null = null
-  let consecutiveUnknown = 0
-  let index = 0
-  const limit = gapLimit()
-  while (consecutiveUnknown < limit) {
-    const secret = cashSecretAtIndex(server, index)
-    if (!secret) {
-      return {
-        server,
-        recovered,
-        highestUsedIndex,
-        error:
-          'No seed-derived key is loaded for this wallet - restore your seed again first.'
-      }
-    }
-    onProgress?.(index)
-    try {
-      const note = await fetchNoteInfo(buildNoteUrl(withdrawLink, secret))
-      highestUsedIndex = index
-      consecutiveUnknown = 0
-      const alreadyHeld = existing.some(
-        b => serverOf(b.url) === server && noteK1(b.url) === secret
-      )
-      if (!alreadyHeld) {
-        recovered.push({
-          // SERVICE may already disclose this note's offline-verification
-          // sig on the plain informational GET (see WithdrawRequestInfo's
-          // own comment) - attached immediately if present, so a recovered
-          // note doesn't need a separate rotate/refresh afterward just to
-          // become offline-verifiable
-          url: withNewK1(withdrawLink, secret, note.maxWithdrawable, note.sig),
-          callback: note.callback,
-          amount: note.maxWithdrawable,
-          verified: true,
-          mintPubkey: note.mintPubkey
-        })
-      }
-    } catch (err) {
-      if (err instanceof NoteSpentError) {
-        // proves this index was used at some point, even though there's
-        // nothing left to recover from it - doesn't count toward the gap
+  try {
+    // built directly in onFound (not batched after scanForAddressNotes
+    // returns) so a later index's transport failure can't discard an
+    // earlier one already found this same pass - the caller still gets
+    // back whatever was confirmed before the error (see the catch below)
+    await scanForAddressNotes(withdrawLink, branch, {
+      gapLimit: gapLimit(),
+      onProgress,
+      onSpent: index => {
         highestUsedIndex = index
-        consecutiveUnknown = 0
-      } else if (err instanceof NoteUnknownError) {
-        consecutiveUnknown++
-      } else {
-        // a transport failure or anything else unclassified is no evidence
-        // either way (see lnurlcash.ts's classifyNoteError) - stop rather
-        // than guess, so a network blip can't silently truncate the scan
-        // via the gap counter or get miscounted as a real gap
-        return {
-          server,
-          recovered,
-          highestUsedIndex,
-          error: (err as Error).message
+      },
+      onFound: result => {
+        highestUsedIndex = result.index
+        const secretKey = cashAddressSecretAtIndex(server, result.index)
+        // the cash root can only disappear mid-scan if the wallet locked
+        // while it was running - skip rather than crash; a re-scan once
+        // unlocked again picks this index right back up
+        if (!secretKey) return
+        const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+        const ck1 = encodeCk1(pubkeyXOnly, signature)
+        // attach an already-disclosed offline-verification sig immediately
+        // (see WithdrawRequestInfo's own comment) rather than requiring a
+        // separate rotate/refresh afterward just to obtain one
+        const url = withNewK1(
+          withdrawLink,
+          ck1,
+          result.info.maxWithdrawable,
+          result.info.sig
+        )
+        const alreadyHeld = existing.some(
+          b => serverOf(b.url) === server && noteK1(b.url) === ck1
+        )
+        if (!alreadyHeld) {
+          recovered.push({
+            url,
+            callback: result.info.callback,
+            amount: result.info.maxWithdrawable,
+            verified: true,
+            mintPubkey: result.info.mintPubkey
+          })
         }
       }
+    })
+  } catch (err) {
+    return {
+      server,
+      recovered,
+      highestUsedIndex,
+      error: (err as Error).message
     }
-    index++
   }
+
   return {server, recovered, highestUsedIndex}
 }

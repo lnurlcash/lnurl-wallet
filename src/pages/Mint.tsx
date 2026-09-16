@@ -101,7 +101,11 @@ import {
   type PendingDeviceMint
 } from '../pendingDeviceMint'
 import {scanMintForNotes} from '../recovery'
-import {hasCashRoot, mergeCashSecretIndices} from '../cashSecrets'
+import {
+  hasCashRoot,
+  clearPendingMintSecret,
+  mergeCashAddressSecretIndices
+} from '../cashSecrets'
 import {registeredAddresses} from '../addressRegistry'
 import {
   storeableMints,
@@ -958,6 +962,11 @@ const Mint: Component = () => {
         verified: true,
         mintPubkey
       })
+      // this legacy secret is claimed (or rotated away) either way past
+      // this point - no longer a still-open quote generateMintSecret's own
+      // pending-secret persistence needs to protect (see cashSecrets.ts's
+      // recordPendingMintSecret)
+      clearPendingMintSecret(serverOf(info.withdrawLink), noteSecret)
       logActivity(
         'mint',
         `Minted ${msatToSats(noteInfo.maxWithdrawable)} sats from ${serverOf(url)}.` +
@@ -1197,7 +1206,7 @@ const Mint: Component = () => {
         )
       }
       if (result.highestUsedIndex !== null) {
-        mergeCashSecretIndices({
+        mergeCashAddressSecretIndices({
           [result.server]: result.highestUsedIndex + 1
         })
       }
