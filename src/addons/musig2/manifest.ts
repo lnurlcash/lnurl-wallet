@@ -1,13 +1,6 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {hexToBytes} from '@noble/hashes/utils.js'
 import {
-  generateKeypair,
-  tweakPubkey,
-  signWithTweakedKey,
-  type TweakResult,
-  type SignResult
-} from './taproot'
-import {
   newParticipant,
   aggregatePubkeys,
   aggregateAndSign,
@@ -19,274 +12,17 @@ import {
 // bech32Decoder's own addon already relies on for verifyNoteSignature
 import {encodeCk1, recoverNoteOwnershipPubkey} from '../../lnurlcash'
 
-// Taproot pubkey tweaking (BIP341) and MuSig2 (BIP327) - a "play around"
-// sandbox, not wired into this wallet's own note-signing anywhere. All key
-// material lives in this addon's own page-local state (never persisted,
-// gone on reload - see AddonRun.tsx/Renderer.tsx's 'run' mode), never
-// cashSecrets.ts or the wallet's real seed. permissions: [] below is load-
-// bearing, not decorative: this addon declares zero verbs, so it has no
-// way to touch a real note, mint, or address regardless of what a holder
-// pastes into it.
+// MuSig2 (BIP327) joint signatures - a "play around" sandbox, not wired
+// into this wallet's own note-signing anywhere. All key material lives in
+// this addon's own page-local state (never persisted, gone on reload - see
+// AddonRun.tsx/Renderer.tsx's 'run' mode), never cashSecrets.ts or the
+// wallet's real seed. permissions: [] below is load-bearing, not
+// decorative: this addon declares zero verbs, so it has no way to touch a
+// real note, mint, or address regardless of what a holder pastes into it.
+// See the sibling `taproot` addon for BIP341 pubkey tweaking - split out
+// separately since the two BIPs are genuinely different specs, not one
+// feature.
 const trimmedString = (value: unknown): string => String(value ?? '').trim()
-const isHex32 = (value: unknown): boolean =>
-  /^[0-9a-fA-F]{64}$/.test(trimmedString(value))
-
-// ---- Taproot tweak section ----
-
-type ScriptRow = {value: string}
-
-const newScriptRow = (): ScriptRow => ({value: ''})
-
-const scriptTexts = (scripts: unknown): string[] =>
-  Array.isArray(scripts)
-    ? (scripts as unknown[])
-        .map(s => trimmedString((s as ScriptRow)?.value))
-        .filter(s => s.length > 0)
-    : []
-
-// swallows tweakPubkey's own throws (bad/incomplete hex) rather than
-// letting a live Text binding crash mid-typing - see this file's own
-// ErrorBoundary note in Renderer.tsx for why that would otherwise show
-// the addon's scoped-error fallback for something as ordinary as "hasn't
-// finished pasting a pubkey yet"
-const tweakPreview = (
-  pubkeyHex: unknown,
-  scripts: unknown
-): TweakResult | null => {
-  if (!isHex32(pubkeyHex)) return null
-  try {
-    return tweakPubkey(trimmedString(pubkeyHex), scriptTexts(scripts))
-  } catch {
-    return null
-  }
-}
-
-const hasTweakPreview = (pubkeyHex: unknown, scripts: unknown): boolean =>
-  tweakPreview(pubkeyHex, scripts) !== null
-
-const tweakedPubkeyDisplay = (pubkeyHex: unknown, scripts: unknown): string =>
-  tweakPreview(pubkeyHex, scripts)?.tweakedPubkeyHex ?? '-'
-
-const tweakScalarDisplay = (pubkeyHex: unknown, scripts: unknown): string =>
-  tweakPreview(pubkeyHex, scripts)?.tweakScalarHex ?? '-'
-
-const tweakParityDisplay = (pubkeyHex: unknown, scripts: unknown): string =>
-  tweakPreview(pubkeyHex, scripts)?.parity ?? '-'
-
-// the Sign button's own helper - deliberately throws straight through on
-// bad input (unlike the live preview above) since a Button's onClick
-// already runs inside Renderer.tsx's own try/catch (see runAction), which
-// turns a thrown Error into a plain toast notification - exactly the
-// right feedback for a deliberate button click, unlike a live binding
-const signDemo = (
-  secretKeyHex: unknown,
-  scripts: unknown,
-  message: unknown
-): SignResult =>
-  signWithTweakedKey(
-    trimmedString(secretKeyHex),
-    scriptTexts(scripts),
-    trimmedString(message)
-  )
-
-const scriptRow: UiNode = {
-  type: 'View',
-  style: 'row',
-  children: [
-    {type: 'Input', bind: 'item.value', label: 'Toy script text'},
-    {
-      type: 'Button',
-      label: 'Remove',
-      onClick: {action: 'removeAt', path: 'scripts', index: {var: 'index'}}
-    }
-  ]
-}
-
-const taprootUi: UiNode[] = [
-  {type: 'Text', value: 'Taproot pubkey tweaking (BIP341)', style: 'heading'},
-  {
-    type: 'Text',
-    value:
-      "Ephemeral - held only on this page, never connected to this wallet's real seed or notes. Reloading or leaving this page discards it."
-  },
-  {type: 'Text', value: 'How to use this', style: 'subheading'},
-  {
-    type: 'List',
-    ordered: true,
-    each: [
-      "Generate a keypair below (or skip this - you only need a pubkey for the tweak itself, the secret key is only for the last, optional 'sign' step).",
-      "Optionally add one or more entries under 'Script tree' to try a script-path tweak - leave it empty for a plain key-path tweak.",
-      "Paste the x-only pubkey you want to tweak into 'Tweak a pubkey' - the tweaked pubkey, tweak scalar, and parity appear automatically as you type.",
-      "To prove the tweaked key is a real, usable keypair (not just hex), paste the SAME key's secret key, type any message, and click 'Sign with tweaked key'."
-    ],
-    children: [{type: 'Text', value: {var: 'item'}}]
-  },
-  {type: 'Text', value: 'Generate a keypair', style: 'subheading'},
-  {
-    type: 'Button',
-    label: 'Generate new keypair',
-    onClick: {
-      action: 'set',
-      path: 'generated',
-      value: {helper: 'generateKeypair', args: []}
-    }
-  },
-  {
-    type: 'Show',
-    when: {var: 'generated'},
-    children: [
-      {
-        type: 'Text',
-        value: {cat: ['secret key: ', {var: 'generated.secretKeyHex'}]},
-        style: 'seed-block'
-      },
-      {
-        type: 'Button',
-        label: 'Copy secret key',
-        onClick: {
-          verb: 'clipboard.copy',
-          args: {text: {var: 'generated.secretKeyHex'}}
-        }
-      },
-      {
-        type: 'Text',
-        value: {cat: ['pubkey: ', {var: 'generated.pubkeyHex'}]},
-        style: 'seed-block'
-      },
-      {
-        type: 'Button',
-        label: 'Copy pubkey',
-        onClick: {
-          verb: 'clipboard.copy',
-          args: {text: {var: 'generated.pubkeyHex'}}
-        }
-      }
-    ]
-  },
-  {
-    type: 'Text',
-    value: 'Script tree (optional - empty means key-path only)',
-    style: 'subheading'
-  },
-  {
-    type: 'Text',
-    value:
-      'Each entry stands in for one script leaf - illustrative, not a real Tapscript program. Together they fold into one 32-byte value used as the Merkle root, the same slot a real script tree’s root would occupy.'
-  },
-  {type: 'For', each: {var: 'scripts'}, children: [scriptRow]},
-  {
-    type: 'Button',
-    label: 'Add script',
-    onClick: {
-      action: 'push',
-      path: 'scripts',
-      value: {helper: 'newScriptRow', args: []}
-    }
-  },
-  {type: 'Text', value: 'Tweak a pubkey', style: 'subheading'},
-  {
-    type: 'Input',
-    bind: 'pubkeyInput',
-    label: 'x-only pubkey to tweak (32-byte hex)'
-  },
-  {
-    type: 'Show',
-    when: {
-      helper: 'hasTweakPreview',
-      args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
-    },
-    children: [
-      {
-        type: 'Text',
-        value: {
-          cat: [
-            'Tweaked pubkey: ',
-            {
-              helper: 'tweakedPubkeyDisplay',
-              args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
-            }
-          ]
-        },
-        style: 'response-block'
-      },
-      {
-        type: 'Text',
-        value: {
-          cat: [
-            'Tweak scalar: ',
-            {
-              helper: 'tweakScalarDisplay',
-              args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
-            }
-          ]
-        }
-      },
-      {
-        type: 'Text',
-        value: {
-          cat: [
-            'Tweaked key parity: ',
-            {
-              helper: 'tweakParityDisplay',
-              args: [{var: 'pubkeyInput'}, {var: 'scripts'}]
-            }
-          ]
-        }
-      }
-    ]
-  },
-  {type: 'Text', value: 'Sign with a tweaked key', style: 'subheading'},
-  {
-    type: 'Text',
-    value:
-      'Proves the tweak really is a usable keypair, not just abstract hex - signs a message with the tweaked secret key and verifies it against the tweaked pubkey above.'
-  },
-  {
-    type: 'Input',
-    bind: 'secretKeyInput',
-    label: 'Secret key matching the pubkey above (32-byte hex)'
-  },
-  {type: 'Input', bind: 'taprootMessage', label: 'Message to sign'},
-  {
-    type: 'Button',
-    label: 'Sign with tweaked key',
-    onClick: {
-      action: 'set',
-      path: 'taprootSignResult',
-      value: {
-        helper: 'signDemo',
-        args: [
-          {var: 'secretKeyInput'},
-          {var: 'scripts'},
-          {var: 'taprootMessage'}
-        ]
-      }
-    }
-  },
-  {
-    type: 'Show',
-    when: {var: 'taprootSignResult'},
-    children: [
-      {
-        type: 'Text',
-        value: {cat: ['Signature: ', {var: 'taprootSignResult.signatureHex'}]},
-        style: 'response-block'
-      },
-      {
-        type: 'Show',
-        when: {var: 'taprootSignResult.verified'},
-        children: [{type: 'Text', value: '✓ verified'}]
-      },
-      {
-        type: 'Show',
-        when: {helper: 'not', args: [{var: 'taprootSignResult.verified'}]},
-        children: [{type: 'Text', value: '✗ not verified'}]
-      }
-    ]
-  }
-]
-
-// ---- MuSig2 section ----
 
 const MAX_PARTICIPANTS = 3
 
@@ -311,7 +47,9 @@ const musigPreview = (participants: unknown): string => {
 }
 
 // the Aggregate & sign button's own helper - deliberately throws straight
-// through on bad input, same reasoning as taproot's signDemo above
+// through on bad input, same reasoning as a deliberate button click always
+// gets (Renderer.tsx's own runAction turns a thrown Error into a plain
+// toast notification, unlike a live binding)
 const runMusigRound = (participants: unknown, message: unknown): Musig2Result =>
   aggregateAndSign(
     Array.isArray(participants) ? (participants as Musig2Participant[]) : [],
@@ -542,42 +280,29 @@ const musigUi: UiNode[] = [
   }
 ]
 
-const tapscriptManifest: AddonManifest = {
-  id: 'tapscript',
-  name: 'Tapscript Playground',
+const musig2Manifest: AddonManifest = {
+  id: 'musig2',
+  name: 'MuSig2 Playground',
   version: '1',
-  icon: 'gitmerge',
+  icon: 'people',
   description:
-    'Play around with BIP341 Taproot pubkey tweaking and BIP327 MuSig2 joint signatures - a sandbox, never wired into this wallet’s own notes.',
+    'Play around with BIP327 MuSig2 joint Schnorr signatures - a sandbox, never wired into this wallet’s own notes. See the separate Taproot addon for BIP341 pubkey tweaking.',
   permissions: [],
-  nav: {position: 'right', icon: 'gitmerge', label: 'Tapscript'},
+  nav: {position: 'right', icon: 'people', label: 'MuSig2'},
   state: {
-    generated: null,
-    scripts: [],
-    pubkeyInput: '',
-    secretKeyInput: '',
-    taprootMessage: 'hello tapscript',
-    taprootSignResult: null,
     participants: [],
     musigMessage: 'hello musig2',
     musigResult: null
   },
   ui: {
     type: 'View',
-    children: [...taprootUi, ...musigUi]
+    children: musigUi
   }
 }
 
 // 'not' comes from GLOBAL_HELPERS (see globalHelpers.ts), merged in ahead
 // of this addon's own helpers by Renderer.tsx - no need to redefine it
-const tapscriptHelpers: Record<string, AddonHelper> = {
-  generateKeypair: generateKeypair as AddonHelper,
-  newScriptRow: newScriptRow as AddonHelper,
-  hasTweakPreview: hasTweakPreview as AddonHelper,
-  tweakedPubkeyDisplay: tweakedPubkeyDisplay as AddonHelper,
-  tweakScalarDisplay: tweakScalarDisplay as AddonHelper,
-  tweakParityDisplay: tweakParityDisplay as AddonHelper,
-  signDemo: signDemo as AddonHelper,
+const musig2Helpers: Record<string, AddonHelper> = {
   newParticipant: newParticipant as AddonHelper,
   canAddParticipant: canAddParticipant as AddonHelper,
   canAggregate: canAggregate as AddonHelper,
@@ -588,7 +313,7 @@ const tapscriptHelpers: Record<string, AddonHelper> = {
   ck1Accepted: ck1Accepted as AddonHelper
 }
 
-export const tapscriptAddon: Addon = {
-  manifest: tapscriptManifest,
-  helpers: tapscriptHelpers
+export const musig2Addon: Addon = {
+  manifest: musig2Manifest,
+  helpers: musig2Helpers
 }
