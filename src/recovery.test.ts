@@ -117,7 +117,6 @@ describe('scanMintForNotes', () => {
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
     const owner = recoverNoteOwnershipPubkey(k1)
-    expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
   })
 

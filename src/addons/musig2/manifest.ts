@@ -1,9 +1,11 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {hexToBytes} from '@noble/hashes/utils.js'
+import {hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {sha256} from '@noble/hashes/sha2.js'
 import {
   newParticipant,
   aggregatePubkeys,
   aggregateAndSign,
+  aggregateAndSignBytes,
   type Musig2Participant,
   type Musig2Result
 } from './musig2'
@@ -46,24 +48,40 @@ const musigPreview = (participants: unknown): string => {
   }
 }
 
-// the Aggregate & sign button's own helper - deliberately throws straight
-// through on bad input, same reasoning as a deliberate button click always
-// gets (Renderer.tsx's own runAction turns a thrown Error into a plain
-// toast notification, unlike a live binding)
-const runMusigRound = (participants: unknown, message: unknown): Musig2Result =>
-  aggregateAndSign(
-    Array.isArray(participants) ? (participants as Musig2Participant[]) : [],
-    trimmedString(message)
-  )
-
 // ck1's own fixed message (src/lib/signature.ts's NOTE_OWNERSHIP_MESSAGE) -
 // hardcoded rather than reading `musigMessage`, so the worked example below
 // only lights up once the group has actually signed THIS exact message, the
 // one thing a real ck1 ownership proof is ever checked against
 const CK1_OWNERSHIP_MESSAGE = 'LNURLcash'
 
+// ck1 signs sha256("LNURLcash"), a 32-byte digest, not the raw 9-byte
+// string (src/lib/signature.ts's NOTE_OWNERSHIP_DIGEST - most conforming
+// Schnorr signers only accept a 32-byte message, so the fixed string is
+// hashed down first). Precomputed once, not per click.
+const CK1_OWNERSHIP_DIGEST = sha256(utf8ToBytes(CK1_OWNERSHIP_MESSAGE))
+
 const isCk1DemoMessage = (message: unknown): boolean =>
   trimmedString(message) === CK1_OWNERSHIP_MESSAGE
+
+// the Aggregate & sign button's own helper - deliberately throws straight
+// through on bad input, same reasoning as a deliberate button click always
+// gets (Renderer.tsx's own runAction turns a thrown Error into a plain
+// toast notification, unlike a live binding). Signs the pre-hashed
+// CK1_OWNERSHIP_DIGEST instead of the typed text when it's exactly the ck1
+// demo message, so the worked example below actually validates against
+// this wallet's real recoverNoteOwnershipPubkey - everything else signs
+// whatever was typed, UTF-8 encoded, unchanged.
+const runMusigRound = (
+  participants: unknown,
+  message: unknown
+): Musig2Result => {
+  const group = Array.isArray(participants)
+    ? (participants as Musig2Participant[])
+    : []
+  return isCk1DemoMessage(message)
+    ? aggregateAndSignBytes(group, CK1_OWNERSHIP_DIGEST)
+    : aggregateAndSign(group, trimmedString(message))
+}
 
 // takes a completed MuSig2 round and encodes its (group pubkey, final
 // signature) pair exactly the way a real note's ck1 does (see

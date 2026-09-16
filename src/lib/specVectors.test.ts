@@ -267,17 +267,25 @@ describe('LUD-25 Test Vectors - vector 2 (Seed & derivation, even-y P) + registr
     return deriveNoteSecretKey(branch.privateKey!, branch.chainCode!, 0)
   }
 
-  it('LN address registration proof - "register" over sk_0', () => {
+  it('LN address registration proof - "register" over sk_0 (signs sha256(message), not the raw string)', () => {
+    const digest = sha256(utf8ToBytes(`LNURLcash:register:${USERNAME}`))
+    expect(bytesToHex(digest)).toBe(
+      '07511b102748f3a3614676386cf9ece7a5fcf11576df21d154bafbaeed77e7ae'
+    )
     const sig = signAddressProof(sk0(), 'register', USERNAME)
     expect(bytesToHex(sig)).toBe(
-      '0dfda272f0b92dd5c3645eddcbbc7ac6eb758dfb9f689915c6492682f3d8016f2bb19f69624e8269a32c212b67b663c7f7ce49f23dbf3bb8c279947fe743fc6e'
+      'baf04336aad76953b437725a6f0b03d295da8792b4d9d36affb8a5d9913df1d5750ed161a8c389f96441711d55306c13a3c2362d3542453f7c10f428f1721461'
     )
   })
 
-  it('LN address registration proof - "unregister" over sk_0 (a different message, never interchangeable with register)', () => {
+  it('LN address registration proof - "unregister" over sk_0 (a different digest, never interchangeable with register)', () => {
+    const digest = sha256(utf8ToBytes(`LNURLcash:unregister:${USERNAME}`))
+    expect(bytesToHex(digest)).toBe(
+      'a420c6e3107fb17638baf3b73d4f74f04312f331a4726f6e563a7d6aa3a5bba0'
+    )
     const sig = signAddressProof(sk0(), 'unregister', USERNAME)
     expect(bytesToHex(sig)).toBe(
-      '5a26ff5d17aa24707c5f6720ea97247251d16ea1f7d05c618bd275eeecd8e19f30e276dda2e620017f4523b0891c7231f5f4159167fb9798c33cd70b7b8f1424'
+      '8d7527d0474528770e5c8ac68cc3dbb6841c9e924f78f7d5187d77514c829f781de2a28d3bf9eec9f2ac5439664d215eec3915c95b05c1d6cc31cab3c946f068'
     )
   })
 })
@@ -290,22 +298,26 @@ describe('LUD-25 Test Vectors - vector 3 (ck1 wallet-side ownership proof)', () 
   )
   const PK = 'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
 
-  it('signs the fixed message "LNURLcash" with a deterministic (all-zero aux_rand) BIP-340 signature', () => {
+  it('signs sha256("LNURLcash") - a 32-byte digest, not the raw 9-byte string - with a deterministic (all-zero aux_rand) BIP-340 signature', () => {
+    const digest = sha256(utf8ToBytes('LNURLcash'))
+    expect(bytesToHex(digest)).toBe(
+      '49a9bb7cae28a0c1f77bc7fac7693456b1cc149f83c413acfd938dc95ea21cf5'
+    )
     const {pubkeyXOnly, signature} = signNoteOwnership(SK)
     expect(bytesToHex(pubkeyXOnly)).toBe(PK)
     expect(bytesToHex(signature)).toBe(
-      '2895fb42c606565adac387881e867881afb616062ec1b8673c149fee19a88cc2722958dbc0395cb6980f9180e3845f0984a4c9a94f798f99ea553d6a12386039'
+      'a83def8861b558c6f04ed877e5e8dcdf675c871f5c4b3383c1723b2329658a40451002bda2a824be84284147eff3f572968504c2f44a6629d6de8cfbd4e3960a'
     )
+    expect(schnorr.verify(signature, digest, pubkeyXOnly)).toBe(true)
   })
 
   it('encodes as ck1<pk><sig> and verifies directly against the embedded pk, no recovery', () => {
     const {pubkeyXOnly, signature} = signNoteOwnership(SK)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     expect(ck1).toBe(
-      'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6z390mgtrqv4j6mtpc0zq7seugrtakzcrzasdcvu7pf8lwrx5gesnj99vdhspetjmfsru3sr3cghcfsjjvn2200x8en6j4844pywrq8yr7xmet'
+      'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc62s0003psm2kxx7p8dsal9arwd7e6usu04cjens0qhywer99jc5sz9zqptmg4gyjlgg2zpglhl8atjj6zsfsh5ffnzn4k73naafcukpgdezzqx'
     )
     const owner = recoverNoteOwnershipPubkey(ck1)
-    expect(owner?.legacy).toBe(false)
     expect(owner && bytesToHex(owner.pubkeyXOnly)).toBe(PK)
   })
 })
