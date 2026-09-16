@@ -204,6 +204,20 @@ export const verifyNoteSignatureHash = (
 const NOTE_OWNERSHIP_MESSAGE = utf8ToBytes('LNURLcash')
 const NOTE_OWNERSHIP_DIGEST = sha256(NOTE_OWNERSHIP_MESSAGE)
 
+// TODO(deprecated): the OLD scheme's digest - a Lightning-signmessage-style
+// double-sha256 over the same fixed message, signed with recoverable ECDSA
+// (see legacyRecoverNoteOwnershipPubkey below). Kept only to read a ck1
+// minted before this scheme changed; WALLET never signs with this anymore.
+const legacyNoteOwnershipDigest = (): Uint8Array =>
+  sha256(
+    sha256(
+      new Uint8Array([
+        ...LIGHTNING_SIGNED_MESSAGE_PREFIX,
+        ...NOTE_OWNERSHIP_MESSAGE
+      ])
+    )
+  )
+
 // BIP-340's own aux_rand exists to harden a HARDWARE signer against fault/
 // side-channel attacks across repeated signings - it is not what makes a
 // single signature secure (the nonce is still a tagged hash of aux_rand,
@@ -232,33 +246,90 @@ export const signNoteOwnership = (
   signature: schnorr.sign(NOTE_OWNERSHIP_DIGEST, secretKey, ZERO_AUX_RAND)
 })
 
-export type NoteOwnershipPubkey = {pubkeyXOnly: Uint8Array}
+// TODO(deprecated): recovers the x-only pubkey an OLD-style (bare
+// recoverable-ECDSA, no embedded pk) ck1 signature belongs to. Only reached
+// via recoverNoteOwnershipPubkey's legacy branch below, for a note minted
+// before this scheme changed - never for a signature this wallet itself
+// still produces (see signNoteOwnership above). Returns null rather than
+// throwing on a malformed signature.
+const legacyRecoverNoteOwnershipPubkey = (
+  signature: Uint8Array
+): Uint8Array | null => {
+  if (signature.length !== 65) return null
+  try {
+    const recidLeading = new Uint8Array([
+      signature[64]!,
+      ...signature.subarray(0, 64)
+    ])
+    const recovered = secp256k1.recoverPublicKey(
+      recidLeading,
+      legacyNoteOwnershipDigest(),
+      {prehash: false}
+    )
+    return recovered.subarray(1) // x-only: drop the 02/03 compressed prefix
+  } catch {
+    return null
+  }
+}
+
+export type NoteOwnershipPubkey = {
+  pubkeyXOnly: Uint8Array
+  // true iff this ck1 was produced under a deprecated signing scheme - the
+  // OLD bare recoverable-ECDSA shape, or the current pk||sig shape but
+  // signed over the raw un-hashed message (before the "32-byte hashed
+  // message" change, 2026-09-16, ../luds commit 6de59b2). A caller holding
+  // a note whose owner resolved with legacy:true should warn the holder and
+  // prompt them to rotate the note (closing the exposure and re-issuing it
+  // under the current scheme) - see BearerCard.tsx's deprecation badge.
+  legacy: boolean
+}
 
 // the inverse of signNoteOwnership: reads/recovers the x-only pubkey a ck1
 // belongs to, WITHOUT contacting SERVICE - lets a cp1 note's own bearer
 // secret (its ck1) be looked up by public commitment (p=cp1<pk>, see
 // request.ts's fetchNoteInfo) instead of by the secret itself, the same
-// privacy reasoning hashK1 already gives legacy notes. The pubkey travels
-// alongside the signature explicitly (encodeCk1) and is verified directly
-// (Verify(pk, digest, sig)) rather than merely decoded - an unverified pk
-// paired with a garbage sig must not silently "recover" as valid. Null on
-// anything that isn't a well-formed, verifying ck1, never throws.
+// privacy reasoning hashK1 already gives legacy notes. Dispatches on the
+// decoded ck1's own shape: the current one carries its pubkey explicitly
+// and is verified directly (Verify(pk, digest, sig)) rather than merely
+// decoded - an unverified pk paired with a garbage sig must not silently
+// "recover" as valid the way ECDSA recovery never could fail to produce
+// *some* pubkey. TODO(deprecated): the legacy shape has no embedded pk at
+// all, so it falls back to ecrecover instead - see
+// legacyRecoverNoteOwnershipPubkey.
 export const recoverNoteOwnershipPubkey = (
   ck1: string
 ): NoteOwnershipPubkey | null => {
   const decoded: DecodedCk1 | null = decodeCk1(ck1)
   if (!decoded) return null
-  try {
-    return schnorr.verify(
-      decoded.signature,
-      NOTE_OWNERSHIP_DIGEST,
-      decoded.pubkeyXOnly
-    )
-      ? {pubkeyXOnly: decoded.pubkeyXOnly}
-      : null
-  } catch {
+  if (decoded.legacy === false) {
+    const verifies = (message: Uint8Array): boolean => {
+      try {
+        return schnorr.verify(decoded.signature, message, decoded.pubkeyXOnly)
+      } catch {
+        return false
+      }
+    }
+    if (verifies(NOTE_OWNERSHIP_DIGEST)) {
+      return {pubkeyXOnly: decoded.pubkeyXOnly, legacy: false}
+    }
+    // TODO(deprecated): fallback for a ck1 signed before the "32-byte
+    // hashed message" change (2026-09-16, ../luds commit 6de59b2) - same
+    // pk||sig shape as the current scheme, but Sign(sk, "LNURLcash") over
+    // the raw 9-byte string instead of Sign(sk, sha256("LNURLcash")).
+    // WALLET never signs under this scheme anymore (signNoteOwnership
+    // above always uses NOTE_OWNERSHIP_DIGEST) - this exists purely to
+    // keep an already-minted note redeemable/recoverable while its holder
+    // hasn't rotated it onto the current scheme yet. Remove this branch
+    // (and NOTE_OWNERSHIP_MESSAGE, once nothing else needs it) once no
+    // such notes are expected to remain in the wild - same retirement
+    // convention as legacyRecoverNoteOwnershipPubkey below.
+    if (verifies(NOTE_OWNERSHIP_MESSAGE)) {
+      return {pubkeyXOnly: decoded.pubkeyXOnly, legacy: true}
+    }
     return null
   }
+  const pubkeyXOnly = legacyRecoverNoteOwnershipPubkey(decoded.signature)
+  return pubkeyXOnly ? {pubkeyXOnly, legacy: true} : null
 }
 
 // ---- LUD-25 Part 2: un-/registering a Lightning Address (Seed & derivation) ----

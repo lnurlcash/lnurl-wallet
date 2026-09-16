@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 import {secp256k1, schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {bech32m} from '@scure/base'
 import {
   verifyNoteSignature,
   verifyNoteSignatureHash,
@@ -259,6 +260,7 @@ describe('recoverNoteOwnershipPubkey', () => {
     const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     const owner = recoverNoteOwnershipPubkey(ck1)
+    expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
   })
 
@@ -274,7 +276,45 @@ describe('recoverNoteOwnershipPubkey', () => {
     expect(recoverNoteOwnershipPubkey(K1)).toBeNull()
   })
 
-  it('rejects a ck1 signed over the old raw (un-hashed) message - the wallet only accepts the current digest scheme', () => {
+  // TODO(deprecated): the OLD bare recoverable-ECDSA ck1 shape (no embedded
+  // pubkey) still decodes via ecrecover, flagged legacy:true so a caller
+  // (BearerCard.tsx) can warn the holder and prompt a rotate
+  it('TODO(deprecated): still recovers a pubkey from the OLD recoverable-ECDSA ck1 shape', () => {
+    const priv = secp256k1.utils.randomSecretKey()
+    const expectedPubkey = secp256k1.getPublicKey(priv, true).subarray(1)
+    const message = utf8ToBytes('LNURLcash')
+    const digest = sha256(
+      sha256(
+        new Uint8Array([
+          ...utf8ToBytes('Lightning Signed Message:'),
+          ...message
+        ])
+      )
+    )
+    const libSig = secp256k1.sign(digest, priv, {
+      format: 'recovered',
+      prehash: false
+    })
+    const legacySignature = new Uint8Array([...libSig.subarray(1), libSig[0]!])
+    const legacyCk1 = bech32m.encode(
+      'ck',
+      bech32m.toWords(legacySignature),
+      false
+    )
+    const owner = recoverNoteOwnershipPubkey(legacyCk1)
+    expect(owner?.legacy).toBe(true)
+    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
+  })
+
+  // TODO(deprecated): a ck1 signed before the "32-byte hashed message"
+  // change (2026-09-16, ../luds commit 6de59b2) - same current pk||sig
+  // shape, but Sign(sk, "LNURLcash") over the raw 9-byte string instead of
+  // Sign(sk, sha256("LNURLcash")). WALLET never produces this anymore
+  // (signNoteOwnership always signs the digest); this only covers reading
+  // an already-minted note back. Remove this test alongside the fallback
+  // branch in recoverNoteOwnershipPubkey once no such notes are expected
+  // to remain in the wild.
+  it('TODO(deprecated): still recovers a pubkey from a ck1 signed over the OLD raw (un-hashed) message', () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
     const rawMessageSignature = schnorr.sign(
@@ -283,7 +323,16 @@ describe('recoverNoteOwnershipPubkey', () => {
       new Uint8Array(32)
     )
     const oldCk1 = encodeCk1(pubkeyXOnly, rawMessageSignature)
-    expect(recoverNoteOwnershipPubkey(oldCk1)).toBeNull()
+    const owner = recoverNoteOwnershipPubkey(oldCk1)
+    expect(owner?.legacy).toBe(true)
+    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
+  })
+
+  it('prefers the current digest scheme when a signature happens to be ambiguous - a fresh signNoteOwnership output never falls into the legacy branch', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+    const ck1 = encodeCk1(pubkeyXOnly, signature)
+    expect(recoverNoteOwnershipPubkey(ck1)?.legacy).toBe(false)
   })
 })
 
