@@ -2,9 +2,22 @@ import type {DeviceClient} from '../device'
 import type {Bearer} from '../storage'
 import type {WalletContextType} from '../WalletContext'
 import {parseLabelTags} from '../noteTags'
-import {serverOf, resolveLnurlInput, lnurlFetch} from '../lnurlcash'
+import {
+  serverOf,
+  resolveLnurlInput,
+  lnurlFetch,
+  encodeCp1,
+  requireNoteK1,
+  rotateNoteWithHash,
+  verifyNoteSignatureHash,
+  noteSignature,
+  settleNote,
+  withNewK1,
+  AmbiguousMintError
+} from '../lnurlcash'
 import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
+import {hexToBytes} from '@noble/hashes/utils.js'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -113,6 +126,141 @@ export const VERBS: Record<string, VerbHandler> = {
       index: tickets[i]?.index ?? i,
       amountSat: Math.floor(p.amount / 1000)
     }))
+  },
+
+  // LUD-25 Part 2: burns the chosen note and re-mints it owned by a pubkey
+  // commitment (cp1<pubkeyHex>) instead of a hash this wallet itself
+  // controls - e.g. the musig2 addon's own MuSig2 aggregate group pubkey.
+  // Once this returns, this wallet no longer holds a spendable secret for
+  // that value on its own: only whoever can produce a valid ck1 (a
+  // BIP-340 signature over "LNURLcash" from the pubkey's own private key -
+  // see src/lib/signature.ts) can ever redeem it again. request.ts's own
+  // mutationSignature already requires SOME well-shaped signature for a
+  // cp1 output or throws; this additionally checks that signature actually
+  // recovers to the note's own PINNED mint key, not just that it parses,
+  // so a caller can tell "certified" apart from "merely well-formed".
+  'note.lockToPubkey': async (args, ctx) => {
+    const bearer = resolveNote(ctx, args.note)
+    if (bearer.spent) {
+      throw new Error('That note is already marked spent.')
+    }
+    if (!bearer.callback) {
+      throw new Error(
+        "That note hasn't been verified yet - refresh it on the Wallet page first."
+      )
+    }
+    if (bearer.deviceId) {
+      throw new Error(
+        'A vault-backed note cannot be locked to a pubkey yet - LUD-25 Part 2 pubkey-based notes are browser-only for now.'
+      )
+    }
+    const pubkeyHex = String(args.pubkeyHex ?? '')
+      .trim()
+      .toLowerCase()
+    if (!/^[0-9a-f]{64}$/.test(pubkeyHex)) {
+      throw new Error('Not a valid 32-byte x-only pubkey.')
+    }
+    const cp1 = encodeCp1(hexToBytes(pubkeyHex))
+    const k1 = requireNoteK1(bearer.url)
+    let signature: string | undefined
+    try {
+      const result = await rotateNoteWithHash(bearer.callback, k1, cp1)
+      signature = result.signature
+    } catch (err) {
+      if (err instanceof AmbiguousMintError) {
+        throw new Error(
+          `${(err as Error).message} This note's fate is uncertain - check it on the Wallet page (a refresh/rotate there will confirm whether it's still spendable) before retrying.`
+        )
+      }
+      throw err
+    }
+    if (!signature) {
+      throw new Error('The mint did not certify the locked pubkey.')
+    }
+    const pubkeyVerified = bearer.mintPubkey
+      ? verifyNoteSignatureHash(
+          pubkeyHex,
+          bearer.amount,
+          signature,
+          bearer.mintPubkey
+        )
+      : false
+    // the burn already landed server-side (the mutation above returned
+    // OK) - this wallet's own copy of the old secret is now worthless
+    // either way, verified or not
+    ctx.removeBearer(bearer.id)
+    ctx.logActivity(
+      'spent',
+      `Locked a ${bearer.amount} msat note at ${serverOf(bearer.url)} to a pubkey via an addon.`,
+      bearer.label
+    )
+    return {
+      amountMsat: bearer.amount,
+      mintPubkey: bearer.mintPubkey ?? null,
+      callback: bearer.callback,
+      groupPubkeyHex: pubkeyHex,
+      signature,
+      pubkeyVerified,
+      // bearer.url's OWN k1 is already burned/worthless by this point -
+      // safe to hand back as a plain host/path template, same "old k1
+      // gets silently overwritten next" pattern Wallet.tsx's own combine/
+      // split already rely on (see withNewK1)
+      urlTemplate: bearer.url
+    }
+  },
+
+  // adds an already fully-known note (url/callback/amount[/mintPubkey])
+  // straight into the wallet - the generic counterpart to
+  // note.lockToPubkey above (or any other addon flow that assembles a
+  // complete, ready note client-side, e.g. the musig2 addon's own
+  // ck1-redemption step) rather than minting one through a payRequest.
+  // Added unverified first, then a best-effort settle (the same
+  // "confirmed spendable" round trip Wallet.tsx's own combine/split
+  // already do) fills in the authoritative value and offline-verifiable
+  // signature; a failed settle just leaves it unverified rather than
+  // losing the note - a refresh on the Wallet page repairs it the same
+  // way an interrupted combine/split already does.
+  'note.claim': async (args, ctx) => {
+    const url = typeof args.url === 'string' ? args.url : ''
+    const callback = typeof args.callback === 'string' ? args.callback : ''
+    const amountMsat = Number(args.amountMsat)
+    const mintPubkey =
+      typeof args.mintPubkey === 'string' ? args.mintPubkey : undefined
+    if (!url || !callback || !Number.isFinite(amountMsat) || amountMsat <= 0) {
+      throw new Error('Not enough information to claim this note yet.')
+    }
+    const added = await ctx.addBearer({
+      url,
+      callback,
+      amount: amountMsat,
+      verified: false,
+      mintPubkey
+    })
+    ctx.logActivity(
+      'mint',
+      `Claimed a ${amountMsat} msat note at ${serverOf(url)} via an addon.`
+    )
+    let verified = false
+    try {
+      const k1 = requireNoteK1(url)
+      const settled = await settleNote(
+        url,
+        k1,
+        amountMsat,
+        noteSignature(url) ?? undefined
+      )
+      await ctx.updateBearer(added.id, {
+        url: withNewK1(url, settled.k1, settled.amountMsat, settled.signature),
+        callback: settled.callback,
+        amount: settled.amountMsat,
+        verified: true
+      })
+      verified = true
+    } catch {
+      // leave it unverified rather than losing the claim - see this
+      // verb's own top comment
+    }
+    return {id: added.id, verified}
   },
 
   'file.download': async args => {

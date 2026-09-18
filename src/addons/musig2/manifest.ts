@@ -1,31 +1,44 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {
   newParticipant,
   aggregatePubkeys,
-  aggregateAndSign,
   aggregateAndSignBytes,
+  generateNonce,
+  aggregateNonces,
+  partialSign,
+  verifyPartialSig,
+  combineStagedRound,
   type Musig2Participant,
   type Musig2Result
 } from './musig2'
 // pure, permission-free math (encoding + local signature verification, no
 // network/wallet-state access) - same "sandbox stays a sandbox" reasoning
-// bech32Decoder's own addon already relies on for verifyNoteSignature
-import {encodeCk1, recoverNoteOwnershipPubkey} from '../../lnurlcash'
+// bech32Decoder's own addon already relies on for verifyNoteSignature. Also
+// re-exports withNewK1, used the same pure way - see lockedNoteUrl below.
+import {
+  encodeCk1,
+  encodeCp1,
+  recoverNoteOwnershipPubkey,
+  withNewK1
+} from '../../lnurlcash'
 
-// MuSig2 (BIP327) joint signatures - a "play around" sandbox, not wired
-// into this wallet's own note-signing anywhere. All key material lives in
-// this addon's own page-local state (never persisted, gone on reload - see
-// AddonRun.tsx/Renderer.tsx's 'run' mode), never cashSecrets.ts or the
-// wallet's real seed. permissions: [] below is load-bearing, not
-// decorative: this addon declares zero verbs, so it has no way to touch a
-// real note, mint, or address regardless of what a holder pastes into it.
-// See the sibling `taproot` addon for BIP341 pubkey tweaking - split out
+// MuSig2 (BIP327) joint signatures - mostly still a "play around" sandbox:
+// every participant's key material lives in this addon's own page-local
+// state (never persisted, gone on reload - see AddonRun.tsx/Renderer.tsx's
+// 'run' mode), never cashSecrets.ts or the wallet's real seed, and nothing
+// above the "lock a note" section below touches a real note, mint, or
+// wallet balance regardless of what a holder pastes into it. The ONE
+// exception (permissions below is no longer an empty, decorative array):
+// this addon can rotate a note the holder explicitly picks into one owned
+// by the group pubkey it just computed (see verbs.ts's note.lockToPubkey)
+// and, once this same page has also produced a valid ck1 for that exact
+// group, can claim the resulting note back into the wallet (note.claim) -
+// the actual point of the whole exercise, not just a math demo. See the
+// sibling `taproot` addon for BIP341 pubkey tweaking - split out
 // separately since the two BIPs are genuinely different specs, not one
 // feature.
-const trimmedString = (value: unknown): string => String(value ?? '').trim()
-
 const MAX_PARTICIPANTS = 3
 
 const participantCount = (participants: unknown): number =>
@@ -36,6 +49,48 @@ const canAddParticipant = (participants: unknown): boolean =>
 
 const canAggregate = (participants: unknown): boolean =>
   participantCount(participants) >= 2
+
+const asParticipants = (participants: unknown): Musig2Participant[] =>
+  Array.isArray(participants) ? (participants as Musig2Participant[]) : []
+
+const PUBKEY_HEX_PATTERN = /^[0-9a-f]{66}$/
+
+// a participant added by pasting in someone else's pubkey rather than
+// generating a fresh local keypair - this page has no secret key for one
+// of these, so it can neither nonce nor sign on its behalf (see the staged
+// helpers below, which is the only path that still lets it take part)
+const canAddExternalPubkey = (
+  participants: unknown,
+  pubkeyInput: unknown
+): boolean =>
+  canAddParticipant(participants) &&
+  PUBKEY_HEX_PATTERN.test(
+    String(pubkeyInput ?? '')
+      .trim()
+      .toLowerCase()
+  )
+
+// the "Add external pubkey" button's own helper - deliberately throws on a
+// malformed paste, same reasoning as every other deliberate-click helper
+// in this file (Renderer.tsx's runAction turns it into a toast)
+const addExternalParticipant = (pubkeyInput: unknown): Musig2Participant => {
+  const trimmed = String(pubkeyInput ?? '')
+    .trim()
+    .toLowerCase()
+  if (!PUBKEY_HEX_PATTERN.test(trimmed)) {
+    throw new Error(
+      'Enter a 33-byte compressed pubkey as 66 hex characters (e.g. 02.../03...).'
+    )
+  }
+  return {pubkeyHex: trimmed}
+}
+
+// true once every participant is a local, freshly-generated keypair - the
+// gate between the original one-click "Aggregate & sign" path (still used
+// unchanged below) and the staged nonce/sign flow a pubkey-only
+// participant needs instead
+const allLocal = (participants: unknown): boolean =>
+  asParticipants(participants).every(p => Boolean(p.secretKeyHex))
 
 const musigPreview = (participants: unknown): string => {
   if (!Array.isArray(participants) || participants.length < 2) return '-'
@@ -48,10 +103,29 @@ const musigPreview = (participants: unknown): string => {
   }
 }
 
+// the same group pubkey musigPreview shows, bech32m-encoded exactly the way
+// a real cp1 note address is (see src/lib/recoverableNotes.ts's encodeCp1) -
+// aggregatePubkeys/keyAggExport already return the 32-byte x-only form cp1
+// needs, no reformatting required. Shown as soon as 2+ participants exist,
+// same gating as the raw-hex preview above: whoever controls the aggregate
+// key can later mint (or redeem an internal transfer/combine/split into)
+// a note at this address, then prove ownership with the group's own joint
+// ck1 signature - see this addon's own worked example below for that half.
+const musigCp1Preview = (participants: unknown): string => {
+  const hex = musigPreview(participants)
+  if (hex === '-') return '-'
+  try {
+    return encodeCp1(hexToBytes(hex))
+  } catch {
+    return '-'
+  }
+}
+
 // ck1's own fixed message (src/lib/signature.ts's NOTE_OWNERSHIP_MESSAGE) -
-// hardcoded rather than reading `musigMessage`, so the worked example below
-// only lights up once the group has actually signed THIS exact message, the
-// one thing a real ck1 ownership proof is ever checked against
+// this addon always signs exactly this, never free text, so the worked
+// example below is never just a coincidental match: every "Aggregate &
+// sign" click here IS a real ck1 ownership proof, checked against this
+// wallet's own verification code below
 const CK1_OWNERSHIP_MESSAGE = 'LNURLcash'
 
 // ck1 signs sha256("LNURLcash"), a 32-byte digest, not the raw 9-byte
@@ -60,27 +134,142 @@ const CK1_OWNERSHIP_MESSAGE = 'LNURLcash'
 // hashed down first). Precomputed once, not per click.
 const CK1_OWNERSHIP_DIGEST = sha256(utf8ToBytes(CK1_OWNERSHIP_MESSAGE))
 
-const isCk1DemoMessage = (message: unknown): boolean =>
-  trimmedString(message) === CK1_OWNERSHIP_MESSAGE
+// the staged functions (below) are hex-in/hex-out, unlike
+// aggregateAndSignBytes's own raw-bytes signature
+const CK1_OWNERSHIP_DIGEST_HEX = bytesToHex(CK1_OWNERSHIP_DIGEST)
 
 // the Aggregate & sign button's own helper - deliberately throws straight
 // through on bad input, same reasoning as a deliberate button click always
 // gets (Renderer.tsx's own runAction turns a thrown Error into a plain
-// toast notification, unlike a live binding). Signs the pre-hashed
-// CK1_OWNERSHIP_DIGEST instead of the typed text when it's exactly the ck1
-// demo message, so the worked example below actually validates against
-// this wallet's real recoverNoteOwnershipPubkey - everything else signs
-// whatever was typed, UTF-8 encoded, unchanged.
-const runMusigRound = (
-  participants: unknown,
-  message: unknown
-): Musig2Result => {
-  const group = Array.isArray(participants)
-    ? (participants as Musig2Participant[])
-    : []
-  return isCk1DemoMessage(message)
-    ? aggregateAndSignBytes(group, CK1_OWNERSHIP_DIGEST)
-    : aggregateAndSign(group, trimmedString(message))
+// toast notification, unlike a live binding). Only ever reachable for an
+// all-local group (see allLocal above) - a pubkey-only participant goes
+// through the staged flow below instead.
+const runMusigRound = (participants: unknown): Musig2Result =>
+  aggregateAndSignBytes(asParticipants(participants), CK1_OWNERSHIP_DIGEST)
+
+// ---- staged flow: at least one participant is pubkey-only ----
+//
+// Each of these mirrors one step of musig2.ts's own staged functions, just
+// working over this addon's own Musig2Participant[] shape (and the fixed
+// ck1 message) instead of raw hex lists - a manifest-side adapter, not new
+// crypto. Every "generate/sign" helper below is idempotent: it only ever
+// fills in a field that's still empty, so re-clicking a button (e.g. after
+// adding a new local participant) never regenerates or reuses an existing
+// participant's nonce/signature.
+
+const allNoncesReady = (participants: unknown): boolean => {
+  const list = asParticipants(participants)
+  return list.length >= 2 && list.every(p => Boolean(p.pubNonceHex))
+}
+
+const allSigsReady = (participants: unknown): boolean =>
+  allNoncesReady(participants) &&
+  asParticipants(participants).every(p => Boolean(p.partialSigHex))
+
+// "Generate my nonces" - fills in a fresh nonce pair for every LOCAL
+// participant that doesn't already have one. An external (pubkey-only)
+// participant's own pubNonceHex can only ever come from a paste (see
+// participantRow's own Input below) - this page has no secret key to
+// generate one on their behalf.
+const generateLocalNonces = (participants: unknown): Musig2Participant[] => {
+  const list = asParticipants(participants)
+  const groupPubkeyHex = aggregatePubkeys(list.map(p => p.pubkeyHex))
+  return list.map(p => {
+    if (!p.secretKeyHex || p.pubNonceHex) return p
+    const nonce = generateNonce(
+      p.pubkeyHex,
+      p.secretKeyHex,
+      groupPubkeyHex,
+      CK1_OWNERSHIP_DIGEST_HEX
+    )
+    return {...p, nonceSecretHex: nonce.secretHex, pubNonceHex: nonce.publicHex}
+  })
+}
+
+// the aggregate nonce every participant's own partial signature is signed
+// against - the one value a genuine external co-signer needs from this
+// page (alongside the pubkey list and the fixed message) before they can
+// compute their own partial signature elsewhere and paste it back in
+const aggregateNoncePreview = (participants: unknown): string => {
+  if (!allNoncesReady(participants)) return '-'
+  try {
+    return aggregateNonces(
+      asParticipants(participants).map(p => p.pubNonceHex!)
+    )
+  } catch {
+    return '-'
+  }
+}
+
+// "Sign my parts" - fills in a partial signature for every LOCAL
+// participant that has a nonce but no signature yet. An external
+// participant's own partialSigHex can only come from a paste.
+const signLocalParts = (participants: unknown): Musig2Participant[] => {
+  const list = asParticipants(participants)
+  if (!allNoncesReady(list)) return list
+  const pubkeysHex = list.map(p => p.pubkeyHex)
+  const aggNonceHex = aggregateNonces(list.map(p => p.pubNonceHex!))
+  return list.map(p => {
+    if (!p.secretKeyHex || !p.nonceSecretHex || p.partialSigHex) return p
+    const partialSigHex = partialSign(
+      aggNonceHex,
+      pubkeysHex,
+      CK1_OWNERSHIP_DIGEST_HEX,
+      p.nonceSecretHex,
+      p.secretKeyHex
+    )
+    return {...p, partialSigHex}
+  })
+}
+
+// live per-row check as a partial signature is pasted in - lets a bad
+// paste (wrong participant, stale round, plain typo) surface immediately
+// as "not verified" next to that row, rather than only failing once every
+// participant's is in and "Combine signatures" is clicked
+const partialSigValid = (participants: unknown, index: unknown): boolean => {
+  const list = asParticipants(participants)
+  const item = list[Number(index)]
+  if (!item?.partialSigHex || !allNoncesReady(list)) return false
+  try {
+    const pubkeysHex = list.map(p => p.pubkeyHex)
+    const pubNoncesHex = list.map(p => p.pubNonceHex!)
+    return verifyPartialSig(
+      aggregateNonces(pubNoncesHex),
+      pubkeysHex,
+      CK1_OWNERSHIP_DIGEST_HEX,
+      pubNoncesHex,
+      item.partialSigHex,
+      Number(index)
+    )
+  } catch {
+    return false
+  }
+}
+
+// "Combine signatures" - the staged flow's own last step, once every
+// participant (local or external) has a partial signature. Deliberately
+// throws straight through on an incomplete round, same reasoning as
+// runMusigRound above.
+const combineStagedSignatures = (participants: unknown): Musig2Result => {
+  const list = asParticipants(participants)
+  const pubkeysHex = list.map(p => p.pubkeyHex)
+  const pubNoncesHex = list.map(p => {
+    if (!p.pubNonceHex)
+      throw new Error('Every participant needs a public nonce first.')
+    return p.pubNonceHex
+  })
+  const partialSigsHex = list.map(p => {
+    if (!p.partialSigHex) {
+      throw new Error('Every participant needs a partial signature first.')
+    }
+    return p.partialSigHex
+  })
+  return combineStagedRound(
+    pubkeysHex,
+    pubNoncesHex,
+    partialSigsHex,
+    CK1_OWNERSHIP_DIGEST_HEX
+  )
 }
 
 // takes a completed MuSig2 round and encodes its (group pubkey, final
@@ -109,15 +298,161 @@ const ck1Accepted = (result: unknown): boolean => {
   return ck1 !== null && recoverNoteOwnershipPubkey(ck1) !== null
 }
 
+// ---- redeeming a note this page locked to the group pubkey ----
+//
+// The one place this addon's two "real wallet" pieces meet: a note.
+// lockToPubkey result (a mint-certified lock onto SOME pubkey) and a
+// completed signing round (a ck1 for SOME pubkey) only combine into a
+// spendable note when they're for the very same group - checked here, not
+// assumed, since editing participants after locking a note is entirely
+// possible and would otherwise silently build a note for the wrong key.
+// Pure string/hex math (withNewK1), no network - this is what "the mint
+// certified pubkey X at amount Y" plus "here is a valid ck1 for X" adds up
+// to: a complete, ready-to-redeem withdraw URL, embedding both the ck1
+// bearer secret AND the mint's own certificate (so it shows up already
+// offline-verified wherever it lands - see BearerCard.tsx's own
+// offlineVerified check, which reads a note's sig the same way).
+const lockedNoteUrl = (
+  lockedNote: unknown,
+  musigResult: unknown
+): string | null => {
+  const locked = lockedNote as {
+    urlTemplate: string
+    amountMsat: number
+    signature: string
+    groupPubkeyHex: string
+  } | null
+  const result = musigResult as Musig2Result | null
+  if (!locked || !result || result.groupPubkeyHex !== locked.groupPubkeyHex) {
+    return null
+  }
+  const ck1 = ck1FromMusigResult(result)
+  if (!ck1) return null
+  try {
+    return withNewK1(
+      locked.urlTemplate,
+      ck1,
+      locked.amountMsat,
+      locked.signature
+    )
+  } catch {
+    return null
+  }
+}
+
 const participantRow: UiNode = {
   type: 'View',
   style: 'row',
   children: [
     {type: 'Text', value: {var: 'item.pubkeyHex'}},
     {
+      type: 'Show',
+      when: {helper: 'not', args: [{var: 'item.secretKeyHex'}]},
+      children: [
+        {type: 'Text', value: '(external - pasted in, no local secret key)'}
+      ]
+    },
+    {
       type: 'Button',
       label: 'Remove',
       onClick: {action: 'removeAt', path: 'participants', index: {var: 'index'}}
+    },
+    // ---- nonce stage: local participants fill this in automatically
+    // (see generateLocalNonces below), an external one needs it pasted in
+    // before the round can continue past "Generate my nonces" ----
+    {
+      type: 'Show',
+      when: {var: 'item.pubNonceHex'},
+      children: [
+        {
+          type: 'Text',
+          value: {cat: ['Public nonce: ', {var: 'item.pubNonceHex'}]},
+          style: 'response-block'
+        },
+        {
+          type: 'Button',
+          label: 'Copy',
+          onClick: {
+            verb: 'clipboard.copy',
+            args: {text: {var: 'item.pubNonceHex'}}
+          }
+        }
+      ]
+    },
+    {
+      type: 'Show',
+      when: {
+        and: [
+          {helper: 'not', args: [{var: 'item.secretKeyHex'}]},
+          {helper: 'not', args: [{var: 'item.pubNonceHex'}]}
+        ]
+      },
+      children: [
+        {
+          type: 'Input',
+          bind: 'item.pubNonceHex',
+          label: "Paste this participant's own public nonce (hex)"
+        }
+      ]
+    },
+    // ---- partial-signature stage: same local/external split, gated on
+    // the nonce stage above already being done for this participant ----
+    {
+      type: 'Show',
+      when: {var: 'item.partialSigHex'},
+      children: [
+        {
+          type: 'Text',
+          value: {cat: ['Partial signature: ', {var: 'item.partialSigHex'}]},
+          style: 'response-block'
+        },
+        {
+          type: 'Button',
+          label: 'Copy',
+          onClick: {
+            verb: 'clipboard.copy',
+            args: {text: {var: 'item.partialSigHex'}}
+          }
+        },
+        {
+          type: 'Show',
+          when: {
+            helper: 'partialSigValid',
+            args: [{var: 'participants'}, {var: 'index'}]
+          },
+          children: [{type: 'Text', value: '✓ verified'}]
+        },
+        {
+          type: 'Show',
+          when: {
+            helper: 'not',
+            args: [
+              {
+                helper: 'partialSigValid',
+                args: [{var: 'participants'}, {var: 'index'}]
+              }
+            ]
+          },
+          children: [{type: 'Text', value: '✗ not verified'}]
+        }
+      ]
+    },
+    {
+      type: 'Show',
+      when: {
+        and: [
+          {helper: 'not', args: [{var: 'item.secretKeyHex'}]},
+          {var: 'item.pubNonceHex'},
+          {helper: 'not', args: [{var: 'item.partialSigHex'}]}
+        ]
+      },
+      children: [
+        {
+          type: 'Input',
+          bind: 'item.partialSigHex',
+          label: "Paste this participant's own partial signature (hex)"
+        }
+      ]
     }
   ]
 }
@@ -143,26 +478,34 @@ const signerRow: UiNode = {
   ]
 }
 
-const musigUi: UiNode[] = [
-  {type: 'Text', value: 'MuSig2 (BIP327)', style: 'heading'},
+const musigDocsUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      'Aggregate 2-3 local, ephemeral keypairs into one pubkey, then produce ONE joint Schnorr signature - a verifier only ever sees a single ordinary-looking key and a single ordinary-looking signature, never that multiple people were involved. This is a real, spec-checked implementation (see this addon’s own tests). A cp1 note’s own ownership proof (ck1) is the same algorithm - a BIP-340 Schnorr signature over a fixed message, checked directly against the note’s own pubkey (src/lib/signature.ts) - so an aggregate key produced here is cryptographically capable of owning a spendable note; sign the message "LNURLcash" below to see that proven directly against this wallet’s own verification code, not just asserted here. This playground still never touches this wallet’s real notes, seed, or mints, by design (permissions: [] above, not a crypto limitation): wiring an aggregate key into an actual mint/spend flow would be separate, deliberate work.'
+      'Aggregate 2-3 keypairs into one pubkey, then produce ONE joint Schnorr signature - a verifier only ever sees a single ordinary-looking key and a single ordinary-looking signature, never that multiple people were involved. This is a real, spec-checked implementation (see this addon’s own tests). A cp1 note’s own ownership proof (ck1) is the same algorithm - a BIP-340 Schnorr signature over a fixed message, checked directly against the note’s own pubkey (src/lib/signature.ts) - so an aggregate key produced here is cryptographically capable of owning a spendable note; every round here signs exactly that fixed message, "LNURLcash", to prove that directly against this wallet’s own verification code, not just assert it in prose. Everything above is still a page-local sandbox (no note, mint, or wallet access) - "Lock a real note to this pubkey" below is the one deliberate exception: it burns a note you pick and re-mints it owned by whatever group pubkey this page has aggregated, then lets you redeem it back once this same page has also produced that group’s ck1.'
+  },
+  {
+    type: 'Text',
+    value:
+      'Every participant can either be generated locally (this page holds its secret key and signs on its behalf automatically) or added as just a pubkey, pasted in by hand - this page never holds that key, so a nonce and, later, a partial signature for it must be pasted in too, computed elsewhere by whoever actually holds it. Mixing the two turns "Aggregate & sign" into a step-by-step round instead of one click - see below.'
   },
   {type: 'Text', value: 'How to use this', style: 'subheading'},
   {
     type: 'List',
     ordered: true,
     each: [
-      "Click 'Add participant' 2 or 3 times - each click generates one fresh, ephemeral keypair locally.",
-      'Once there are 2 or more participants, the aggregated group pubkey appears automatically below the list.',
-      'Type a message for the group to sign together - or type exactly "LNURLcash" to also see the ck1 worked example below.',
-      "Click 'Aggregate & sign' - this runs the entire MuSig2 round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation).",
-      "Check the result: the final signature's own ✓ verified line, and each signer's individual partial-signature ✓ underneath."
+      "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, paste their pubkey into 'Add external pubkey'.",
+      'Once there are 2 or more participants, the aggregated group pubkey (and its cp1 address form) appear automatically below the list.',
+      "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over ck1's own fixed message, \"LNURLcash\".",
+      "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and fixed message above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
+      "Check the result: the final signature's own ✓ verified line, and each signer's individual partial-signature ✓ underneath (also shown live next to a pasted partial signature, before the round is even combined).",
+      "Optional - to actually lock a note to this pubkey: once 2+ participants exist, pick one of your own unspent notes under 'Lock a real note to this pubkey' and click 'Lock this note' - this burns it and re-mints it owned by the group pubkey, certified by the mint's own signature (checked here, not just assumed). Once this same round has ALSO produced a matching ck1 above, a 'Redeemable note' section appears with the complete note (both signatures included) - copy it, or click 'Withdraw to wallet' to claim it back here directly."
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
-  },
+  }
+]
+
+const musigBuilderUi: UiNode[] = [
   {type: 'For', each: {var: 'participants'}, children: [participantRow]},
   {
     type: 'Show',
@@ -176,6 +519,32 @@ const musigUi: UiNode[] = [
           path: 'participants',
           value: {helper: 'newParticipant', args: []}
         }
+      },
+      {
+        type: 'Input',
+        bind: 'externalPubkeyInput',
+        label: 'Or add an external pubkey (66 hex chars, no local secret key)'
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'canAddExternalPubkey',
+          args: [{var: 'participants'}, {var: 'externalPubkeyInput'}]
+        },
+        children: [
+          {
+            type: 'Button',
+            label: 'Add external pubkey',
+            onClick: {
+              action: 'push',
+              path: 'participants',
+              value: {
+                helper: 'addExternalParticipant',
+                args: [{var: 'externalPubkeyInput'}]
+              }
+            }
+          }
+        ]
       }
     ]
   },
@@ -193,18 +562,274 @@ const musigUi: UiNode[] = [
         },
         style: 'response-block'
       },
-      {type: 'Input', bind: 'musigMessage', label: 'Message to sign together'},
       {
         type: 'Button',
-        label: 'Aggregate & sign',
+        label: 'Copy',
         onClick: {
-          action: 'set',
-          path: 'musigResult',
-          value: {
-            helper: 'runMusigRound',
-            args: [{var: 'participants'}, {var: 'musigMessage'}]
+          verb: 'clipboard.copy',
+          args: {text: {helper: 'musigPreview', args: [{var: 'participants'}]}}
+        }
+      },
+      {
+        type: 'Text',
+        value: {
+          cat: [
+            'Group pubkey (cp1): ',
+            {helper: 'musigCp1Preview', args: [{var: 'participants'}]}
+          ]
+        },
+        style: 'response-block'
+      },
+      {
+        type: 'Button',
+        label: 'Copy',
+        onClick: {
+          verb: 'clipboard.copy',
+          args: {
+            text: {helper: 'musigCp1Preview', args: [{var: 'participants'}]}
           }
         }
+      },
+      {
+        type: 'Text',
+        value: 'Lock a real note to this pubkey',
+        style: 'subheading'
+      },
+      {
+        type: 'Show',
+        when: {helper: 'not', args: [{var: 'lockedNote'}]},
+        children: [
+          {
+            type: 'Text',
+            value:
+              'Optional - burns one of your own wallet notes and re-mints it owned by the group pubkey above. Only a valid ck1 for this exact group (produced below) will ever redeem it again; this wallet gives up any other way to spend it the moment this succeeds.'
+          },
+          {
+            type: 'NotePicker',
+            bind: 'selectedNote',
+            filter: {spent: false},
+            label: 'Note to lock'
+          },
+          {
+            type: 'Show',
+            when: {var: 'selectedNote'},
+            children: [
+              {
+                type: 'Button',
+                label: 'Lock this note to the group pubkey',
+                onClick: {
+                  verb: 'note.lockToPubkey',
+                  args: {
+                    note: {var: 'selectedNote.id'},
+                    pubkeyHex: {
+                      helper: 'musigPreview',
+                      args: [{var: 'participants'}]
+                    }
+                  },
+                  result: 'lockedNote'
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {var: 'lockedNote'},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Locked ',
+                {helper: 'msatToSats', args: [{var: 'lockedNote.amountMsat'}]},
+                ' sats to this pubkey.'
+              ]
+            }
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: ["Mint's certificate: ", {var: 'lockedNote.signature'}]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Button',
+            label: 'Copy',
+            onClick: {
+              verb: 'clipboard.copy',
+              args: {text: {var: 'lockedNote.signature'}}
+            }
+          },
+          {
+            type: 'Show',
+            when: {var: 'lockedNote.pubkeyVerified'},
+            children: [
+              {
+                type: 'Text',
+                value:
+                  "✓ verified against the mint's own pinned key - this pubkey really is locked"
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {helper: 'not', args: [{var: 'lockedNote.pubkeyVerified'}]},
+            children: [
+              {
+                type: 'Text',
+                value:
+                  "✗ could not verify the mint's certificate - do not rely on this note being safely locked"
+              }
+            ]
+          },
+          {
+            type: 'Button',
+            label: 'Lock a different note',
+            onClick: {action: 'set', path: 'lockedNote', value: null}
+          }
+        ]
+      },
+      {
+        type: 'Text',
+        value:
+          'Message to sign together: "LNURLcash" (fixed - ck1’s own ownership message, see below)',
+        style: 'response-block'
+      },
+      {
+        type: 'Show',
+        when: {helper: 'allLocal', args: [{var: 'participants'}]},
+        children: [
+          {
+            type: 'Button',
+            label: 'Aggregate & sign',
+            onClick: {
+              action: 'set',
+              path: 'musigResult',
+              value: {helper: 'runMusigRound', args: [{var: 'participants'}]}
+            }
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'not',
+          args: [{helper: 'allLocal', args: [{var: 'participants'}]}]
+        },
+        children: [
+          {
+            type: 'Text',
+            value:
+              'One or more participants are pubkey-only - drive the round step by step:',
+            style: 'subheading'
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [{helper: 'allNoncesReady', args: [{var: 'participants'}]}]
+            },
+            children: [
+              {
+                type: 'Button',
+                label: 'Generate my nonces',
+                onClick: {
+                  action: 'set',
+                  path: 'participants',
+                  value: {
+                    helper: 'generateLocalNonces',
+                    args: [{var: 'participants'}]
+                  }
+                }
+              },
+              {
+                type: 'Text',
+                value:
+                  'Fills in a public nonce for every local participant above. Any external (pubkey-only) participant still needs its own public nonce pasted into its row before the round can continue.'
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {helper: 'allNoncesReady', args: [{var: 'participants'}]},
+            children: [
+              {
+                type: 'Text',
+                value: {
+                  cat: [
+                    'Aggregate nonce: ',
+                    {
+                      helper: 'aggregateNoncePreview',
+                      args: [{var: 'participants'}]
+                    }
+                  ]
+                },
+                style: 'response-block'
+              },
+              {
+                type: 'Button',
+                label: 'Copy',
+                onClick: {
+                  verb: 'clipboard.copy',
+                  args: {
+                    text: {
+                      helper: 'aggregateNoncePreview',
+                      args: [{var: 'participants'}]
+                    }
+                  }
+                }
+              },
+              {
+                type: 'Show',
+                when: {
+                  helper: 'not',
+                  args: [
+                    {helper: 'allSigsReady', args: [{var: 'participants'}]}
+                  ]
+                },
+                children: [
+                  {
+                    type: 'Button',
+                    label: 'Sign my parts',
+                    onClick: {
+                      action: 'set',
+                      path: 'participants',
+                      value: {
+                        helper: 'signLocalParts',
+                        args: [{var: 'participants'}]
+                      }
+                    }
+                  },
+                  {
+                    type: 'Text',
+                    value:
+                      'Fills in a partial signature for every local participant above. Any external participant still needs its own partial signature (computed against the aggregate nonce, pubkey list, and fixed message above) pasted into its row before the round can be combined.'
+                  }
+                ]
+              },
+              {
+                type: 'Show',
+                when: {helper: 'allSigsReady', args: [{var: 'participants'}]},
+                children: [
+                  {
+                    type: 'Button',
+                    label: 'Combine signatures',
+                    onClick: {
+                      action: 'set',
+                      path: 'musigResult',
+                      value: {
+                        helper: 'combineStagedSignatures',
+                        args: [{var: 'participants'}]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       }
     ]
   },
@@ -216,6 +841,14 @@ const musigUi: UiNode[] = [
         type: 'Text',
         value: {cat: ['Final signature: ', {var: 'musigResult.finalSigHex'}]},
         style: 'response-block'
+      },
+      {
+        type: 'Button',
+        label: 'Copy',
+        onClick: {
+          verb: 'clipboard.copy',
+          args: {text: {var: 'musigResult.finalSigHex'}}
+        }
       },
       {
         type: 'Show',
@@ -241,42 +874,33 @@ const musigUi: UiNode[] = [
         style: 'subheading'
       },
       {
+        type: 'Text',
+        value:
+          'The group pubkey and final signature above are already the exact shape a real ck1 needs (32-byte x-only pubkey, 64-byte BIP-340 signature) - encoded below and run through this wallet’s own recoverNoteOwnershipPubkey, unchanged.'
+      },
+      {
+        type: 'Text',
+        value: {
+          cat: ['ck1: ', {helper: 'ck1Display', args: [{var: 'musigResult'}]}]
+        },
+        style: 'response-block'
+      },
+      {
+        type: 'Button',
+        label: 'Copy',
+        onClick: {
+          verb: 'clipboard.copy',
+          args: {text: {helper: 'ck1Display', args: [{var: 'musigResult'}]}}
+        }
+      },
+      {
         type: 'Show',
-        when: {helper: 'isCk1DemoMessage', args: [{var: 'musigMessage'}]},
+        when: {helper: 'ck1Accepted', args: [{var: 'musigResult'}]},
         children: [
           {
             type: 'Text',
             value:
-              'The group pubkey and final signature above are already the exact shape a real ck1 needs (32-byte x-only pubkey, 64-byte BIP-340 signature) - encoded below and run through this wallet’s own recoverNoteOwnershipPubkey, unchanged.'
-          },
-          {
-            type: 'Text',
-            value: {
-              cat: [
-                'ck1: ',
-                {helper: 'ck1Display', args: [{var: 'musigResult'}]}
-              ]
-            },
-            style: 'response-block'
-          },
-          {
-            type: 'Show',
-            when: {helper: 'ck1Accepted', args: [{var: 'musigResult'}]},
-            children: [
-              {
-                type: 'Text',
-                value:
-                  '✓ accepted - this wallet’s note-verification code cannot tell this apart from an ordinary single-signer ck1'
-              }
-            ]
-          },
-          {
-            type: 'Show',
-            when: {
-              helper: 'not',
-              args: [{helper: 'ck1Accepted', args: [{var: 'musigResult'}]}]
-            },
-            children: [{type: 'Text', value: '✗ not accepted'}]
+              '✓ accepted - this wallet’s note-verification code cannot tell this apart from an ordinary single-signer ck1'
           }
         ]
       },
@@ -284,16 +908,123 @@ const musigUi: UiNode[] = [
         type: 'Show',
         when: {
           helper: 'not',
-          args: [{helper: 'isCk1DemoMessage', args: [{var: 'musigMessage'}]}]
+          args: [{helper: 'ck1Accepted', args: [{var: 'musigResult'}]}]
+        },
+        children: [{type: 'Text', value: '✗ not accepted'}]
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'lockedNoteUrl',
+          args: [{var: 'lockedNote'}, {var: 'musigResult'}]
         },
         children: [
           {
             type: 'Text',
-            value:
-              'Set "Message to sign together" above to exactly "LNURLcash" (ck1’s own fixed message) and sign again to see this pair encoded and accepted as a real ck1 ownership proof.'
+            value: 'Redeemable note (locked note + this ck1)',
+            style: 'subheading'
+          },
+          {
+            type: 'Text',
+            value: {
+              helper: 'lockedNoteUrl',
+              args: [{var: 'lockedNote'}, {var: 'musigResult'}]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Button',
+            label: 'Copy',
+            onClick: {
+              verb: 'clipboard.copy',
+              args: {
+                text: {
+                  helper: 'lockedNoteUrl',
+                  args: [{var: 'lockedNote'}, {var: 'musigResult'}]
+                }
+              }
+            }
+          },
+          {
+            type: 'Show',
+            when: {var: 'lockedNote.pubkeyVerified'},
+            children: [
+              {
+                type: 'Button',
+                label: 'Withdraw to wallet',
+                onClick: {
+                  verb: 'note.claim',
+                  args: {
+                    url: {
+                      helper: 'lockedNoteUrl',
+                      args: [{var: 'lockedNote'}, {var: 'musigResult'}]
+                    },
+                    callback: {var: 'lockedNote.callback'},
+                    amountMsat: {var: 'lockedNote.amountMsat'},
+                    mintPubkey: {var: 'lockedNote.mintPubkey'}
+                  },
+                  result: 'claimedNote'
+                }
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [{var: 'lockedNote.pubkeyVerified'}]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  "Withdraw disabled - the mint's own certificate for this lock could not be verified above."
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {var: 'claimedNote'},
+            children: [
+              {
+                type: 'Show',
+                when: {var: 'claimedNote.verified'},
+                children: [
+                  {
+                    type: 'Text',
+                    value: '✓ added to your wallet and confirmed by the mint'
+                  }
+                ]
+              },
+              {
+                type: 'Show',
+                when: {helper: 'not', args: [{var: 'claimedNote.verified'}]},
+                children: [
+                  {
+                    type: 'Text',
+                    value:
+                      'Added to your wallet, unverified for now - refresh it on the Wallet page.'
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
+    ]
+  }
+]
+
+// builder (interactive) on the left, reference docs on the right - see
+// style.scss's own .addon-columns for the grid/collapse behaviour
+const musigUi: UiNode[] = [
+  {type: 'Text', value: 'MuSig2 (BIP327)', style: 'heading'},
+  {
+    type: 'View',
+    style: 'columns',
+    children: [
+      {type: 'View', style: 'col-left', children: musigBuilderUi},
+      {type: 'View', style: 'col-right', children: musigDocsUi}
     ]
   }
 ]
@@ -304,13 +1035,28 @@ const musig2Manifest: AddonManifest = {
   version: '1',
   icon: 'people',
   description:
-    'Play around with BIP327 MuSig2 joint Schnorr signatures - a sandbox, never wired into this wallet’s own notes. See the separate Taproot addon for BIP341 pubkey tweaking.',
-  permissions: [],
+    'Play around with BIP327 MuSig2 joint Schnorr signatures, and optionally lock one of your own notes to the resulting group pubkey. See the separate Taproot addon for BIP341 pubkey tweaking.',
+  permissions: [
+    {
+      verb: 'note.lockToPubkey',
+      scope: 'spent:false',
+      reason:
+        "Let you pick one of your own unspent notes and lock it to this page's MuSig2 group pubkey"
+    },
+    {
+      verb: 'note.claim',
+      reason:
+        "Add the resulting note back into your wallet once this group's ck1 proof is ready"
+    }
+  ],
   nav: {position: 'right', icon: 'people', label: 'MuSig2'},
   state: {
     participants: [],
-    musigMessage: 'hello musig2',
-    musigResult: null
+    externalPubkeyInput: '',
+    musigResult: null,
+    selectedNote: null,
+    lockedNote: null,
+    claimedNote: null
   },
   ui: {
     type: 'View',
@@ -323,12 +1069,23 @@ const musig2Manifest: AddonManifest = {
 const musig2Helpers: Record<string, AddonHelper> = {
   newParticipant: newParticipant as AddonHelper,
   canAddParticipant: canAddParticipant as AddonHelper,
+  canAddExternalPubkey: canAddExternalPubkey as AddonHelper,
+  addExternalParticipant: addExternalParticipant as AddonHelper,
+  allLocal: allLocal as AddonHelper,
   canAggregate: canAggregate as AddonHelper,
   musigPreview: musigPreview as AddonHelper,
+  musigCp1Preview: musigCp1Preview as AddonHelper,
   runMusigRound: runMusigRound as AddonHelper,
-  isCk1DemoMessage: isCk1DemoMessage as AddonHelper,
+  allNoncesReady: allNoncesReady as AddonHelper,
+  allSigsReady: allSigsReady as AddonHelper,
+  generateLocalNonces: generateLocalNonces as AddonHelper,
+  aggregateNoncePreview: aggregateNoncePreview as AddonHelper,
+  signLocalParts: signLocalParts as AddonHelper,
+  partialSigValid: partialSigValid as AddonHelper,
+  combineStagedSignatures: combineStagedSignatures as AddonHelper,
   ck1Display: ck1Display as AddonHelper,
-  ck1Accepted: ck1Accepted as AddonHelper
+  ck1Accepted: ck1Accepted as AddonHelper,
+  lockedNoteUrl: lockedNoteUrl as AddonHelper
 }
 
 export const musig2Addon: Addon = {
