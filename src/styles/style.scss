@@ -2110,6 +2110,23 @@ nav {
   }
 }
 
+// two-column addon layout (MuSig2/Taproot: the interactive builder on the
+// left, reference docs on the right) - same grid/collapse shape as the
+// app-level .two-columns (Vault/Mint), kept as its own addon-namespaced
+// class since a View's own style always maps to `addon-${style}`
+.addon-columns {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  align-items: start;
+  gap: 21px;
+}
+
+@media (max-width: 700px) {
+  .addon-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .addon-field {
   min-width: 0;
   input,

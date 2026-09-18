@@ -222,8 +222,7 @@ const scriptRow: UiNode = {
   ]
 }
 
-const taprootUi: UiNode[] = [
-  {type: 'Text', value: 'Taproot pubkey tweaking (BIP341)', style: 'heading'},
+const taprootDocsUi: UiNode[] = [
   {
     type: 'Text',
     value:
@@ -241,7 +240,10 @@ const taprootUi: UiNode[] = [
       "To prove the tweaked key is a real, usable keypair (not just hex), paste the SAME key's secret key, type any message, and click 'Sign with tweaked key'."
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
-  },
+  }
+]
+
+const taprootBuilderUi: UiNode[] = [
   {type: 'Text', value: 'Generate a keypair', style: 'subheading'},
   {
     type: 'Button',
@@ -411,6 +413,21 @@ const taprootUi: UiNode[] = [
         when: {helper: 'not', args: [{var: 'taprootSignResult.verified'}]},
         children: [{type: 'Text', value: '✗ not verified'}]
       }
+    ]
+  }
+]
+
+// builder (interactive) on the left, reference docs on the right - see
+// style.scss's own .addon-columns for the grid/collapse behaviour, and the
+// sibling musig2 addon's manifest for the same split
+const taprootUi: UiNode[] = [
+  {type: 'Text', value: 'Taproot pubkey tweaking (BIP341)', style: 'heading'},
+  {
+    type: 'View',
+    style: 'columns',
+    children: [
+      {type: 'View', style: 'col-left', children: taprootBuilderUi},
+      {type: 'View', style: 'col-right', children: taprootDocsUi}
     ]
   }
 ]

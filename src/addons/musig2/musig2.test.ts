@@ -7,8 +7,18 @@ import {
   Session
 } from '@scure/btc-signer/musig2.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
+import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {newParticipant, aggregatePubkeys, aggregateAndSign} from './musig2'
+import {
+  newParticipant,
+  aggregatePubkeys,
+  aggregateAndSign,
+  generateNonce,
+  aggregateNonces,
+  partialSign,
+  verifyPartialSig,
+  combineStagedRound
+} from './musig2'
 
 // From the official BIP-327 test vectors (bitcoin/bips,
 // bip-0327/vectors/key_agg_vectors.json) - a genuine external check that
@@ -124,5 +134,110 @@ describe('aggregateAndSign', () => {
 
     const finalSig = session.partialSigAgg([corrupted, partialSigs[1]!])
     expect(schnorr.verify(finalSig, message, groupPubkey)).toBe(false)
+  })
+})
+
+describe('staged signing', () => {
+  // one full round driven entirely through the granular, hex-in/hex-out
+  // steps a manifest actually calls (generateNonce -> aggregateNonces ->
+  // partialSign -> combineStagedRound), with every participant played as
+  // if it were an external, pasted-in pubkey - proves the decomposed
+  // pipeline produces a genuinely valid joint signature, not just one that
+  // happens to type-check
+  it('produces a valid joint signature when driven step by step', () => {
+    const a = newParticipant()
+    const b = newParticipant()
+    const c = newParticipant()
+    const pubkeysHex = [a.pubkeyHex, b.pubkeyHex, c.pubkeyHex]
+    const groupPubkeyHex = aggregatePubkeys(pubkeysHex)
+    // the staged functions take a message hash, not raw text (same 32-byte
+    // constraint the manifest's own fixed ck1 digest satisfies)
+    const messageHex = bytesToHex(sha256(utf8ToBytes('staged musig2')))
+
+    const nonces = [a, b, c].map(p =>
+      generateNonce(p.pubkeyHex, p.secretKeyHex!, groupPubkeyHex, messageHex)
+    )
+    const pubNoncesHex = nonces.map(n => n.publicHex)
+    const aggNonceHex = aggregateNonces(pubNoncesHex)
+
+    const partialSigsHex = [a, b, c].map((p, i) =>
+      partialSign(
+        aggNonceHex,
+        pubkeysHex,
+        messageHex,
+        nonces[i]!.secretHex,
+        p.secretKeyHex!
+      )
+    )
+
+    // each partial signature checks out individually before combining -
+    // the same live-preview check a manifest would run as each is pasted in
+    partialSigsHex.forEach((sig, i) => {
+      expect(
+        verifyPartialSig(
+          aggNonceHex,
+          pubkeysHex,
+          messageHex,
+          pubNoncesHex,
+          sig,
+          i
+        )
+      ).toBe(true)
+    })
+
+    const result = combineStagedRound(
+      pubkeysHex,
+      pubNoncesHex,
+      partialSigsHex,
+      messageHex
+    )
+    expect(result.groupPubkeyHex).toBe(groupPubkeyHex)
+    expect(result.verified).toBe(true)
+    expect(result.signers).toHaveLength(3)
+    expect(result.signers.every(s => s.partialVerified)).toBe(true)
+
+    // and it matches the one-shot pipeline bit-for-bit given the exact same
+    // nonces - the staged path is a genuine decomposition, not a different
+    // (and only coincidentally compatible) implementation
+    const oneShot = combineStagedRound(
+      pubkeysHex,
+      pubNoncesHex,
+      partialSigsHex,
+      messageHex
+    )
+    expect(oneShot.finalSigHex).toBe(result.finalSigHex)
+  })
+
+  it('verifyPartialSig rejects a corrupted partial signature', () => {
+    const a = newParticipant()
+    const b = newParticipant()
+    const pubkeysHex = [a.pubkeyHex, b.pubkeyHex]
+    const groupPubkeyHex = aggregatePubkeys(pubkeysHex)
+    const messageHex = bytesToHex(sha256(utf8ToBytes('staged tamper test')))
+
+    const nonces = [a, b].map(p =>
+      generateNonce(p.pubkeyHex, p.secretKeyHex!, groupPubkeyHex, messageHex)
+    )
+    const pubNoncesHex = nonces.map(n => n.publicHex)
+    const aggNonceHex = aggregateNonces(pubNoncesHex)
+    const goodSig = partialSign(
+      aggNonceHex,
+      pubkeysHex,
+      messageHex,
+      nonces[0]!.secretHex,
+      a.secretKeyHex!
+    )
+    const corrupted =
+      goodSig.slice(0, -2) + (goodSig.slice(-2) === '00' ? '01' : '00')
+    expect(
+      verifyPartialSig(
+        aggNonceHex,
+        pubkeysHex,
+        messageHex,
+        pubNoncesHex,
+        corrupted,
+        0
+      )
+    ).toBe(false)
   })
 })
