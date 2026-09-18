@@ -57,6 +57,20 @@
   fallback: registering/unregistering is a fresh action a `WALLET`
   initiates itself, never a stored bearer secret read back later, so there
   is no old value that would ever need re-verifying.
+- **Breaking:** `signAddressProof` now takes a `domain` argument
+  (`signAddressProof(secretKey, action, domain, username)`) and folds it
+  into the signed digest. A bare `cx1` (branch pubkey + chain code) carries
+  no proof of which domain's hash a `WALLET` derived it under - that
+  derivation is entirely `WALLET`-side and invisible to a verifying
+  `SERVICE` - so without `domain` bound into the message, a register/
+  unregister proof captured by one `SERVICE` could be replayed by it
+  verbatim against any other `SERVICE`'s own `/p/{username}`, claiming or
+  freeing the same username there under the same branch without the
+  `WALLET`'s consent. `addresses.ts`'s `registerUsername`/
+  `unregisterUsername` are unaffected (still just `server`) - they derive
+  `domain` internally as `server`'s bare, lowercase hostname (no scheme,
+  no port), matching exactly what `lnurl-mint`'s `router.py` resolves
+  server-side from its own configured `base_url`/`onion_url`.
 
 Existing `lnurlcash-kit` installations are unaffected and do not select the
 new scoped package.
