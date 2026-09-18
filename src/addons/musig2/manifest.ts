@@ -17,6 +17,9 @@ import {
 // network/wallet-state access) - same "sandbox stays a sandbox" reasoning
 // bech32Decoder's own addon already relies on for verifyNoteSignature. Also
 // re-exports withNewK1, used the same pure way - see lockedNoteUrl below.
+// Resolving a cp1/cx1 address, Lightning Address, or username into a
+// pubkey (verbs.ts's note.resolveAddressPubkey) needs a network round trip
+// and lives behind a verb instead, not here.
 import {
   encodeCk1,
   encodeCp1,
@@ -494,7 +497,7 @@ const musigDocsUi: UiNode[] = [
     type: 'List',
     ordered: true,
     each: [
-      "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, paste their pubkey into 'Add external pubkey'.",
+      "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, resolve their Lightning Address (preferred - or a cp1/cx1 address, or a username) with 'Resolve', or paste their pubkey directly.",
       'Once there are 2 or more participants, the aggregated group pubkey (and its cp1 address form) appear automatically below the list.',
       "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over ck1's own fixed message, \"LNURLcash\".",
       "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and fixed message above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
@@ -521,9 +524,44 @@ const musigBuilderUi: UiNode[] = [
         }
       },
       {
+        type: 'Text',
+        value:
+          'Or add someone else by their Lightning Address (preferred), a cp1/cx1 address, or a username - resolves their pubkey via a LUD-25 Part 2 registered branch, no copying 66 hex characters back and forth. A bare username has no mint of its own, so pick one of your own notes first to name one (a full Lightning Address or a cp1/cx1 address ignores it, both are already self-contained):'
+      },
+      {
+        type: 'NotePicker',
+        bind: 'mintNoteForLookup',
+        filter: {spent: false},
+        label: 'Note on that mint (bare username only)'
+      },
+      {
+        type: 'Input',
+        bind: 'externalAddressInput',
+        label: 'Lightning Address, cp1/cx1 address, or username'
+      },
+      {
+        type: 'Show',
+        when: {var: 'externalAddressInput'},
+        children: [
+          {
+            type: 'Button',
+            label: 'Resolve',
+            onClick: {
+              verb: 'note.resolveAddressPubkey',
+              args: {
+                mintNote: {var: 'mintNoteForLookup.id'},
+                address: {var: 'externalAddressInput'}
+              },
+              result: 'externalPubkeyInput'
+            }
+          }
+        ]
+      },
+      {
         type: 'Input',
         bind: 'externalPubkeyInput',
-        label: 'Or add an external pubkey (66 hex chars, no local secret key)'
+        label:
+          'Or paste their pubkey directly (66 hex chars, no local secret key)'
       },
       {
         type: 'Show',
@@ -1047,12 +1085,20 @@ const musig2Manifest: AddonManifest = {
       verb: 'note.claim',
       reason:
         "Add the resulting note back into your wallet once this group's ck1 proof is ready"
+    },
+    {
+      verb: 'note.resolveAddressPubkey',
+      scope: 'spent:false',
+      reason:
+        "Look up an external participant's pubkey from their Lightning Address, a cp1/cx1 address, or a username registered at the same mint as one of your own notes"
     }
   ],
   nav: {position: 'right', icon: 'people', label: 'MuSig2'},
   state: {
     participants: [],
     externalPubkeyInput: '',
+    mintNoteForLookup: null,
+    externalAddressInput: '',
     musigResult: null,
     selectedNote: null,
     lockedNote: null,

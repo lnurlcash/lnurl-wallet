@@ -2127,6 +2127,18 @@ nav {
   }
 }
 
+// .addon-root's own max-width above is sized for the many single-column,
+// form-shaped addons that share this one wrapper - an addon using the wide
+// 2-column layout just above needs room to actually BE two columns side by
+// side, or its 3fr/2fr split just divides up that same 480px box into two
+// narrow slivers with the rest of the page left blank beside them (the bug
+// this rule fixes). Dropped entirely rather than just raised, same as
+// #mint .two-columns above: neither has a wrapper max-width of its own,
+// they just use whatever width .page's body padding leaves available.
+.addon-root:has(.addon-columns) {
+  max-width: none;
+}
+
 .addon-field {
   min-width: 0;
   input,
