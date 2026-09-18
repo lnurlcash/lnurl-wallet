@@ -341,11 +341,24 @@ export const recoverNoteOwnershipPubkey = (
 // signNoteOwnership above (2026-09-16, luds#ck1 - this used to be a
 // recoverable-ECDSA signature too; see the deprecated ck1 path in
 // recoverNoteOwnershipPubkey for that older shape), over a per-action,
-// per-username message instead of one fixed value - domain-separated so a
-// signature captured for one action/username can never be replayed as the
-// other, or against a different username sharing the same branch. Hashed to
-// a 32-byte digest before signing for the same reason NOTE_OWNERSHIP_DIGEST
-// is above: `username` is variable-length, so the raw message would
+// per-domain, per-username message instead of one fixed value -
+// domain-separated so a signature captured for one action/username can
+// never be replayed as the other, against a different username sharing the
+// same branch, OR (2026-09-18, luds#cx1-domain-replay) against a different
+// SERVICE: a bare cx1 (P/chaincode) carries no proof of which domain's hash
+// a WALLET derived it under - that derivation is entirely WALLET-side and
+// invisible to a verifier - so without `domain` folded into the signed
+// message itself, any SERVICE that ever legitimately received one register/
+// unregister proof from this wallet could replay it verbatim against every
+// other SERVICE's own /p/{username}. `domain` here is addressProofUrl's own
+// `server` reduced to a bare hostname (addresses.ts) - matching exactly what
+// a SERVICE verifies against (lnurl-mint's router.py resolves this from its
+// OWN configured base_url/onion_url, never a request's Host header), never
+// the full origin cashAddressBranch/cashAddressSecretAtIndex derive under
+// (that string is a WALLET-internal derivation choice a SERVICE never
+// re-derives or checks, so it has no need to match this one). Hashed to a
+// 32-byte digest before signing for the same reason NOTE_OWNERSHIP_DIGEST is
+// above: `domain`/`username` are variable-length, so the raw message would
 // otherwise only rarely land on the 32 bytes most Schnorr signers require.
 // Signed with the branch's own index-0 secret key (cashSecrets.ts's
 // cashAddressSecretAtIndex(domain, 0) - "the first secret" a WALLET would
@@ -358,13 +371,15 @@ export type AddressProofAction = 'register' | 'unregister'
 
 const addressProofMessage = (
   action: AddressProofAction,
+  domain: string,
   username: string
-): Uint8Array => utf8ToBytes(`LNURLcash:${action}:${username}`)
+): Uint8Array => utf8ToBytes(`LNURLcash:${action}:${domain}:${username}`)
 
 const addressProofDigest = (
   action: AddressProofAction,
+  domain: string,
   username: string
-): Uint8Array => sha256(addressProofMessage(action, username))
+): Uint8Array => sha256(addressProofMessage(action, domain, username))
 
 // returns the raw 64-byte Schnorr signature - callers hex-encode it for the
 // wire (SERVICE's `sig` query param), same as any other plain-hex signature
@@ -374,13 +389,14 @@ const addressProofDigest = (
 export const signAddressProof = (
   branchIndexZeroSecretKey: Uint8Array,
   action: AddressProofAction,
+  domain: string,
   username: string
 ): Uint8Array =>
   // deterministic aux_rand - see signNoteOwnership's own ZERO_AUX_RAND
   // comment for why (a retried request should resend the exact same proof,
   // not a fresh-but-equally-valid one)
   schnorr.sign(
-    addressProofDigest(action, username),
+    addressProofDigest(action, domain, username),
     branchIndexZeroSecretKey,
     ZERO_AUX_RAND
   )

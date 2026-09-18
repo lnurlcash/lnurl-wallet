@@ -267,26 +267,48 @@ describe('LUD-25 Test Vectors - vector 2 (Seed & derivation, even-y P) + registr
     return deriveNoteSecretKey(branch.privateKey!, branch.chainCode!, 0)
   }
 
-  it('LN address registration proof - "register" over sk_0 (signs sha256(message), not the raw string)', () => {
-    const digest = sha256(utf8ToBytes(`LNURLcash:register:${USERNAME}`))
-    expect(bytesToHex(digest)).toBe(
-      '07511b102748f3a3614676386cf9ece7a5fcf11576df21d154bafbaeed77e7ae'
+  it('LN address registration proof - "register" over sk_0 (signs sha256(message), domain-bound to this vector\'s own SERVICE domain)', () => {
+    const digest = sha256(
+      utf8ToBytes(`LNURLcash:register:${DOMAIN}:${USERNAME}`)
     )
-    const sig = signAddressProof(sk0(), 'register', USERNAME)
+    expect(bytesToHex(digest)).toBe(
+      'be730f1fc4a81feea4bc0464d9f6adff04dfe652687e39cba30eac9caa73fcdd'
+    )
+    const sig = signAddressProof(sk0(), 'register', DOMAIN, USERNAME)
     expect(bytesToHex(sig)).toBe(
-      'baf04336aad76953b437725a6f0b03d295da8792b4d9d36affb8a5d9913df1d5750ed161a8c389f96441711d55306c13a3c2362d3542453f7c10f428f1721461'
+      '9d96780fe55f602a9e238a4b2640a9f8ca939cacbbcde109cfd6ba94a6f9d46ff4aaf56ba1e4e72696f7c0e8833445bd194bd06155a133cf524eb587d52e8d22'
     )
   })
 
   it('LN address registration proof - "unregister" over sk_0 (a different digest, never interchangeable with register)', () => {
-    const digest = sha256(utf8ToBytes(`LNURLcash:unregister:${USERNAME}`))
+    const digest = sha256(
+      utf8ToBytes(`LNURLcash:unregister:${DOMAIN}:${USERNAME}`)
+    )
     expect(bytesToHex(digest)).toBe(
-      'a420c6e3107fb17638baf3b73d4f74f04312f331a4726f6e563a7d6aa3a5bba0'
+      'dc12e80f7d0486fab791c743688e54bcc759111722d80dfa5fa70586a7d9d9d9'
     )
-    const sig = signAddressProof(sk0(), 'unregister', USERNAME)
+    const sig = signAddressProof(sk0(), 'unregister', DOMAIN, USERNAME)
     expect(bytesToHex(sig)).toBe(
-      '8d7527d0474528770e5c8ac68cc3dbb6841c9e924f78f7d5187d77514c829f781de2a28d3bf9eec9f2ac5439664d215eec3915c95b05c1d6cc31cab3c946f068'
+      '7250ab2403333eb5ed73f7a212ac4f35b58f426fe5c2acb8b2194a112881332bfbeebeba0bc4615bcf361bc125d5a4149ddbe4b6ea3b755b711fefd8bba58728'
     )
+  })
+
+  it('LN address registration proof does not verify against a different SERVICE domain', () => {
+    // the cross-mint replay this binding exists to close (luds#cx1-domain-
+    // replay, 2026-09-18): a bare cx1 carries no proof of which domain's
+    // hash it was derived under, so without `domain` folded into the signed
+    // message a proof captured by one SERVICE would verify verbatim against
+    // any other
+    const sig = signAddressProof(sk0(), 'register', DOMAIN, USERNAME)
+    const otherDigest = sha256(
+      utf8ToBytes(`LNURLcash:register:mint.example:${USERNAME}`)
+    )
+    const pubkeyXOnly = deriveNotePubkey(
+      branchOf().publicKey!.slice(1),
+      branchOf().chainCode!,
+      0
+    )
+    expect(schnorr.verify(sig, otherDigest, pubkeyXOnly)).toBe(false)
   })
 })
 

@@ -352,45 +352,83 @@ describe('cp1FromCk1', () => {
 })
 
 describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
-  // independently recomputes the per-action/username digest signAddressProof
-  // signs - a plain BIP-340 Schnorr signature over sha256(message), no
-  // Lightning-signmessage digest wrapping - deliberately not importing any
-  // internal helper
-  const digestFor = (action: 'register' | 'unregister', username: string) =>
-    sha256(utf8ToBytes(`LNURLcash:${action}:${username}`))
+  // independently recomputes the per-action/domain/username digest
+  // signAddressProof signs - a plain BIP-340 Schnorr signature over
+  // sha256(message), no Lightning-signmessage digest wrapping -
+  // deliberately not importing any internal helper
+  const digestFor = (
+    action: 'register' | 'unregister',
+    domain: string,
+    username: string
+  ) => sha256(utf8ToBytes(`LNURLcash:${action}:${domain}:${username}`))
 
-  it("verifies against the branch key's own pubkey for the exact action/username signed", () => {
+  it("verifies against the branch key's own pubkey for the exact action/domain/username signed", () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'alice')
+    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
     expect(sig).toHaveLength(64)
     expect(
-      schnorr.verify(sig, digestFor('register', 'alice'), pubkeyXOnly)
+      schnorr.verify(
+        sig,
+        digestFor('register', 'mint.example', 'alice'),
+        pubkeyXOnly
+      )
     ).toBe(true)
   })
 
   it('is domain-separated by action - a register proof does not verify as unregister', () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'alice')
+    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
     expect(
-      schnorr.verify(sig, digestFor('unregister', 'alice'), pubkeyXOnly)
+      schnorr.verify(
+        sig,
+        digestFor('unregister', 'mint.example', 'alice'),
+        pubkeyXOnly
+      )
     ).toBe(false)
   })
 
   it('is domain-separated by username - a proof for one name does not verify for another', () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'alice')
-    expect(schnorr.verify(sig, digestFor('register', 'bob'), pubkeyXOnly)).toBe(
-      false
-    )
+    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
+    expect(
+      schnorr.verify(
+        sig,
+        digestFor('register', 'mint.example', 'bob'),
+        pubkeyXOnly
+      )
+    ).toBe(false)
   })
 
-  it('is deterministic for the same key/action/username', () => {
+  it('is domain-separated by domain - a proof for one SERVICE does not verify for another', () => {
+    // the cross-mint replay this binding exists to close (luds#cx1-domain-
+    // replay): a bare cx1 is otherwise fully portable, and any SERVICE that
+    // ever legitimately received a proof from this wallet could otherwise
+    // replay it verbatim against a different one's own /p/{username}
     const secretKey = schnorr.utils.randomSecretKey()
-    expect(bytesToHex(signAddressProof(secretKey, 'unregister', 'alice'))).toBe(
-      bytesToHex(signAddressProof(secretKey, 'unregister', 'alice'))
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
+    expect(
+      schnorr.verify(
+        sig,
+        digestFor('register', 'other-mint.example', 'alice'),
+        pubkeyXOnly
+      )
+    ).toBe(false)
+  })
+
+  it('is deterministic for the same key/action/domain/username', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    expect(
+      bytesToHex(
+        signAddressProof(secretKey, 'unregister', 'mint.example', 'alice')
+      )
+    ).toBe(
+      bytesToHex(
+        signAddressProof(secretKey, 'unregister', 'mint.example', 'alice')
+      )
     )
   })
 })

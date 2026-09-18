@@ -24,6 +24,17 @@ import {fetchNoteInfoByPubkey, type HashWithdrawRequestInfo} from './request'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 import {signAddressProof, type AddressProofAction} from './signature'
 
+// the bare, lowercase hostname a SERVICE checks a proof's `domain` against
+// (lnurl-mint's router.py resolves this from its own configured base_url/
+// onion_url, via urlparse().hostname - never a scheme, port, or the
+// request's own Host header) - deliberately NOT `server` itself (a full
+// origin, scheme+host+port, per urls.ts's serviceOriginOf) or the domain
+// string cashAddressBranch/cashAddressSecretAtIndex derive under (a
+// WALLET-internal choice no SERVICE ever re-derives or checks) - see
+// signAddressProof's own domain-binding comment (signature.ts) for why this
+// must match the verifier's string exactly.
+const addressProofDomain = (server: string): string => new URL(server).hostname
+
 const addressProofUrl = (
   server: string,
   username: string,
@@ -33,7 +44,14 @@ const addressProofUrl = (
   const url = new URL(`/p/${encodeURIComponent(username)}`, server)
   url.searchParams.set(
     'sig',
-    bytesToHex(signAddressProof(indexZeroSecretKey, action, username))
+    bytesToHex(
+      signAddressProof(
+        indexZeroSecretKey,
+        action,
+        addressProofDomain(server),
+        username
+      )
+    )
   )
   return url
 }
