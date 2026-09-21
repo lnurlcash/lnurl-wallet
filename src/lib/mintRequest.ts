@@ -3,7 +3,7 @@ import type {MintFee} from './fees'
 import {parseMintFee, withinMintFeeBand} from './fees'
 import {verifyNoteSignatureHash} from './signature'
 import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
-import {isCp1, decodeCp1, decodeAnyCs1} from './recoverableNotes'
+import {isPubkeyCommitment, decodeCp1, decodeAnyCs1} from './recoverableNotes'
 import type {InternalTransferHint} from './internalTransfer'
 import {parseInternalTransferHint} from './internalTransfer'
 import {bytesToHex} from '@noble/hashes/utils.js'
@@ -139,10 +139,11 @@ export type InvoiceResult = {
 // (sent as the mandatory LUD-12 comment, and repeated as the additive `h`
 // extension - `/p/cb` itself only ever reads `comment`; `h` is this
 // wallet's own long-standing redundant belt-and-braces, harmless either
-// way) or, per Part 2's Wallet-side ownership proofs, a `cp1<pk>` public
-// key sent as `comment` alone (the mint's `/p/cb` has no separate `p`
-// param - unlike the informational GET/mutation callback, minting never
-// had a second field to alias). The parameter is omitted entirely for an
+// way) or, per Part 2's Wallet-side ownership proofs, a pubkey commitment
+// (`cp1<pk>`, or a taproot `ct1<Q>`) sent as `comment` alone (the mint's
+// `/p/cb` has no separate `p` param - unlike the informational GET/mutation
+// callback, minting never had a second field to alias). The parameter is
+// omitted entirely for an
 // ordinary Lightning payment, or for minting to a cx1-registered address
 // via its own callback (which already carries `?username=`) and letting
 // the mint auto-derive the next key itself.
@@ -155,14 +156,14 @@ export const requestInvoice = async (
   cbUrl.searchParams.set('amount', String(amountMsat))
   if (outputHash !== undefined) {
     const value = outputHash.trim().toLowerCase()
-    if (isCp1(value)) {
+    if (isPubkeyCommitment(value)) {
       cbUrl.searchParams.set('comment', value)
     } else if (isPreimage(value)) {
       cbUrl.searchParams.set('comment', value)
       cbUrl.searchParams.set('h', value)
     } else {
       throw new Error(
-        'An output hash must be 32 bytes of hex, or a cp1 pubkey - no invoice was requested.'
+        'An output hash must be 32 bytes of hex, or a cp1/ct1 pubkey - no invoice was requested.'
       )
     }
   }

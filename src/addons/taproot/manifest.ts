@@ -1,15 +1,14 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {hexToBytes} from '@noble/hashes/utils.js'
 import {
   generateKeypair,
   tweakPubkey,
   signWithTweakedKey,
-  compileLeaf,
   scriptTemplateById,
+  newScriptRow,
+  rowCompiled,
+  leafScriptsFor,
   SCRIPT_TEMPLATES,
   type ScriptTemplateId,
-  type ScriptTemplateParams,
-  type CompiledLeaf,
   type TweakResult,
   type SignResult
 } from './taproot'
@@ -35,42 +34,8 @@ const isHex32 = (value: unknown): boolean =>
 // @scure/btc-signer/script.js's own encoder) and folded into a REAL BIP341
 // merkle root (via @scure/btc-signer/payment.js's own p2tr tree builder,
 // see taproot.ts's merkleRootFor) - the same machinery a real wallet uses,
-// not an approximation of it.
-type ScriptRow = {
-  templateId: string
-  pubkeyHex: string
-  pubkey2Hex: string
-  hashHex: string
-  locktime: number
-}
-
-const newScriptRow = (templateId: unknown): ScriptRow => ({
-  templateId: trimmedString(templateId) || SCRIPT_TEMPLATES[0]!.id,
-  pubkeyHex: '',
-  pubkey2Hex: '',
-  hashHex: '',
-  locktime: 0
-})
-
-const rowParams = (
-  row: Partial<ScriptRow> | undefined
-): ScriptTemplateParams => ({
-  pubkeyHex: trimmedString(row?.pubkeyHex),
-  pubkey2Hex: trimmedString(row?.pubkey2Hex),
-  hashHex: trimmedString(row?.hashHex),
-  locktime: Number(row?.locktime) || 0
-})
-
-// compiles one row's own (template, params) - the per-row live preview
-// (opcodes/script hex/leaf hash) below all read through this, same
-// "swallow throws, not-ready-yet reads as null" contract as tweakPreview
-// further down, since this reruns on every keystroke while a holder is
-// still typing a pubkey/hash/locktime.
-const rowCompiled = (item: unknown): CompiledLeaf | null => {
-  const row = item as Partial<ScriptRow> | undefined
-  if (!row?.templateId) return null
-  return compileLeaf(row.templateId, rowParams(row))
-}
+// not an approximation of it. The row shape and its compilation live in
+// taproot.ts, shared with the musig2 addon's own ct1 lock flow.
 
 const templateName = (templateId: unknown): string =>
   scriptTemplateById(trimmedString(templateId))?.name ?? 'Unknown template'
@@ -85,18 +50,6 @@ const rowScriptHex = (item: unknown): string =>
 
 const rowLeafHash = (item: unknown): string =>
   rowCompiled(item)?.leafHashHex ?? '-'
-
-// every row's compiled leaf script bytes, in order - null (incomplete/
-// malformed) rows are dropped rather than blocking the whole tweak, so a
-// holder mid-way through typing a second leaf's pubkey still sees the
-// first leaf's tweak update live
-const leafScriptsFor = (scripts: unknown): Uint8Array[] =>
-  Array.isArray(scripts)
-    ? (scripts as unknown[])
-        .map(rowCompiled)
-        .filter((c): c is CompiledLeaf => c !== null)
-        .map(c => hexToBytes(c.scriptHex))
-    : []
 
 // swallows tweakPubkey's own throws (bad/incomplete hex) rather than
 // letting a live Text binding crash mid-typing - see this file's own

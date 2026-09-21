@@ -68,6 +68,36 @@ export const decodeCp1 = (value: string): Uint8Array | null =>
   decodeFixed('cp', value, 32)
 export const isCp1 = (value: string): boolean => decodeCp1(value) !== null
 
+// A BIP341 taproot OUTPUT key (Q = P + t·G), not a plain signing key -
+// byte-identical in shape to cp1 above (same 32-byte x-only payload) and
+// deliberately so: everything that already handles "a 32-byte value keyed
+// by its own certifying signature" keeps working unchanged. The separate
+// HRP is a capability flag, not extra data - it tells SERVICE this note
+// may ALSO be redeemed by revealing one of the script leaves committed
+// under Q (a cw1 below), where a cp1 only ever accepts a ck1 key-path
+// signature. A SERVICE that doesn't implement script-path redemption must
+// reject a ct1 output outright rather than silently treat it as a cp1.
+//
+// Nothing about the script tree is disclosed here, by design: given an
+// already-published Q, only whoever built it forward (choosing P and the
+// leaves, then tweaking) can ever produce a valid leaf+control-block pair
+// for it, so a revealed script path is self-certifying against Q alone -
+// see BIP341's own security argument. Unused leaves therefore stay private
+// forever, exactly as they do on-chain.
+export const encodeCt1 = (outputKeyXOnly: Uint8Array): string =>
+  encodeFixed('ct', outputKeyXOnly, 32)
+export const decodeCt1 = (value: string): Uint8Array | null =>
+  decodeFixed('ct', value, 32)
+export const isCt1 = (value: string): boolean => decodeCt1(value) !== null
+
+// "this output names a pubkey commitment, not a legacy hash" - the check
+// every dispatch site wants, since cp1 and ct1 are treated identically
+// everywhere a note is CREATED (canonical p1/p2 field names, a mandatory
+// certifying signature). They only diverge at redemption, which is the one
+// place the distinction has to be read back out explicitly.
+export const isPubkeyCommitment = (value: string): boolean =>
+  isCp1(value) || isCt1(value)
+
 // CURRENT form (2026-09-16, luds#ck1): a 32-byte BIP-340 x-only pubkey
 // concatenated with a 64-byte Schnorr signature over it - pk travels
 // alongside the signature explicitly, verified directly, rather than
@@ -132,6 +162,123 @@ export const isLegacyCk1 = (value: string): boolean =>
   decodeCk1(value)?.legacy === true
 
 export const isCk1 = (value: string): boolean => decodeCk1(value) !== null
+
+// The script-path counterpart to ck1 above. Where a ck1 proves ownership
+// of a cp1/ct1's own key (one BIP-340 signature over the fixed message), a
+// cw1 proves that one of the script leaves committed under a ct1's output
+// key is satisfied: the leaf script itself, BIP341's control block (leaf
+// version + output-key parity, the internal pubkey P, and the merkle path
+// proving this leaf sits under Q's committed root), and whatever witness
+// stack that particular leaf demands.
+//
+// It also carries the redeemer's claimed `locktime` and `sequence`, and this
+// is load-bearing rather than incidental: a tapscript CHECKSIG signature
+// commits to the spending transaction's nLockTime AND nSequence (BIP341's
+// sighash includes both, even under ANYONECANPAY). The redeemer therefore has
+// to pick those values BEFORE signing, so they must travel with the proof - a
+// SERVICE cannot choose "now" after the fact and expect the signature to
+// still verify. This mirrors Bitcoin's own split: the script compares its
+// number against these two fields, and a separate finality check (here, the
+// SERVICE's clock) decides whether the fields themselves are acceptable yet.
+// That clock check is a custodial policy assertion, not a consensus one.
+//
+// Variable length, unlike every other type in this file: a leaf script, a
+// merkle path and a witness stack are all genuinely unbounded, so there's
+// no byte length to pin. encodeFixed's per-type pinning above was a
+// simplicity choice for values that HAVE a fixed size, never a bech32m
+// constraint.
+//
+// Wire layout, all integers big-endian:
+//   u32 locktime || u32 sequence
+//   || u16 len(script) || script || u16 len(controlBlock) || controlBlock
+//   || (u16 len(witness_i) || witness_i)*
+export type Cw1 = {
+  locktime: number
+  sequence: number
+  script: Uint8Array
+  controlBlock: Uint8Array
+  witness: Uint8Array[]
+}
+
+const CW1_MAX_PART = 0xffff
+const CW1_HEADER_LENGTH = 8
+const U32_MAX = 0xffffffff
+
+const isU32 = (n: number): boolean =>
+  Number.isInteger(n) && n >= 0 && n <= U32_MAX
+
+export const encodeCw1 = ({
+  locktime,
+  sequence,
+  script,
+  controlBlock,
+  witness
+}: Cw1): string => {
+  if (!isU32(locktime) || !isU32(sequence)) {
+    throw new Error('cw1... locktime and sequence must each be a u32')
+  }
+  const parts = [script, controlBlock, ...witness]
+  let total = CW1_HEADER_LENGTH
+  for (const part of parts) {
+    if (part.length > CW1_MAX_PART) {
+      throw new Error(`cw1... part must be at most ${CW1_MAX_PART} bytes`)
+    }
+    total += 2 + part.length
+  }
+  const payload = new Uint8Array(total)
+  const view = new DataView(payload.buffer)
+  view.setUint32(0, locktime, false)
+  view.setUint32(4, sequence, false)
+  let offset = CW1_HEADER_LENGTH
+  for (const part of parts) {
+    view.setUint16(offset, part.length, false)
+    payload.set(part, offset + 2)
+    offset += 2 + part.length
+  }
+  return bech32m.encode('cw', bech32m.toWords(payload), false)
+}
+
+export const decodeCw1 = (value: string): Cw1 | null => {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed.startsWith('cw1')) return null
+  let bytes: Uint8Array
+  try {
+    const decoded = bech32m.decode(trimmed as `${string}1${string}`, false)
+    if (decoded.prefix !== 'cw') return null
+    bytes = bech32m.fromWords(decoded.words)
+  } catch {
+    return null
+  }
+  if (bytes.length < CW1_HEADER_LENGTH) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const locktime = view.getUint32(0, false)
+  const sequence = view.getUint32(4, false)
+
+  const parts: Uint8Array[] = []
+  let offset = CW1_HEADER_LENGTH
+  while (offset < bytes.length) {
+    // a truncated length prefix, or one claiming more bytes than actually
+    // remain, means this isn't a well-formed cw1 - never a partial read
+    if (offset + 2 > bytes.length) return null
+    const length = view.getUint16(offset, false)
+    offset += 2
+    if (offset + length > bytes.length) return null
+    parts.push(bytes.slice(offset, offset + length))
+    offset += length
+  }
+  // script and control block are both mandatory; the witness stack may
+  // legitimately be empty (a pure timelock leaf needs nothing pushed)
+  if (parts.length < 2) return null
+  return {
+    locktime,
+    sequence,
+    script: parts[0]!,
+    controlBlock: parts[1]!,
+    witness: parts.slice(2)
+  }
+}
+
+export const isCw1 = (value: string): boolean => decodeCw1(value) !== null
 
 // LEGACY, fixed-HRP form: a cs1 certificate with no amount encoded in it
 // at all (SERVICE and WALLET had to carry amount_msat alongside it

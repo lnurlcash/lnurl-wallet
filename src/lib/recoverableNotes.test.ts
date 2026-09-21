@@ -6,6 +6,13 @@ import {
   encodeCp1,
   decodeCp1,
   isCp1,
+  encodeCt1,
+  decodeCt1,
+  isCt1,
+  isPubkeyCommitment,
+  encodeCw1,
+  decodeCw1,
+  isCw1,
   encodeCk1,
   decodeCk1,
   isCk1,
@@ -32,6 +39,133 @@ describe('bech32m codec', () => {
     expect(encoded.startsWith('cp1')).toBe(true)
     expect(decodeCp1(encoded)).toEqual(bytes)
     expect(isCp1(encoded)).toBe(true)
+  })
+
+  it('round-trips a ct1 (32 bytes - same payload shape as cp1)', () => {
+    const bytes = hexToBytes('ab'.repeat(32))
+    const encoded = encodeCt1(bytes)
+    expect(encoded.startsWith('ct1')).toBe(true)
+    expect(decodeCt1(encoded)).toEqual(bytes)
+    expect(isCt1(encoded)).toBe(true)
+  })
+
+  it('never confuses a ct1 with a cp1, despite the identical payload', () => {
+    // the whole point of the separate HRP: same 32 bytes, different
+    // redemption semantics, so neither may ever decode as the other
+    const bytes = hexToBytes('ab'.repeat(32))
+    const cp1 = encodeCp1(bytes)
+    const ct1 = encodeCt1(bytes)
+    expect(cp1).not.toBe(ct1)
+    expect(decodeCt1(cp1)).toBeNull()
+    expect(decodeCp1(ct1)).toBeNull()
+    expect(isCt1(cp1)).toBe(false)
+    expect(isCp1(ct1)).toBe(false)
+    // but both ARE pubkey commitments, which is what every mutation-output
+    // dispatch site actually cares about
+    expect(isPubkeyCommitment(cp1)).toBe(true)
+    expect(isPubkeyCommitment(ct1)).toBe(true)
+    expect(
+      isPubkeyCommitment(encodeCk1(bytes, hexToBytes('cd'.repeat(64))))
+    ).toBe(false)
+  })
+
+  it('round-trips a cw1 (locktime, sequence, script, control block, witness)', () => {
+    const script = hexToBytes('51'.repeat(40))
+    const controlBlock = hexToBytes('c0' + 'ab'.repeat(32) + 'cd'.repeat(32))
+    const witness = [hexToBytes('ef'.repeat(64)), hexToBytes('11')]
+    const cw1 = {
+      locktime: 1_800_000_000,
+      sequence: 0xfffffffe,
+      script,
+      controlBlock,
+      witness
+    }
+    const encoded = encodeCw1(cw1)
+    expect(encoded.startsWith('cw1')).toBe(true)
+    expect(isCw1(encoded)).toBe(true)
+    expect(decodeCw1(encoded)).toEqual(cw1)
+  })
+
+  it('round-trips a cw1 with an empty witness stack', () => {
+    // a pure timelock leaf needs nothing pushed to satisfy it
+    const cw1 = {
+      locktime: 1_800_000_000,
+      sequence: 0xfffffffe,
+      script: hexToBytes('b2' + '75'),
+      controlBlock: hexToBytes('c1' + '00'.repeat(32)),
+      witness: []
+    }
+    expect(decodeCw1(encodeCw1(cw1))).toEqual(cw1)
+  })
+
+  it('pins the exact wire layout: u32 locktime, u32 sequence, then u16-prefixed parts', () => {
+    // byte-exact, so the layout a signer and a SERVICE must agree on cannot
+    // drift silently - an independent implementation can be checked against
+    // this vector
+    const encoded = encodeCw1({
+      locktime: 0x01020304,
+      sequence: 0x0a0b0c0d,
+      script: new Uint8Array([0xaa, 0xbb]),
+      controlBlock: new Uint8Array([0xcc]),
+      witness: [new Uint8Array([0xdd, 0xee, 0xff])]
+    })
+    const payload = bech32m.fromWords(
+      bech32m.decode(encoded as `${string}1${string}`, false).words
+    )
+    expect(bytesToHex(payload)).toBe(
+      '01020304' + // locktime
+        '0a0b0c0d' + // sequence
+        '0002aabb' + // script
+        '0001cc' + // control block
+        '0003ddeeff' // witness[0]
+    )
+  })
+
+  it('carries the extremes of both u32 fields', () => {
+    for (const [locktime, sequence] of [
+      [0, 0],
+      [0xffffffff, 0xffffffff],
+      [500_000_000, 1 << 22]
+    ] as const) {
+      const cw1 = {
+        locktime,
+        sequence,
+        script: new Uint8Array([1]),
+        controlBlock: new Uint8Array([2]),
+        witness: []
+      }
+      expect(decodeCw1(encodeCw1(cw1))).toEqual(cw1)
+    }
+  })
+
+  it('refuses to encode a locktime or sequence that is not a u32', () => {
+    const base = {
+      script: new Uint8Array([1]),
+      controlBlock: new Uint8Array([2]),
+      witness: []
+    }
+    for (const bad of [-1, 0x100000000, 1.5, NaN]) {
+      expect(() => encodeCw1({...base, locktime: bad, sequence: 0})).toThrow()
+      expect(() => encodeCw1({...base, locktime: 0, sequence: bad})).toThrow()
+    }
+  })
+
+  it('rejects a malformed cw1 rather than partially reading it', () => {
+    const wrap = (bytes: number[]) =>
+      bech32m.encode('cw', bech32m.toWords(new Uint8Array(bytes)), false)
+    const header = [0, 0, 0, 0, 0, 0, 0, 0]
+    // a length prefix claiming more bytes than actually follow
+    expect(decodeCw1(wrap([...header, 0x00, 0x20, 0x01, 0x02]))).toBeNull()
+    // only one part present - a control block is mandatory
+    expect(decodeCw1(wrap([...header, 0x00, 0x01, 0xff]))).toBeNull()
+    // shorter than the fixed header
+    expect(decodeCw1(wrap([0, 0, 0]))).toBeNull()
+    // a trailing byte too short to be a length prefix
+    expect(
+      decodeCw1(wrap([...header, 0, 1, 0xaa, 0, 1, 0xbb, 0x00]))
+    ).toBeNull()
+    expect(decodeCw1('cw1notbech32')).toBeNull()
+    expect(decodeCw1(encodeCp1(hexToBytes('ab'.repeat(32))))).toBeNull()
   })
 
   it("round-trips a cs1 (65 bytes) - past bech32/BIP-173's 90-char limit", () => {

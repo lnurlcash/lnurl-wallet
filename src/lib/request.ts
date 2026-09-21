@@ -19,7 +19,13 @@ import {
 } from './errors'
 import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
-import {isCk1, isCp1, isAnyCs1, encodeCp1} from './recoverableNotes'
+import {
+  isCk1,
+  isCp1,
+  isPubkeyCommitment,
+  isAnyCs1,
+  encodeCp1
+} from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -433,7 +439,8 @@ export type HashedMutationResult = {signature?: string}
 
 // LUD-25 Part 2 renamed /w/cb's h/h2 to p1/p2 - h/h2 are still accepted
 // forever as the old names (SERVICE aliases them), so a plain hash keeps
-// being sent that way unchanged; a cp1 pubkey commitment is sent as
+// being sent that way unchanged; a pubkey commitment (cp1, or a taproot
+// ct1 - both name a 32-byte key, see recoverableNotes.ts) is sent as
 // p1/p2 instead, the current canonical name and the only one a Part-2
 // mint is guaranteed to recognize anyway. Dispatched per-field by the
 // value's own shape, same as every other dual-mode field in this module -
@@ -445,7 +452,7 @@ const OUTPUT_FIELD_NAMES: Record<'1' | '2', {legacy: string; current: string}> =
   }
 
 const outputFieldName = (value: string, suffix: '1' | '2'): string =>
-  isCp1(value)
+  isPubkeyCommitment(value)
     ? OUTPUT_FIELD_NAMES[suffix].current
     : OUTPUT_FIELD_NAMES[suffix].legacy
 
@@ -459,7 +466,7 @@ const mutationSignature = (
   field: 'sig' | 'sig2',
   output: string
 ): string | undefined => {
-  if (isCp1(output)) return requireMutationSignature(body, field)
+  if (isPubkeyCommitment(output)) return requireMutationSignature(body, field)
   try {
     return requireMutationSignature(body, field)
   } catch {

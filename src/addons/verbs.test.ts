@@ -1,7 +1,12 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 
+import {secp256k1} from '@noble/curves/secp256k1.js'
+import {sha256} from '@noble/hashes/sha2.js'
+import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+
 import {buildTicketLabel, VERBS, type VerbContext} from './verbs'
 import {parseLabelTags} from '../noteTags'
+import {encodeCp1, encodeCt1} from '../lnurlcash'
 import type {Bearer} from '../storage'
 
 const RAFFLE = {id: 'raffle', name: 'Raffle Tickets'}
@@ -315,5 +320,209 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
         makeCtx()
       )
     ).rejects.toThrow(/Not a valid/)
+  })
+})
+
+describe("VERBS['note.lockToPubkey']", () => {
+  const BASE = 'https://mock-mint.test'
+  const CALLBACK = `${BASE}/w/cb`
+  const AMOUNT = 20_000_000
+  // any valid x-only key stands in for a MuSig2 group key / taproot Q
+  const TARGET_HEX =
+    'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  // a real mint signing key, so pubkeyVerified exercises genuine
+  // signature recovery against the note's pinned key rather than a stub
+  const mintPriv = secp256k1.utils.randomSecretKey()
+  const mintPub = bytesToHex(secp256k1.getPublicKey(mintPriv, true))
+
+  // the certificate a mint issues for a pubkey-committed output: the same
+  // Lightning-signmessage digest a hash output gets, over (amount, Q)
+  const certify = (outputHex: string, amountMsat: number): string => {
+    const message = utf8ToBytes(`LNURLcash:${amountMsat}:${outputHex}`)
+    const digest = sha256(
+      sha256(
+        new Uint8Array([
+          ...utf8ToBytes('Lightning Signed Message:'),
+          ...message
+        ])
+      )
+    )
+    const sig = secp256k1.sign(digest, mintPriv, {
+      format: 'recovered',
+      prehash: false
+    })
+    return bytesToHex(new Uint8Array([...sig.subarray(1), sig[0]!]))
+  }
+
+  const makeBearer = (over: Partial<Bearer> = {}): Bearer => ({
+    id: 'source',
+    url: `${BASE}/w?k1=${'a'.repeat(64)}&amount=${AMOUNT}`,
+    callback: CALLBACK,
+    amount: AMOUNT,
+    verified: true,
+    mintPubkey: mintPub,
+    createdAt: 0,
+    updatedAt: 0,
+    ...over
+  })
+
+  const makeCtx = (bearer: Bearer) => {
+    const removed: string[] = []
+    const ctx: VerbContext = {
+      bearers: () => [bearer],
+      addBearer: async note => ({
+        id: 'x',
+        ...note,
+        createdAt: 0,
+        updatedAt: 0
+      }),
+      updateBearer: async () => {},
+      removeBearer: id => {
+        removed.push(id)
+      },
+      logActivity: () => {},
+      deviceClient: () => null,
+      requireDeviceClient: () => {
+        throw new Error('no device in this test')
+      },
+      addon: {id: 'musig2', name: 'MuSig2 Playground'}
+    }
+    return {ctx, removed}
+  }
+
+  // a mint that accepts the mutation and certifies whatever output it was
+  // handed, recording exactly which query params arrived
+  const stubMint = () => {
+    const seen: URLSearchParams[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const params = new URL(input.toString()).searchParams
+        seen.push(params)
+        return {
+          json: async () => ({status: 'OK', sig: certify(TARGET_HEX, AMOUNT)})
+        } as Response
+      })
+    )
+    return seen
+  }
+
+  it('defaults to a cp1 lock: the mint receives p1=cp1<key>', async () => {
+    const seen = stubMint()
+    const {ctx, removed} = makeCtx(makeBearer())
+    const result = (await VERBS['note.lockToPubkey']!(
+      {note: 'source', pubkeyHex: TARGET_HEX},
+      ctx
+    )) as {kind: string; pubkeyVerified: boolean}
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.get('p1')).toBe(encodeCp1(hexToBytes(TARGET_HEX)))
+    expect(seen[0]!.get('h')).toBeNull()
+    expect(result.kind).toBe('cp1')
+    expect(result.pubkeyVerified).toBe(true)
+    expect(removed).toEqual(['source'])
+  })
+
+  it("kind 'ct1' sends p1=ct1<Q> - a taproot output key, not a cp1 - and still verifies", async () => {
+    const seen = stubMint()
+    const {ctx, removed} = makeCtx(makeBearer())
+    const result = (await VERBS['note.lockToPubkey']!(
+      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
+      ctx
+    )) as {kind: string; pubkeyVerified: boolean; groupPubkeyHex: string}
+
+    expect(seen).toHaveLength(1)
+    // same canonical p1 field as a cp1 (both are pubkey commitments), but
+    // the value's own HRP is what tells the mint script-path redemption
+    // is on the table
+    expect(seen[0]!.get('p1')).toBe(encodeCt1(hexToBytes(TARGET_HEX)))
+    expect(seen[0]!.get('p1')!.startsWith('ct1')).toBe(true)
+    expect(seen[0]!.get('h')).toBeNull()
+    expect(result.kind).toBe('ct1')
+    expect(result.groupPubkeyHex).toBe(TARGET_HEX)
+    // the mint certifies the raw 32-byte key identically for both kinds,
+    // so the unchanged verifyNoteSignatureHash path still checks out
+    expect(result.pubkeyVerified).toBe(true)
+    expect(removed).toEqual(['source'])
+  })
+
+  it('treats any unrecognised kind as cp1 rather than guessing', async () => {
+    const seen = stubMint()
+    const {ctx} = makeCtx(makeBearer())
+    const result = (await VERBS['note.lockToPubkey']!(
+      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct2'},
+      ctx
+    )) as {kind: string}
+    expect(result.kind).toBe('cp1')
+    expect(seen[0]!.get('p1')!.startsWith('cp1')).toBe(true)
+  })
+
+  it('a mint that refuses a ct1 burns nothing and keeps the note', async () => {
+    // exactly what every mint does TODAY: none implements ct1, so the
+    // lock must fail cleanly and leave the wallet's note untouched
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        json: async () => ({status: 'ERROR', reason: 'unsupported output'})
+      })) as unknown as typeof fetch
+    )
+    const {ctx, removed} = makeCtx(makeBearer())
+    await expect(
+      VERBS['note.lockToPubkey']!(
+        {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
+        ctx
+      )
+    ).rejects.toThrow()
+    expect(removed).toEqual([])
+  })
+
+  it('reports pubkeyVerified=false when the certificate is not from the pinned mint key', async () => {
+    const impostor = secp256k1.utils.randomSecretKey()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const digest = sha256(
+          sha256(
+            new Uint8Array([
+              ...utf8ToBytes('Lightning Signed Message:'),
+              ...utf8ToBytes(`LNURLcash:${AMOUNT}:${TARGET_HEX}`)
+            ])
+          )
+        )
+        const sig = secp256k1.sign(digest, impostor, {
+          format: 'recovered',
+          prehash: false
+        })
+        return {
+          json: async () => ({
+            status: 'OK',
+            sig: bytesToHex(new Uint8Array([...sig.subarray(1), sig[0]!]))
+          })
+        } as Response
+      })
+    )
+    const {ctx} = makeCtx(makeBearer())
+    const result = (await VERBS['note.lockToPubkey']!(
+      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
+      ctx
+    )) as {pubkeyVerified: boolean}
+    // well-shaped, so accepted - but NOT certified by this note's mint
+    expect(result.pubkeyVerified).toBe(false)
+  })
+
+  it('rejects a malformed key before touching the network', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const {ctx} = makeCtx(makeBearer())
+    await expect(
+      VERBS['note.lockToPubkey']!(
+        {note: 'source', pubkeyHex: 'not-hex', kind: 'ct1'},
+        ctx
+      )
+    ).rejects.toThrow(/32-byte x-only/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

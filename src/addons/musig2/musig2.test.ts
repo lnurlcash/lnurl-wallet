@@ -13,6 +13,7 @@ import {
   newParticipant,
   aggregatePubkeys,
   aggregateAndSign,
+  aggregateAndSignBytes,
   generateNonce,
   aggregateNonces,
   partialSign,
@@ -134,6 +135,102 @@ describe('aggregateAndSign', () => {
 
     const finalSig = session.partialSigAgg([corrupted, partialSigs[1]!])
     expect(schnorr.verify(finalSig, message, groupPubkey)).toBe(false)
+  })
+})
+
+describe('taproot-tweaked rounds (ct1 key-path spends)', () => {
+  // the property the whole ct1 lock flow rests on: with a BIP341 tweak
+  // threaded through key aggregation, the round's signature verifies under
+  // the TWEAKED output key Q - which is what a note locked to ct1<Q> is
+  // keyed by - rather than under the bare aggregate P
+  it('produces a signature valid under the tweaked output key, not the untweaked one', () => {
+    const participants = [newParticipant(), newParticipant()]
+    const pubkeysHex = participants.map(p => p.pubkeyHex)
+    const internalKeyHex = aggregatePubkeys(pubkeysHex)
+    // any 32-byte scalar works as a tweak for this property - the taproot
+    // tagged-hash derivation of it is taproot.ts's job, not musig2.ts's
+    const tweakHex = bytesToHex(sha256(utf8ToBytes('some taproot tweak')))
+    const outputKeyHex = aggregatePubkeys(pubkeysHex, tweakHex)
+
+    // tweaking genuinely moves the key
+    expect(outputKeyHex).not.toBe(internalKeyHex)
+
+    const message = sha256(utf8ToBytes('LNURLcash'))
+    const tweaked = aggregateAndSignBytes(participants, message, tweakHex)
+    expect(tweaked.groupPubkeyHex).toBe(outputKeyHex)
+    expect(tweaked.verified).toBe(true)
+    expect(tweaked.signers.every(s => s.partialVerified)).toBe(true)
+
+    // and the signature is specific to Q: it does NOT verify under P
+    expect(
+      schnorr.verify(
+        hexToBytes(tweaked.finalSigHex),
+        message,
+        hexToBytes(internalKeyHex)
+      )
+    ).toBe(false)
+  })
+
+  it('omitting the tweak leaves the round byte-for-byte unchanged', () => {
+    // guards the cp1 path against regression from the new optional param
+    const participants = [newParticipant(), newParticipant()]
+    const untweaked = aggregateAndSignBytes(
+      participants,
+      sha256(utf8ToBytes('LNURLcash'))
+    )
+    expect(untweaked.groupPubkeyHex).toBe(
+      aggregatePubkeys(participants.map(p => p.pubkeyHex))
+    )
+    expect(untweaked.verified).toBe(true)
+  })
+
+  it('carries the tweak through a staged round too', () => {
+    const a = newParticipant()
+    const b = newParticipant()
+    const pubkeysHex = [a.pubkeyHex, b.pubkeyHex]
+    const tweakHex = bytesToHex(sha256(utf8ToBytes('staged taproot tweak')))
+    const outputKeyHex = aggregatePubkeys(pubkeysHex, tweakHex)
+    const messageHex = bytesToHex(sha256(utf8ToBytes('LNURLcash')))
+
+    // nonces bind to the AGGREGATE key the round is for - the tweaked one
+    const nonces = [a, b].map(p =>
+      generateNonce(p.pubkeyHex, p.secretKeyHex!, outputKeyHex, messageHex)
+    )
+    const pubNoncesHex = nonces.map(n => n.publicHex)
+    const aggNonceHex = aggregateNonces(pubNoncesHex)
+    const partialSigsHex = [a, b].map((p, i) =>
+      partialSign(
+        aggNonceHex,
+        pubkeysHex,
+        messageHex,
+        nonces[i]!.secretHex,
+        p.secretKeyHex!,
+        tweakHex
+      )
+    )
+    partialSigsHex.forEach((sig, i) => {
+      expect(
+        verifyPartialSig(
+          aggNonceHex,
+          pubkeysHex,
+          messageHex,
+          pubNoncesHex,
+          sig,
+          i,
+          tweakHex
+        )
+      ).toBe(true)
+    })
+
+    const result = combineStagedRound(
+      pubkeysHex,
+      pubNoncesHex,
+      partialSigsHex,
+      messageHex,
+      tweakHex
+    )
+    expect(result.groupPubkeyHex).toBe(outputKeyHex)
+    expect(result.verified).toBe(true)
   })
 })
 

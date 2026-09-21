@@ -192,6 +192,65 @@ export const compileLeaf = (
   }
 }
 
+// ---- script-tree rows ----
+//
+// One editable "script tree" entry: a (template, params) pair, compiled
+// through compileLeaf above into a REAL Tapscript program. Lives here
+// rather than in a manifest because two addons now build script trees -
+// taproot's own playground, and musig2's "lock a note to ct1<Q>" flow -
+// and both need the identical row -> compiled-leaf mapping. Only the pure
+// mapping is shared; each manifest still owns its own UI for editing rows.
+
+export type ScriptRow = {
+  templateId: string
+  pubkeyHex: string
+  pubkey2Hex: string
+  hashHex: string
+  locktime: number
+}
+
+const trimmedString = (value: unknown): string => String(value ?? '').trim()
+
+export const newScriptRow = (templateId: unknown): ScriptRow => ({
+  templateId: trimmedString(templateId) || SCRIPT_TEMPLATES[0]!.id,
+  pubkeyHex: '',
+  pubkey2Hex: '',
+  hashHex: '',
+  locktime: 0
+})
+
+const rowParams = (
+  row: Partial<ScriptRow> | undefined
+): ScriptTemplateParams => ({
+  pubkeyHex: trimmedString(row?.pubkeyHex),
+  pubkey2Hex: trimmedString(row?.pubkey2Hex),
+  hashHex: trimmedString(row?.hashHex),
+  locktime: Number(row?.locktime) || 0
+})
+
+// compiles one row's own (template, params) - every per-row live preview
+// (opcodes/script hex/leaf hash) reads through this, with the same "swallow
+// throws, not-ready-yet reads as null" contract the tweak previews use,
+// since it reruns on every keystroke while a holder is still typing a
+// pubkey/hash/locktime.
+export const rowCompiled = (item: unknown): CompiledLeaf | null => {
+  const row = item as Partial<ScriptRow> | undefined
+  if (!row?.templateId) return null
+  return compileLeaf(row.templateId, rowParams(row))
+}
+
+// every row's compiled leaf script bytes, in order - null (incomplete/
+// malformed) rows are dropped rather than blocking the whole tweak, so a
+// holder mid-way through typing a second leaf's pubkey still sees the
+// first leaf's tweak update live
+export const leafScriptsFor = (scripts: unknown): Uint8Array[] =>
+  Array.isArray(scripts)
+    ? (scripts as unknown[])
+        .map(rowCompiled)
+        .filter((c): c is CompiledLeaf => c !== null)
+        .map(c => hexToBytes(c.scriptHex))
+    : []
+
 export type TweakResult = {
   tweakedPubkeyHex: string
   tweakScalarHex: string
@@ -216,6 +275,97 @@ const merkleRootFor = (
   const tree = leafScripts.map(script => ({script}))
   const out = p2tr(internalPubkey, tree, undefined, true) as P2TR_TREE
   return out.tapMerkleRoot
+}
+
+// ---- script-path proofs ----
+//
+// What a script-path redemption actually reveals: the leaf script plus
+// BIP341's control block (leaf version + output-key parity, the internal
+// key P, and the merkle path up to the committed root). @scure/btc-signer's
+// p2tr() already computes a control block for every leaf as part of
+// building the tree - merkleRootFor above only ever kept its merkle root -
+// so producing a proof is a matter of not discarding it, not new crypto.
+
+export type ScriptPathProof = {
+  script: Uint8Array
+  controlBlock: Uint8Array
+}
+
+// one proof per leaf, in the SAME order as leafScripts. Empty for a
+// key-path-only output (no leaves, nothing to reveal).
+export const scriptPathProofs = (
+  internalPubkey: Uint8Array,
+  leafScripts: Uint8Array[]
+): ScriptPathProof[] => {
+  if (leafScripts.length === 0) return []
+  const tree = leafScripts.map(script => ({script}))
+  const out = p2tr(internalPubkey, tree, undefined, true) as P2TR_TREE
+  // p2tr() attaches an already BIP341-encoded controlBlock (parity bit
+  // included, via the library's own TaprootControlBlock coder) to every
+  // leaf it returns, but its declared TaprootLeaf type omits the field -
+  // a gap in the library's typings, not something to re-derive by hand
+  const leaves = out.leaves as (P2TR_TREE['leaves'][number] & {
+    controlBlock?: Uint8Array
+  })[]
+  // p2tr() may reorder/rebalance leaves while building the tree, so match
+  // each requested script back to ITS OWN control block by content rather
+  // than trusting positional order
+  return leafScripts.map(script => {
+    const leaf = leaves.find(l => bytesToHex(l.script) === bytesToHex(script))
+    if (!leaf?.controlBlock) {
+      throw new Error('p2tr() returned no control block for a requested leaf.')
+    }
+    return {script, controlBlock: leaf.controlBlock}
+  })
+}
+
+// BIP341 script-path verification, as a mint would run it BEFORE ever
+// evaluating the script itself: does this (script, control block) really
+// commit to the already-known output key Q? Recomputes the leaf hash, walks
+// the merkle path in the control block back up to a root, re-derives the
+// tweak from (internal key, root), and checks the result equals Q with the
+// parity the control block claims. This is pure crypto - no opcode is
+// executed and no clock is consulted - and it is the whole reason a ct1
+// needs to carry nothing but Q: nobody can satisfy it for a key they didn't
+// build forward from a real tree.
+//
+// Never throws: a malformed proof is simply "not committed to Q".
+export const verifyScriptPath = (
+  outputKeyHex: string,
+  proof: ScriptPathProof
+): boolean => {
+  try {
+    const outputKey = parseHex(outputKeyHex, 32, 'Output key')
+    const {script, controlBlock} = proof
+    // 1 byte (leaf version | parity) + 32-byte internal key + 32n path
+    if (controlBlock.length < 33 || (controlBlock.length - 33) % 32 !== 0) {
+      return false
+    }
+    const leafVersion = controlBlock[0]! & 0xfe
+    const parity = controlBlock[0]! & 1
+    const internalKey = controlBlock.subarray(1, 33)
+    let node = tapLeafHash(script, leafVersion)
+    for (let i = 33; i < controlBlock.length; i += 32) {
+      const sibling = controlBlock.subarray(i, i + 32)
+      // BIP341: branch hashes sort their two children lexicographically
+      const [a, b] =
+        compareBytes(node, sibling) <= 0 ? [node, sibling] : [sibling, node]
+      node = schnorr.utils.taggedHash('TapBranch', a, b)
+    }
+    const [tweaked, tweakedParity] = taprootTweakPubkey(internalKey, node)
+    return (
+      bytesToHex(tweaked) === bytesToHex(outputKey) && tweakedParity === parity
+    )
+  } catch {
+    return false
+  }
+}
+
+const compareBytes = (a: Uint8Array, b: Uint8Array): number => {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i]! - b[i]!
+  }
+  return a.length - b.length
 }
 
 // pubkeyHex: 32-byte x-only hex (the BIP340/Taproot "internal key" P).
