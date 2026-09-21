@@ -9,6 +9,8 @@ import {
   signWithTweakedKey,
   compileLeaf,
   scriptTemplateById,
+  scriptPathProofs,
+  verifyScriptPath,
   SCRIPT_TEMPLATES
 } from './taproot'
 
@@ -164,5 +166,134 @@ describe('script templates', () => {
         locktime: 0
       })
     ).toBeNull()
+  })
+})
+
+describe('script-path proofs (what a ct1 redemption reveals)', () => {
+  const leafFor = (id: 'pk' | 'cltv' | 'hashlock', pubkeyHex: string) =>
+    scriptTemplateById(id)!.build({
+      pubkeyHex,
+      pubkey2Hex: '',
+      hashHex: 'ab'.repeat(32),
+      locktime: 1_800_000_000
+    })
+
+  it('a genuine proof commits to Q, for every leaf of a multi-leaf tree', () => {
+    const internal = generateKeypair()
+    const fallback = generateKeypair()
+    const leaves = [
+      leafFor('cltv', fallback.pubkeyHex),
+      leafFor('pk', fallback.pubkeyHex),
+      leafFor('hashlock', fallback.pubkeyHex)
+    ]
+    const {tweakedPubkeyHex} = tweakPubkey(internal.pubkeyHex, leaves)
+    const proofs = scriptPathProofs(hexToBytes(internal.pubkeyHex), leaves)
+
+    expect(proofs).toHaveLength(3)
+    for (const proof of proofs) {
+      expect(verifyScriptPath(tweakedPubkeyHex, proof)).toBe(true)
+    }
+    // proofs come back in the SAME order as the leaves they were asked for
+    proofs.forEach((proof, i) => {
+      expect(bytesToHex(proof.script)).toBe(bytesToHex(leaves[i]!))
+    })
+  })
+
+  it('works for the single-leaf case, where the merkle root is just that leaf', () => {
+    const internal = generateKeypair()
+    const leaves = [leafFor('cltv', generateKeypair().pubkeyHex)]
+    const {tweakedPubkeyHex} = tweakPubkey(internal.pubkeyHex, leaves)
+    const [proof] = scriptPathProofs(hexToBytes(internal.pubkeyHex), leaves)
+    // no siblings: control block is exactly version byte + internal key
+    expect(proof!.controlBlock).toHaveLength(33)
+    expect(verifyScriptPath(tweakedPubkeyHex, proof!)).toBe(true)
+  })
+
+  it('a key-path-only output has nothing to reveal', () => {
+    const internal = generateKeypair()
+    expect(scriptPathProofs(hexToBytes(internal.pubkeyHex), [])).toEqual([])
+  })
+
+  // The soundness argument the whole ct1 design rests on: a mint given
+  // nothing but Q can trust a revealed leaf, because nobody can fabricate
+  // one for a key they did not build forward from a real tree.
+  describe('forgery is rejected', () => {
+    const setup = () => {
+      const internal = generateKeypair()
+      const owner = generateKeypair()
+      const leaves = [leafFor('cltv', owner.pubkeyHex)]
+      const {tweakedPubkeyHex} = tweakPubkey(internal.pubkeyHex, leaves)
+      const [proof] = scriptPathProofs(hexToBytes(internal.pubkeyHex), leaves)
+      return {internal, owner, tweakedPubkeyHex, proof: proof!}
+    }
+
+    it("an attacker's own script under the victim's control block", () => {
+      const {tweakedPubkeyHex, proof} = setup()
+      // swap in a script that pays the attacker, keep the real control block
+      const attackerScript = leafFor('pk', generateKeypair().pubkeyHex)
+      expect(
+        verifyScriptPath(tweakedPubkeyHex, {
+          script: attackerScript,
+          controlBlock: proof.controlBlock
+        })
+      ).toBe(false)
+    })
+
+    it("an attacker's fully self-built tree, presented against the victim's Q", () => {
+      const {tweakedPubkeyHex} = setup()
+      const attackerInternal = generateKeypair()
+      const attackerLeaves = [leafFor('pk', attackerInternal.pubkeyHex)]
+      const [forged] = scriptPathProofs(
+        hexToBytes(attackerInternal.pubkeyHex),
+        attackerLeaves
+      )
+      // internally consistent - it commits to the ATTACKER's own key, not Q
+      expect(
+        verifyScriptPath(
+          tweakPubkey(attackerInternal.pubkeyHex, attackerLeaves)
+            .tweakedPubkeyHex,
+          forged!
+        )
+      ).toBe(true)
+      // ...but it does not commit to the victim's
+      expect(verifyScriptPath(tweakedPubkeyHex, forged!)).toBe(false)
+    })
+
+    it('tampering with any byte of the control block', () => {
+      const {tweakedPubkeyHex, proof} = setup()
+      for (let i = 0; i < proof.controlBlock.length; i++) {
+        const tampered = Uint8Array.from(proof.controlBlock)
+        tampered[i] = tampered[i]! ^ 0x01
+        expect(
+          verifyScriptPath(tweakedPubkeyHex, {
+            script: proof.script,
+            controlBlock: tampered
+          })
+        ).toBe(false)
+      }
+    })
+
+    it('a valid proof against a different output key', () => {
+      const {proof} = setup()
+      expect(verifyScriptPath(generateKeypair().pubkeyHex, proof)).toBe(false)
+    })
+
+    it('malformed control blocks are rejected, never thrown', () => {
+      const {tweakedPubkeyHex, proof} = setup()
+      for (const controlBlock of [
+        new Uint8Array(0),
+        new Uint8Array(32),
+        new Uint8Array(34),
+        new Uint8Array(65)
+      ]) {
+        expect(
+          verifyScriptPath(tweakedPubkeyHex, {
+            script: proof.script,
+            controlBlock
+          })
+        ).toBe(false)
+      }
+      expect(verifyScriptPath('not hex', proof)).toBe(false)
+    })
   })
 })

@@ -73,14 +73,36 @@ export const newParticipant = (): Musig2Participant => {
   }
 }
 
+// BIP341's own x-only tweak, threaded into key aggregation (and into every
+// Session built from it) so a round's signature verifies under the TWEAKED
+// output key Q = P + t·G rather than the untweaked aggregate P. This is
+// what makes a MuSig2 group usable as a taproot INTERNAL key: lock a note
+// to ct1<Q>, and the group can still key-path spend it, but only if every
+// step of the round applies the same tweak - applying it afterwards is not
+// possible, which is exactly why it has to be a parameter here rather than
+// something a caller can bolt on later.
+//
+// `undefined` means no tweak at all - a plain MuSig2 round, byte-for-byte
+// as before. BIP327's ApplyTweak takes a tweak list plus a matching
+// per-tweak isXonly flag; a taproot output key is always x-only.
+const tweakArgs = (tweakHex?: string): [Uint8Array[], boolean[]] =>
+  tweakHex === undefined
+    ? [[], []]
+    : [[parseHex(tweakHex, 32, 'Tweak')], [true]]
+
 // pure key-aggregation preview, no signing - lets the UI show the group
-// pubkey as soon as 2+ participants exist, before a message is even typed
-export const aggregatePubkeys = (pubkeysHex: string[]): string => {
+// pubkey as soon as 2+ participants exist, before a message is even typed.
+// With `tweakHex`, previews the taproot output key Q instead of the bare
+// aggregate P.
+export const aggregatePubkeys = (
+  pubkeysHex: string[],
+  tweakHex?: string
+): string => {
   if (pubkeysHex.length < 2) {
     throw new Error('Need at least 2 participants to aggregate.')
   }
   const pubkeys = pubkeysHex.map(hex => parseHex(hex, 33, 'Pubkey'))
-  const agg = keyAggregate(pubkeys)
+  const agg = keyAggregate(pubkeys, ...tweakArgs(tweakHex))
   return bytesToHex(keyAggExport(agg))
 }
 
@@ -147,7 +169,8 @@ const summarizeRound = (
 // string), which UTF-8-encoding a string could never produce.
 export const aggregateAndSignBytes = (
   participants: Musig2Participant[],
-  message: Uint8Array
+  message: Uint8Array,
+  tweakHex?: string
 ): Musig2Result => {
   if (participants.length < 2) {
     throw new Error('Need at least 2 participants to sign together.')
@@ -162,7 +185,8 @@ export const aggregateAndSignBytes = (
   })
   const pubkeys = participants.map(p => parseHex(p.pubkeyHex, 33, 'Pubkey'))
 
-  const agg = keyAggregate(pubkeys)
+  const [tweaks, isXonly] = tweakArgs(tweakHex)
+  const agg = keyAggregate(pubkeys, tweaks, isXonly)
   const groupPubkey = keyAggExport(agg)
 
   const nonces = pubkeys.map((pubkey, i) =>
@@ -171,7 +195,7 @@ export const aggregateAndSignBytes = (
   const pubNonces = nonces.map(n => n.public)
   const aggNonce = nonceAggregate(pubNonces)
 
-  const session = new Session(aggNonce, pubkeys, message)
+  const session = new Session(aggNonce, pubkeys, message, tweaks, isXonly)
   const partialSigs = secretKeys.map((secretKey, i) =>
     session.sign(nonces[i]!.secret, secretKey)
   )
@@ -260,12 +284,14 @@ export const partialSign = (
   pubkeysHex: string[],
   messageHex: string,
   nonceSecretHex: string,
-  secretKeyHex: string
+  secretKeyHex: string,
+  tweakHex?: string
 ): string => {
   const session = new Session(
     parseHex(aggNonceHex, 66, 'Aggregate nonce'),
     pubkeysHex.map(hex => parseHex(hex, 33, 'Pubkey')),
-    parseHex(messageHex, 32, 'Message')
+    parseHex(messageHex, 32, 'Message'),
+    ...tweakArgs(tweakHex)
   )
   return bytesToHex(
     session.sign(
@@ -287,13 +313,15 @@ export const verifyPartialSig = (
   messageHex: string,
   pubNoncesHex: string[],
   partialSigHex: string,
-  index: number
+  index: number,
+  tweakHex?: string
 ): boolean => {
   try {
     const session = new Session(
       parseHex(aggNonceHex, 66, 'Aggregate nonce'),
       pubkeysHex.map(hex => parseHex(hex, 33, 'Pubkey')),
-      parseHex(messageHex, 32, 'Message')
+      parseHex(messageHex, 32, 'Message'),
+      ...tweakArgs(tweakHex)
     )
     return session.partialSigVerify(
       parseHex(partialSigHex, 32, 'Partial signature'),
@@ -315,7 +343,8 @@ export const combineStagedRound = (
   pubkeysHex: string[],
   pubNoncesHex: string[],
   partialSigsHex: string[],
-  messageHex: string
+  messageHex: string,
+  tweakHex?: string
 ): Musig2Result => {
   if (pubkeysHex.length < 2) {
     throw new Error('Need at least 2 participants to sign together.')
@@ -326,9 +355,10 @@ export const combineStagedRound = (
     parseHex(hex, 32, 'Partial signature')
   )
   const message = parseHex(messageHex, 32, 'Message')
-  const groupPubkey = keyAggExport(keyAggregate(pubkeys))
+  const [tweaks, isXonly] = tweakArgs(tweakHex)
+  const groupPubkey = keyAggExport(keyAggregate(pubkeys, tweaks, isXonly))
   const aggNonce = nonceAggregate(pubNonces)
-  const session = new Session(aggNonce, pubkeys, message)
+  const session = new Session(aggNonce, pubkeys, message, tweaks, isXonly)
   return summarizeRound(
     session,
     pubkeys,

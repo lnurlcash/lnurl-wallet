@@ -26,6 +26,18 @@ import {
   recoverNoteOwnershipPubkey,
   withNewK1
 } from '../../lnurlcash'
+// the sibling Taproot addon's own script-tree machinery, reused rather than
+// reimplemented - only its pure pieces (row shape, leaf compilation, BIP341
+// tweaking), never its UI, so the two manifests stay independent
+import {
+  SCRIPT_TEMPLATES,
+  scriptTemplateById,
+  newScriptRow,
+  rowCompiled,
+  leafScriptsFor,
+  tweakPubkey,
+  type ScriptTemplateId
+} from '../taproot/taproot'
 
 // MuSig2 (BIP327) joint signatures - mostly still a "play around" sandbox:
 // every participant's key material lives in this addon's own page-local
@@ -43,6 +55,10 @@ import {
 // separately since the two BIPs are genuinely different specs, not one
 // feature.
 const MAX_PARTICIPANTS = 3
+
+// same "keep the demo comprehensible" cap as MAX_PARTICIPANTS - BIP341
+// itself has no such limit (a real tree can be far deeper)
+const MAX_SCRIPT_LEAVES = 3
 
 const participantCount = (participants: unknown): number =>
   Array.isArray(participants) ? participants.length : 0
@@ -141,14 +157,77 @@ const CK1_OWNERSHIP_DIGEST = sha256(utf8ToBytes(CK1_OWNERSHIP_MESSAGE))
 // aggregateAndSignBytes's own raw-bytes signature
 const CK1_OWNERSHIP_DIGEST_HEX = bytesToHex(CK1_OWNERSHIP_DIGEST)
 
+// ---- optional Tapscript leaves: locking to ct1<Q> instead of cp1<P> ----
+//
+// Attaching leaves turns this group's aggregate key into a BIP341 INTERNAL
+// key P, and the note gets locked to the tweaked OUTPUT key
+// Q = P + t·G instead (see recoverableNotes.ts's ct1). The whole round
+// then has to sign for Q, not P - the tweak enters key aggregation itself
+// (musig2.ts's own tweakArgs), so it can't be bolted on afterwards, which
+// is why every helper below takes the leaves and re-derives it rather than
+// letting the two drift apart.
+//
+// No leaves = undefined tweak = a plain cp1 lock and a plain, untweaked
+// round, byte-for-byte as before.
+
+const roundTweakHex = (
+  participants: unknown,
+  scripts: unknown
+): string | undefined => {
+  const leaves = leafScriptsFor(scripts)
+  if (leaves.length === 0) return undefined
+  const internalKeyHex = musigPreview(participants)
+  if (internalKeyHex === '-') return undefined
+  try {
+    return tweakPubkey(internalKeyHex, leaves).tweakScalarHex
+  } catch {
+    return undefined
+  }
+}
+
+// which commitment type a lock would use right now - derived from whether
+// any leaf actually compiles, never a separate toggle that could contradict
+// the tree (a ct1 with an empty script tree is redeemable exactly like a
+// cp1, so it would be strictly worse: same capability, rejected by mints)
+const lockKind = (participants: unknown, scripts: unknown): string =>
+  roundTweakHex(participants, scripts) === undefined ? 'cp1' : 'ct1'
+
+// the key a lock actually names: the tweaked output key Q once leaves are
+// attached, the bare aggregate P otherwise
+const lockTargetHex = (participants: unknown, scripts: unknown): string => {
+  const tweakHex = roundTweakHex(participants, scripts)
+  if (tweakHex === undefined) return musigPreview(participants)
+  try {
+    return aggregatePubkeys(
+      asParticipants(participants).map(p => p.pubkeyHex),
+      tweakHex
+    )
+  } catch {
+    return '-'
+  }
+}
+
+const templateName = (templateId: unknown): string =>
+  scriptTemplateById(String(templateId ?? '').trim())?.name ??
+  'Unknown template'
+
+const leafOpcodes = (item: unknown): string => rowCompiled(item)?.opcodes ?? '-'
+
+const canAddScriptLeaf = (scripts: unknown): boolean =>
+  (Array.isArray(scripts) ? scripts.length : 0) < MAX_SCRIPT_LEAVES
+
 // the Aggregate & sign button's own helper - deliberately throws straight
 // through on bad input, same reasoning as a deliberate button click always
 // gets (Renderer.tsx's own runAction turns a thrown Error into a plain
 // toast notification, unlike a live binding). Only ever reachable for an
 // all-local group (see allLocal above) - a pubkey-only participant goes
 // through the staged flow below instead.
-const runMusigRound = (participants: unknown): Musig2Result =>
-  aggregateAndSignBytes(asParticipants(participants), CK1_OWNERSHIP_DIGEST)
+const runMusigRound = (participants: unknown, scripts: unknown): Musig2Result =>
+  aggregateAndSignBytes(
+    asParticipants(participants),
+    CK1_OWNERSHIP_DIGEST,
+    roundTweakHex(participants, scripts)
+  )
 
 // ---- staged flow: at least one participant is pubkey-only ----
 //
@@ -174,9 +253,18 @@ const allSigsReady = (participants: unknown): boolean =>
 // participant's own pubNonceHex can only ever come from a paste (see
 // participantRow's own Input below) - this page has no secret key to
 // generate one on their behalf.
-const generateLocalNonces = (participants: unknown): Musig2Participant[] => {
+const generateLocalNonces = (
+  participants: unknown,
+  scripts: unknown
+): Musig2Participant[] => {
   const list = asParticipants(participants)
-  const groupPubkeyHex = aggregatePubkeys(list.map(p => p.pubkeyHex))
+  // a nonce binds to the aggregate key the round is actually for - the
+  // TWEAKED one when leaves are attached, or the round's own partial
+  // signatures won't combine
+  const groupPubkeyHex = aggregatePubkeys(
+    list.map(p => p.pubkeyHex),
+    roundTweakHex(participants, scripts)
+  )
   return list.map(p => {
     if (!p.secretKeyHex || p.pubNonceHex) return p
     const nonce = generateNonce(
@@ -207,11 +295,15 @@ const aggregateNoncePreview = (participants: unknown): string => {
 // "Sign my parts" - fills in a partial signature for every LOCAL
 // participant that has a nonce but no signature yet. An external
 // participant's own partialSigHex can only come from a paste.
-const signLocalParts = (participants: unknown): Musig2Participant[] => {
+const signLocalParts = (
+  participants: unknown,
+  scripts: unknown
+): Musig2Participant[] => {
   const list = asParticipants(participants)
   if (!allNoncesReady(list)) return list
   const pubkeysHex = list.map(p => p.pubkeyHex)
   const aggNonceHex = aggregateNonces(list.map(p => p.pubNonceHex!))
+  const tweakHex = roundTweakHex(participants, scripts)
   return list.map(p => {
     if (!p.secretKeyHex || !p.nonceSecretHex || p.partialSigHex) return p
     const partialSigHex = partialSign(
@@ -219,7 +311,8 @@ const signLocalParts = (participants: unknown): Musig2Participant[] => {
       pubkeysHex,
       CK1_OWNERSHIP_DIGEST_HEX,
       p.nonceSecretHex,
-      p.secretKeyHex
+      p.secretKeyHex,
+      tweakHex
     )
     return {...p, partialSigHex}
   })
@@ -229,7 +322,11 @@ const signLocalParts = (participants: unknown): Musig2Participant[] => {
 // paste (wrong participant, stale round, plain typo) surface immediately
 // as "not verified" next to that row, rather than only failing once every
 // participant's is in and "Combine signatures" is clicked
-const partialSigValid = (participants: unknown, index: unknown): boolean => {
+const partialSigValid = (
+  participants: unknown,
+  index: unknown,
+  scripts: unknown
+): boolean => {
   const list = asParticipants(participants)
   const item = list[Number(index)]
   if (!item?.partialSigHex || !allNoncesReady(list)) return false
@@ -242,7 +339,8 @@ const partialSigValid = (participants: unknown, index: unknown): boolean => {
       CK1_OWNERSHIP_DIGEST_HEX,
       pubNoncesHex,
       item.partialSigHex,
-      Number(index)
+      Number(index),
+      roundTweakHex(participants, scripts)
     )
   } catch {
     return false
@@ -253,7 +351,10 @@ const partialSigValid = (participants: unknown, index: unknown): boolean => {
 // participant (local or external) has a partial signature. Deliberately
 // throws straight through on an incomplete round, same reasoning as
 // runMusigRound above.
-const combineStagedSignatures = (participants: unknown): Musig2Result => {
+const combineStagedSignatures = (
+  participants: unknown,
+  scripts: unknown
+): Musig2Result => {
   const list = asParticipants(participants)
   const pubkeysHex = list.map(p => p.pubkeyHex)
   const pubNoncesHex = list.map(p => {
@@ -271,7 +372,8 @@ const combineStagedSignatures = (participants: unknown): Musig2Result => {
     pubkeysHex,
     pubNoncesHex,
     partialSigsHex,
-    CK1_OWNERSHIP_DIGEST_HEX
+    CK1_OWNERSHIP_DIGEST_HEX,
+    roundTweakHex(participants, scripts)
   )
 }
 
@@ -432,7 +534,11 @@ const participantRow: UiNode = {
             args: [
               {
                 helper: 'partialSigValid',
-                args: [{var: 'participants'}, {var: 'index'}]
+                args: [
+                  {var: 'participants'},
+                  {var: 'index'},
+                  {var: 'lockScripts'}
+                ]
               }
             ]
           },
@@ -459,6 +565,65 @@ const participantRow: UiNode = {
     }
   ]
 }
+
+// one Tapscript leaf in the lock's own script tree. Deliberately a leaner
+// editor than the Taproot addon's own scriptRow (no per-row script-hex /
+// TapLeaf-hash readouts): here the leaf is a means to an end - the tweaked
+// output key shown below the list - rather than the object of study.
+const lockScriptRow: UiNode = {
+  type: 'View',
+  style: 'row',
+  children: [
+    {
+      type: 'Text',
+      value: {helper: 'templateName', args: [{var: 'item.templateId'}]},
+      style: 'subheading'
+    },
+    {
+      type: 'Input',
+      bind: 'item.pubkeyHex',
+      label: 'Pubkey (x-only hex - multisig2’s FIRST key)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.pubkey2Hex',
+      label: 'Pubkey B (multisig2 only)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.hashHex',
+      label: 'SHA256 hash of a secret, hex (hashlock only)'
+    },
+    {
+      type: 'Input',
+      bind: 'item.locktime',
+      kind: 'number',
+      label: 'Locktime / sequence number (csv/cltv only)'
+    },
+    {
+      type: 'Text',
+      value: {
+        cat: ['Opcodes: ', {helper: 'leafOpcodes', args: [{var: 'item'}]}]
+      },
+      style: 'response-block'
+    },
+    {
+      type: 'Button',
+      label: 'Remove leaf',
+      onClick: {action: 'removeAt', path: 'lockScripts', index: {var: 'index'}}
+    }
+  ]
+}
+
+const addLeafButton = (id: ScriptTemplateId): UiNode => ({
+  type: 'Button',
+  label: `Add "${scriptTemplateById(id)!.name}"`,
+  onClick: {
+    action: 'push',
+    path: 'lockScripts',
+    value: {helper: 'newScriptRow', args: [id]}
+  }
+})
 
 const signerRow: UiNode = {
   type: 'View',
@@ -502,7 +667,8 @@ const musigDocsUi: UiNode[] = [
       "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over ck1's own fixed message, \"LNURLcash\".",
       "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and fixed message above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
       "Check the result: the final signature's own ✓ verified line, and each signer's individual partial-signature ✓ underneath (also shown live next to a pasted partial signature, before the round is even combined).",
-      "Optional - to actually lock a note to this pubkey: once 2+ participants exist, pick one of your own unspent notes under 'Lock a real note to this pubkey' and click 'Lock this note' - this burns it and re-mints it owned by the group pubkey, certified by the mint's own signature (checked here, not just assumed). Once this same round has ALSO produced a matching ck1 above, a 'Redeemable note' section appears with the complete note (both signatures included) - copy it, or click 'Withdraw to wallet' to claim it back here directly."
+      "Optional - to actually lock a note to this pubkey: once 2+ participants exist, pick one of your own unspent notes under 'Lock a real note to this pubkey' and click 'Lock this note' - this burns it and re-mints it owned by the group pubkey, certified by the mint's own signature (checked here, not just assumed). Once this same round has ALSO produced a matching ck1 above, a 'Redeemable note' section appears with the complete note (both signatures included) - copy it, or click 'Withdraw to wallet' to claim it back here directly.",
+      'Optional - add Tapscript leaves (a timelock, a hashlock, a 2-of-2) before locking, and the lock becomes a ct1 taproot output instead of a plain cp1: the group key becomes the INTERNAL key, the note is locked to the tweaked output key, and every signing step above automatically signs for that tweaked key instead. The leaves themselves stay private until one is used. No mint implements ct1 script-path redemption yet, so the lock request will be refused today - the construction, the tweak and the key-path signature are all real and checkable here regardless.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
   }
@@ -642,6 +808,47 @@ const musigBuilderUi: UiNode[] = [
             value:
               'Optional - burns one of your own wallet notes and re-mints it owned by the group pubkey above. Only a valid ck1 for this exact group (produced below) will ever redeem it again; this wallet gives up any other way to spend it the moment this succeeds.'
           },
+          // ---- optional Tapscript leaves (turns the lock into a ct1) ----
+          {
+            type: 'Text',
+            value: 'Alternate unlock conditions (optional)',
+            style: 'subheading'
+          },
+          {
+            type: 'Text',
+            value:
+              'Add one or more Tapscript leaves and the group pubkey above becomes a BIP341 INTERNAL key: the note gets locked to the tweaked output key (ct1) instead of the plain one (cp1). The group can still redeem it by signing - the round below automatically signs for the tweaked key once a leaf compiles - but the leaves are ALSO valid ways to redeem it, which is what makes a timelock possible. No mint implements ct1 script-path redemption yet, so treat this as a construction demo: the lock request itself will be refused today, safely, before anything burns.'
+          },
+          {type: 'For', each: {var: 'lockScripts'}, children: [lockScriptRow]},
+          {
+            type: 'Show',
+            when: {helper: 'canAddScriptLeaf', args: [{var: 'lockScripts'}]},
+            children: [
+              {
+                type: 'View',
+                style: 'row',
+                children: SCRIPT_TEMPLATES.map(t => addLeafButton(t.id))
+              }
+            ]
+          },
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'This lock will use: ',
+                {
+                  helper: 'lockKind',
+                  args: [{var: 'participants'}, {var: 'lockScripts'}]
+                },
+                ' — key ',
+                {
+                  helper: 'lockTargetHex',
+                  args: [{var: 'participants'}, {var: 'lockScripts'}]
+                }
+              ]
+            },
+            style: 'response-block'
+          },
           {
             type: 'NotePicker',
             bind: 'selectedNote',
@@ -660,8 +867,12 @@ const musigBuilderUi: UiNode[] = [
                   args: {
                     note: {var: 'selectedNote.id'},
                     pubkeyHex: {
-                      helper: 'musigPreview',
-                      args: [{var: 'participants'}]
+                      helper: 'lockTargetHex',
+                      args: [{var: 'participants'}, {var: 'lockScripts'}]
+                    },
+                    kind: {
+                      helper: 'lockKind',
+                      args: [{var: 'participants'}, {var: 'lockScripts'}]
                     }
                   },
                   result: 'lockedNote'
@@ -681,7 +892,9 @@ const musigBuilderUi: UiNode[] = [
               cat: [
                 'Locked ',
                 {helper: 'msatToSats', args: [{var: 'lockedNote.amountMsat'}]},
-                ' sats to this pubkey.'
+                ' sats to this pubkey (',
+                {var: 'lockedNote.kind'},
+                ').'
               ]
             }
           },
@@ -745,7 +958,10 @@ const musigBuilderUi: UiNode[] = [
             onClick: {
               action: 'set',
               path: 'musigResult',
-              value: {helper: 'runMusigRound', args: [{var: 'participants'}]}
+              value: {
+                helper: 'runMusigRound',
+                args: [{var: 'participants'}, {var: 'lockScripts'}]
+              }
             }
           }
         ]
@@ -778,7 +994,7 @@ const musigBuilderUi: UiNode[] = [
                   path: 'participants',
                   value: {
                     helper: 'generateLocalNonces',
-                    args: [{var: 'participants'}]
+                    args: [{var: 'participants'}, {var: 'lockScripts'}]
                   }
                 }
               },
@@ -836,7 +1052,7 @@ const musigBuilderUi: UiNode[] = [
                       path: 'participants',
                       value: {
                         helper: 'signLocalParts',
-                        args: [{var: 'participants'}]
+                        args: [{var: 'participants'}, {var: 'lockScripts'}]
                       }
                     }
                   },
@@ -859,7 +1075,7 @@ const musigBuilderUi: UiNode[] = [
                       path: 'musigResult',
                       value: {
                         helper: 'combineStagedSignatures',
-                        args: [{var: 'participants'}]
+                        args: [{var: 'participants'}, {var: 'lockScripts'}]
                       }
                     }
                   }
@@ -1096,6 +1312,7 @@ const musig2Manifest: AddonManifest = {
   nav: {position: 'right', icon: 'people', label: 'MuSig2'},
   state: {
     participants: [],
+    lockScripts: [],
     externalPubkeyInput: '',
     mintNoteForLookup: null,
     externalAddressInput: '',
@@ -1121,6 +1338,12 @@ const musig2Helpers: Record<string, AddonHelper> = {
   canAggregate: canAggregate as AddonHelper,
   musigPreview: musigPreview as AddonHelper,
   musigCp1Preview: musigCp1Preview as AddonHelper,
+  newScriptRow: newScriptRow as AddonHelper,
+  templateName: templateName as AddonHelper,
+  leafOpcodes: leafOpcodes as AddonHelper,
+  canAddScriptLeaf: canAddScriptLeaf as AddonHelper,
+  lockKind: lockKind as AddonHelper,
+  lockTargetHex: lockTargetHex as AddonHelper,
   runMusigRound: runMusigRound as AddonHelper,
   allNoncesReady: allNoncesReady as AddonHelper,
   allSigsReady: allSigsReady as AddonHelper,
