@@ -1,18 +1,18 @@
 import {describe, expect, it} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {toBech32Lnurl} from '../../lnurlcash'
+import {bech32m} from '@scure/base'
 import {decodeCw1} from '../../lib/recoverableNotes'
 import {verifyScriptPath} from '../taproot/taproot'
 import {
   consignmentProblem,
+  decodeSealConsignment,
+  encodeSealConsignment,
   genesisState,
   nextState,
-  parseSealConsignment,
   planSealLock,
   redeemCurrentStateCw1,
   sealChainProblem,
-  sealConsignmentUrl,
   sealStateHash,
   type SealState
 } from './seals'
@@ -220,76 +220,85 @@ describe('seal consignment: build, parse, round-trip', () => {
   const owner = realKeypair()
   const buyer = realKeypair()
   const genesis = genesisState('Art #1', 'a description', owner.pubkeyHex)
+  const genesisNoDescription = genesisState('Art #1', '', owner.pubkeyHex)
   const lockedNote = {
-    urlTemplate: URL_TEMPLATE,
+    urlTemplate: `${URL_TEMPLATE}?k1=onetimeclaim&sig=onetimesig`,
     amountMsat: AMOUNT_MSAT,
     signature: 'deadbeef'.repeat(16),
     groupPubkeyHex: planSealLock(genesis).outputKeyHex
   }
 
-  it('builds and round-trips a genesis-only consignment', () => {
-    const url = sealConsignmentUrl(lockedNote, [genesis])!
-    expect(url).not.toBeNull()
-    const parsed = parseSealConsignment(url)!
+  it('builds a compact bech32m string, not a URL with JSON stuffed in it', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    expect(consignment).not.toBeNull()
+    expect(consignment.toLowerCase().startsWith('seal1')).toBe(true)
+  })
+
+  it('round-trips a genesis-only consignment', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    const parsed = decodeSealConsignment(consignment)!
     expect(parsed.amountMsat).toBe(AMOUNT_MSAT)
     expect(parsed.states).toEqual([genesis])
   })
 
-  it('carries no k1 - not a spendable note on its own', () => {
-    const url = sealConsignmentUrl(lockedNote, [genesis])!
-    expect(new URL(url).searchParams.has('k1')).toBe(false)
+  it('round-trips a state with an empty (optional) description', () => {
+    const consignment = encodeSealConsignment(lockedNote, [
+      genesisNoDescription
+    ])!
+    const parsed = decodeSealConsignment(consignment)!
+    expect(parsed.states).toEqual([genesisNoDescription])
+  })
+
+  it('strips k1/sig - one-time claim secrets, not part of a reusable template', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    const parsed = decodeSealConsignment(consignment)!
+    const url = new URL(parsed.urlTemplate)
+    expect(url.searchParams.has('k1')).toBe(false)
+    expect(url.searchParams.has('sig')).toBe(false)
   })
 
   it('round-trips a multi-state history', () => {
     const transfer1 = nextState(genesis, buyer.pubkeyHex)
-    const url = sealConsignmentUrl(lockedNote, [genesis, transfer1])!
-    const parsed = parseSealConsignment(url)!
+    const consignment = encodeSealConsignment(lockedNote, [genesis, transfer1])!
+    const parsed = decodeSealConsignment(consignment)!
     expect(parsed.states).toEqual([genesis, transfer1])
   })
 
+  it('round-trips regardless of case, and with surrounding whitespace', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    expect(decodeSealConsignment(`  ${consignment.toUpperCase()}  `)).toEqual(
+      decodeSealConsignment(consignment)
+    )
+  })
+
   it('rejects garbage', () => {
-    expect(parseSealConsignment('not a url')).toBeNull()
-    expect(parseSealConsignment('https://mint.example.com/w')).toBeNull()
-    expect(sealConsignmentUrl(null, [genesis])).toBeNull()
-    expect(sealConsignmentUrl(lockedNote, [])).toBeNull()
+    expect(decodeSealConsignment('not a url')).toBeNull()
+    expect(decodeSealConsignment('https://mint.example.com/w')).toBeNull()
+    expect(decodeSealConsignment('')).toBeNull()
+    expect(encodeSealConsignment(null, [genesis])).toBeNull()
+    expect(encodeSealConsignment(lockedNote, [])).toBeNull()
   })
 
-  it('round-trips through a bech32-encoded consignment, not just the plain URL', () => {
-    const plain = sealConsignmentUrl(lockedNote, [genesis])!
-    const bech32 = toBech32Lnurl(plain)
-    expect(bech32.toUpperCase().startsWith('LNURL1')).toBe(true)
-    const parsed = parseSealConsignment(bech32)!
-    expect(parsed).not.toBeNull()
-    expect(parsed.amountMsat).toBe(AMOUNT_MSAT)
-    expect(parsed.states).toEqual([genesis])
+  it('rejects a well-formed bech32m string under the wrong HRP', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    const wrongHrp = `other1${consignment.slice(consignment.indexOf('1') + 1)}`
+    expect(decodeSealConsignment(wrongHrp)).toBeNull()
   })
 
-  it('round-trips a bech32-encoded consignment regardless of case, and with surrounding whitespace', () => {
-    const plain = sealConsignmentUrl(lockedNote, [genesis])!
-    const bech32 = toBech32Lnurl(plain)
-    expect(parseSealConsignment(`  ${bech32.toLowerCase()}  `)).toEqual(
-      parseSealConsignment(bech32)
+  it('rejects a truncated/malformed payload even with a valid bech32m checksum', () => {
+    const tooShort = bech32m.encode(
+      'seal',
+      bech32m.toWords(new Uint8Array(3)),
+      false
     )
+    expect(decodeSealConsignment(tooShort)).toBeNull()
   })
 
-  it('rejects a states param that is not real JSON, not an array, or contains malformed entries', () => {
-    const base = new URL(URL_TEMPLATE)
-    base.searchParams.set('amount', String(AMOUNT_MSAT))
-    base.searchParams.set('states', 'not json')
-    expect(parseSealConsignment(base.toString())).toBeNull()
-
-    const notArray = new URL(URL_TEMPLATE)
-    notArray.searchParams.set('amount', String(AMOUNT_MSAT))
-    notArray.searchParams.set('states', JSON.stringify({not: 'an array'}))
-    expect(parseSealConsignment(notArray.toString())).toBeNull()
-
-    const malformedEntry = new URL(URL_TEMPLATE)
-    malformedEntry.searchParams.set('amount', String(AMOUNT_MSAT))
-    malformedEntry.searchParams.set(
-      'states',
-      JSON.stringify([{...genesis, ownerPubkeyHex: 'not-hex'}])
-    )
-    expect(parseSealConsignment(malformedEntry.toString())).toBeNull()
+  it('rejects a single flipped character - the checksum catches it', () => {
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    const flipped =
+      consignment.slice(0, -1) + (consignment.at(-1) === 'q' ? 'p' : 'q')
+    expect(decodeSealConsignment(flipped)).toBeNull()
   })
 })
 
@@ -312,14 +321,13 @@ describe('consignmentProblem', () => {
   })
 
   it('accepts a real, self-consistent consignment', () => {
-    const url = sealConsignmentUrl(lockedNote, [genesis])!
-    expect(consignmentProblem(url)).toBe('')
+    const consignment = encodeSealConsignment(lockedNote, [genesis])!
+    expect(consignmentProblem(consignment)).toBe('')
   })
 
-  it('catches a shape-valid but chain-broken consignment (e.g. hand-edited)', () => {
-    const url = new URL(sealConsignmentUrl(lockedNote, [genesis])!)
+  it('catches a shape-valid but chain-broken consignment (e.g. hand-edited states)', () => {
     const tampered: SealState[] = [{...genesis, stateIndex: 5}]
-    url.searchParams.set('states', JSON.stringify(tampered))
-    expect(consignmentProblem(url.toString())).not.toBe('')
+    const consignment = encodeSealConsignment(lockedNote, tampered)!
+    expect(consignmentProblem(consignment)).not.toBe('')
   })
 })

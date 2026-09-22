@@ -1,13 +1,12 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
-import {toLud17w, toBech32Lnurl} from '../../lnurlcash'
 import {
   consignmentProblem,
+  decodeSealConsignment,
+  encodeSealConsignment,
   genesisState,
-  parseSealConsignment,
   planSealLock,
-  sealConsignmentUrl,
   type SealState
 } from './seals'
 
@@ -67,32 +66,13 @@ const prepareGenesis = (
   return {state, outputKeyHex: planSealLock(state).outputKeyHex}
 }
 
-// bech32's own encoder throws rather than truncates once the payload
-// exceeds its length budget (toBech32Lnurl raises that budget to 2048
-// characters, but a consignment grows with every transition, so a long
-// enough history can still exceed it) - caught here so a live Text
-// binding never crashes the page over it, same "fail visibly, not
-// silently, not catastrophically" reasoning as every other addon's own
-// defensive parsing
-const bech32OrPlain = (plain: string): string => {
-  try {
-    return toBech32Lnurl(plain)
-  } catch {
-    return `${plain}\n(too long to also encode as bech32 - this plain link still works)`
-  }
-}
-
-const issuedConsignmentUrl = (
+const issuedConsignment = (
   issuedNote: unknown,
-  genesisPlan: unknown,
-  bech32: unknown
+  genesisPlan: unknown
 ): string | null => {
   const plan = genesisPlan as GenesisPlan | null
   if (!plan) return null
-  const url = sealConsignmentUrl(issuedNote, [plan.state])
-  if (!url) return null
-  const plain = toLud17w(url)
-  return bech32 ? bech32OrPlain(plain) : plain
+  return encodeSealConsignment(issuedNote, [plan.state])
 }
 
 const issuedConsignmentText = (
@@ -101,8 +81,10 @@ const issuedConsignmentText = (
 ): string => {
   const plan = genesisPlan as GenesisPlan | null
   const locked = issuedNote as LockedNote | null
-  const url = plan ? sealConsignmentUrl(issuedNote, [plan.state]) : null
-  if (!url || !plan || !locked) return ''
+  const consignment = plan
+    ? encodeSealConsignment(issuedNote, [plan.state])
+    : null
+  if (!consignment || !plan || !locked) return ''
   return [
     'Seals consignment',
     `Asset: ${plan.state.name}`,
@@ -111,7 +93,7 @@ const issuedConsignmentText = (
     'This consignment carries the WHOLE ownership history - validate it',
     'yourself (never just trust who handed it to you) before relying on it.',
     '',
-    toLud17w(url)
+    consignment
   ]
     .filter(Boolean)
     .join('\n')
@@ -240,12 +222,6 @@ const issueUi: UiNode[] = [
     children: [
       {type: 'Text', value: '✓ Seal issued', style: 'subheading'},
       {
-        type: 'Input',
-        bind: 'useBech32',
-        kind: 'checkbox',
-        label: 'Encode consignment as bech32 (LNURL1…)'
-      },
-      {
         type: 'Text',
         value:
           'Hand this consignment to the first owner. It carries the whole (so far one-state) history - they validate it themselves before relying on it, in the Manage section below or in their own wallet.'
@@ -253,8 +229,8 @@ const issueUi: UiNode[] = [
       {
         type: 'Text',
         value: {
-          helper: 'issuedConsignmentUrl',
-          args: [{var: 'issuedNote'}, {var: 'genesisPlan'}, {var: 'useBech32'}]
+          helper: 'issuedConsignment',
+          args: [{var: 'issuedNote'}, {var: 'genesisPlan'}]
         },
         style: 'response-block'
       },
@@ -265,12 +241,8 @@ const issueUi: UiNode[] = [
           verb: 'clipboard.copy',
           args: {
             text: {
-              helper: 'issuedConsignmentUrl',
-              args: [
-                {var: 'issuedNote'},
-                {var: 'genesisPlan'},
-                {var: 'useBech32'}
-              ]
+              helper: 'issuedConsignment',
+              args: [{var: 'issuedNote'}, {var: 'genesisPlan'}]
             }
           }
         }
@@ -301,7 +273,7 @@ const issueUi: UiNode[] = [
 // ---- Manage / verify / transition ----
 
 const parsedStatesOf = (consignmentInput: unknown): SealState[] =>
-  parseSealConsignment(consignmentInput)?.states ?? []
+  decodeSealConsignment(consignmentInput)?.states ?? []
 
 const currentStateOf = (consignmentInput: unknown): SealState | null => {
   const states = parsedStatesOf(consignmentInput)
@@ -364,25 +336,21 @@ const canTransition = (
   }
 }
 
-const nextConsignmentUrl = (
+const nextConsignment = (
   consignmentInput: unknown,
-  transitionResult: unknown,
-  bech32: unknown
+  transitionResult: unknown
 ): string | null => {
-  const parsed = parseSealConsignment(consignmentInput)
+  const parsed = decodeSealConsignment(consignmentInput)
   const result = transitionResult as {
     urlTemplate: string
     amountMsat: number
     state: SealState
   } | null
   if (!parsed || !result) return null
-  const url = sealConsignmentUrl(
+  return encodeSealConsignment(
     {urlTemplate: result.urlTemplate, amountMsat: result.amountMsat},
     [...parsed.states, result.state]
   )
-  if (!url) return null
-  const plain = toLud17w(url)
-  return bech32 ? bech32OrPlain(plain) : plain
 }
 
 const manageUi: UiNode[] = [
@@ -569,12 +537,6 @@ const manageUi: UiNode[] = [
         children: [
           {type: 'Text', value: '✓ Transitioned', style: 'subheading'},
           {
-            type: 'Input',
-            bind: 'useTransitionBech32',
-            kind: 'checkbox',
-            label: 'Encode consignment as bech32 (LNURL1…)'
-          },
-          {
             type: 'Text',
             value:
               'Hand this new consignment to the next owner - it carries the FULL history, including this transition.'
@@ -582,12 +544,8 @@ const manageUi: UiNode[] = [
           {
             type: 'Text',
             value: {
-              helper: 'nextConsignmentUrl',
-              args: [
-                {var: 'consignmentInput'},
-                {var: 'transitionResult'},
-                {var: 'useTransitionBech32'}
-              ]
+              helper: 'nextConsignment',
+              args: [{var: 'consignmentInput'}, {var: 'transitionResult'}]
             },
             style: 'response-block'
           },
@@ -598,12 +556,8 @@ const manageUi: UiNode[] = [
               verb: 'clipboard.copy',
               args: {
                 text: {
-                  helper: 'nextConsignmentUrl',
-                  args: [
-                    {var: 'consignmentInput'},
-                    {var: 'transitionResult'},
-                    {var: 'useTransitionBech32'}
-                  ]
+                  helper: 'nextConsignment',
+                  args: [{var: 'consignmentInput'}, {var: 'transitionResult'}]
                 }
               }
             }
@@ -615,10 +569,10 @@ const manageUi: UiNode[] = [
 ]
 
 const consignmentUrlTemplateOf = (consignmentInput: unknown): string =>
-  parseSealConsignment(consignmentInput)?.urlTemplate ?? ''
+  decodeSealConsignment(consignmentInput)?.urlTemplate ?? ''
 
 const consignmentAmountOf = (consignmentInput: unknown): number =>
-  parseSealConsignment(consignmentInput)?.amountMsat ?? 0
+  decodeSealConsignment(consignmentInput)?.amountMsat ?? 0
 
 const docsUi: UiNode[] = [
   {type: 'Text', value: 'How it works', style: 'subheading'},
@@ -680,15 +634,13 @@ const sealsManifest: AddonManifest = {
     selectedNote: null,
     genesisPlan: null,
     issuedNote: null,
-    useBech32: false,
     consignmentInput: '',
     myAddress: '',
     myResolvedPubkeyHex: '',
     ownerSecretKeyHex: '',
     nextOwnerAddress: '',
     nextOwnerPubkeyHex: '',
-    transitionResult: null,
-    useTransitionBech32: false
+    transitionResult: null
   },
   ui: {
     type: 'View',
@@ -713,7 +665,7 @@ const sealsManifest: AddonManifest = {
 const sealsHelpers: Record<string, AddonHelper> = {
   xOnlyPubkeyHex: xOnlyPubkeyHex as AddonHelper,
   prepareGenesis: prepareGenesis as AddonHelper,
-  issuedConsignmentUrl: issuedConsignmentUrl as AddonHelper,
+  issuedConsignment: issuedConsignment as AddonHelper,
   issuedConsignmentText: issuedConsignmentText as AddonHelper,
   consignmentProblem: consignmentProblem as AddonHelper,
   consignmentValid: consignmentValid as AddonHelper,
@@ -725,7 +677,7 @@ const sealsHelpers: Record<string, AddonHelper> = {
   canTransition: canTransition as AddonHelper,
   consignmentUrlTemplateOf: consignmentUrlTemplateOf as AddonHelper,
   consignmentAmountOf: consignmentAmountOf as AddonHelper,
-  nextConsignmentUrl: nextConsignmentUrl as AddonHelper
+  nextConsignment: nextConsignment as AddonHelper
 }
 
 export const sealsAddon: Addon = {

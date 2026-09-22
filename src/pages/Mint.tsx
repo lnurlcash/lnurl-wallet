@@ -20,6 +20,7 @@ import {
   IoLockClosedSharp,
   IoHelpCircleSharp,
   IoCopySharp,
+  IoSearchSharp,
   IoAtCircleSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
@@ -114,6 +115,7 @@ import RequireWallet from '../components/RequireWallet'
 import Dialog from '../components/Dialog'
 import FiatValue from '../components/FiatValue'
 import AddressDialog from '../components/AddressDialog'
+import RescanDialog from '../components/RescanDialog'
 
 // LUD-21 auto-poll interval, in seconds - both the countdown shown on the
 // button and the cadence of the automatic check
@@ -1036,12 +1038,17 @@ const Mint: Component = () => {
     null
   )
   // which trusted mint's own "@" button opened AddressDialog (LUD-25 Part
-  // 2's cx1 registration and everything that follows from having one -
-  // claim, check notes, unclaim, auto-check - all live in that one dialog
-  // now, see its own top comment) - at most one at a time, same
+  // 2's cx1 registration and managing one - claim, npub, unclaim,
+  // auto-check - see its own top comment) - at most one at a time, same
   // single-flow-at-a-time convention every other mint-card action here
   // follows
   const [addressDialogFor, setAddressDialogFor] = createSignal<string | null>(
+    null
+  )
+  // which trusted mint's own "Rescan" button opened RescanDialog (LUD-25
+  // recovery - see that component's own top comment for why it's a
+  // separate dialog from AddressDialog rather than folded into it)
+  const [rescanDialogFor, setRescanDialogFor] = createSignal<string | null>(
     null
   )
 
@@ -1219,6 +1226,14 @@ const Mint: Component = () => {
           />
         )}
       </Show>
+      <Show when={rescanDialogFor()}>
+        {server => (
+          <RescanDialog
+            server={server()}
+            onClose={() => setRescanDialogFor(null)}
+          />
+        )}
+      </Show>
       <div class="two-columns">
         <div class="two-col">
           <h4>Trusted mints</h4>
@@ -1377,8 +1392,10 @@ const Mint: Component = () => {
                     key to store the resulting bearer - split onto its own
                     row (with labels) since it's a different .btns block,
                     rather than crammed unlabeled among the icon-only row
-                    below. Rescanning this mint's own seed-derived notes
-                    lives in AddressDialog now (opened via the button below) */}
+                    below. Rescanning (with or without a registered address
+                    here) opens RescanDialog; claiming/managing an address
+                    opens AddressDialog - see their own top comments for why
+                    they're two separate dialogs now */}
                       <Show when={state() === 'unlocked'}>
                         <div class="btns">
                           <button
@@ -1390,10 +1407,16 @@ const Mint: Component = () => {
                             Mint
                           </button>
                           <button
-                            class="icon-btn icon-btn-gap"
+                            title="Rescan this mint for missing notes (LUD-25)"
+                            onClick={() => setRescanDialogFor(mint.server)}
+                          >
+                            <IoSearchSharp />
+                            &nbsp;Rescan
+                          </button>
+                          <button
                             title={
                               registered()
-                                ? `Manage ${registered()!.username}@${serverOf(mint.server)} - check notes, unclaim, auto-check`
+                                ? `Manage ${registered()!.username}@${serverOf(mint.server)} - npub, unclaim, auto-check`
                                 : 'Claim a username@mint address here (LUD-25)'
                             }
                             onClick={() => setAddressDialogFor(mint.server)}

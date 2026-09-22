@@ -1,16 +1,11 @@
 import type {Component, JSX} from 'solid-js'
-import {Show, onCleanup, onMount} from 'solid-js'
+import {onCleanup, onMount} from 'solid-js'
 import {Portal} from 'solid-js/web'
 import {IoCloseSharp} from 'solid-icons/io'
 
 export type DialogProps = {
   onClose: () => void
   children: JSX.Element
-  // hides the top-right X button while leaving every other way to close
-  // (Escape, clicking the backdrop) intact - for a dialog whose own content
-  // already crowds that corner, or that wants closing to only ever be
-  // explicit/backdrop-driven
-  hideCloseButton?: boolean
 }
 
 // shared modal chrome (backdrop + panel + top-right close button) for every
@@ -38,16 +33,14 @@ const Dialog: Component<DialogProps> = props => {
           // land inside the panel itself
           onClick={e => e.stopPropagation()}
         >
-          <Show when={!props.hideCloseButton}>
-            <button
-              type="button"
-              class="icon-btn dialog-close-btn"
-              title="Close"
-              onClick={() => props.onClose()}
-            >
-              <IoCloseSharp />
-            </button>
-          </Show>
+          <button
+            type="button"
+            class="icon-btn dialog-close-btn"
+            title="Close"
+            onClick={() => props.onClose()}
+          >
+            <IoCloseSharp />
+          </button>
           {props.children}
         </div>
       </div>

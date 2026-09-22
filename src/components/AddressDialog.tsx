@@ -1,44 +1,29 @@
 import type {Component} from 'solid-js'
 import {Show, createMemo, createSignal} from 'solid-js'
-import {For} from 'solid-js'
 import {
   IoAtCircleSharp,
   IoRefreshSharp,
-  IoSearchSharp,
   IoTrashSharp,
-  IoTimeSharp,
   IoCopySharp
 } from 'solid-icons/io'
 
 import Dialog from './Dialog'
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
-import {notify, NotifyKind, copyToClipboard, msatToSats} from '../helpers'
+import {notify, NotifyKind, copyToClipboard} from '../helpers'
 import {
   serverOf,
   encodeCx1,
   registerUsername,
   unregisterUsername
 } from '../lnurlcash'
-import {
-  cashAddressBranch,
-  cashAddressSecretAtIndex,
-  hasCashRoot,
-  mergeCashAddressSecretIndices
-} from '../cashSecrets'
+import {cashAddressBranch, cashAddressSecretAtIndex} from '../cashSecrets'
 import {
   registeredAddresses,
   addRegisteredAddress,
   removeRegisteredAddress,
-  setAddressAutoScan,
-  ADDRESS_SCAN_OPTIONS,
-  ADDRESS_SCAN_LABEL,
-  type RegisteredAddress,
-  type AddressScanMinutes
+  type RegisteredAddress
 } from '../addressRegistry'
-import {runAddressScan} from '../addressRecovery'
-import {scanMintForNotes} from '../recovery'
-import {requestNotificationPermission} from '../notifications'
 import {isValidNpub} from '../nostrAddress'
 
 export type AddressDialogProps = {
@@ -47,14 +32,18 @@ export type AddressDialogProps = {
 }
 
 // LUD-25 Part 2's cx1 registration (see 25.md's Seed & derivation) AND
-// everything that follows from having one - checking for new notes,
-// unclaiming, auto-check - scoped to one mint at a time and opened from
-// that mint's own "@" button on the Mint page (formerly split across
-// several buttons crammed directly onto the trusted-mint card - moved in
-// here so the card stays readable regardless of how much a registered
-// address grows).
+// managing an already-claimed one - npub, unclaiming - scoped to one mint
+// at a time and opened from that mint's own "@" button on the Mint page.
+// Address IDENTITY only: checking for new notes, and the auto-check
+// scheduler that triggers that automatically, both live in the sibling
+// RescanDialog now, opened from its own button - the two used to be
+// crammed into this one dialog, which made "is there anything to scan
+// here" depend on whether this wallet happened to have claimed a
+// username, when in truth a rescan is exactly as meaningful (and exactly
+// the same seed-derived branch, see cashSecrets.ts's cashAddressBranch)
+// with or without one.
 const AddressDialog: Component<AddressDialogProps> = props => {
-  const {state, bearers, addBearer, logActivity} = useWallet()
+  const {state} = useWallet()
   const registered = createMemo(() =>
     registeredAddresses().find(a => a.server === props.server)
   )
@@ -115,112 +104,6 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   // ---- manage (already registered) ----
   const [busy, setBusy] = createSignal(false)
   const [confirmUnclaim, setConfirmUnclaim] = createSignal(false)
-  const [showAutoCheck, setShowAutoCheck] = createSignal(false)
-
-  // what the most recent Check notes/Full rescan pass (this dialog
-  // session only - not persisted) actually saw: where it started walking
-  // forward from, and SERVICE's own advertised next-index hint at that
-  // moment. Shown alongside addr().nextScanIndex (this device's own
-  // persisted floor, always available with no scan needed) so a holder can
-  // see all three numbers - SERVICE's, this device's, and where the last
-  // pass actually started - side by side rather than having to trust any
-  // one of them blindly (see resolveScanStartIndex's own doc comment for
-  // why the SERVICE hint alone is never enough).
-  const [lastCheck, setLastCheck] = createSignal<{
-    checkedFrom: number
-    serviceHint: number | null
-  } | null>(null)
-
-  // "Check notes"/"Full rescan" - the same split TODO.md asked for: "check
-  // notes" resumes from wherever this address's own nextScanIndex (or
-  // SERVICE's own metadata hint) left off, "full rescan" always re-walks
-  // from 0. Deliberately NOT called "rescan all" here - that name is
-  // already taken by the page-level bulk action above (refresh/rescan
-  // every trusted mint at once), and reusing it on a per-address action
-  // read as a confusing duplicate of that button.
-  const checkNotes = async (mode: 'incremental' | 'all') => {
-    const addr = registered()
-    if (!addr || busy()) return
-    setBusy(true)
-    try {
-      const result = await runAddressScan(
-        addr.server,
-        addr.username,
-        bearers(),
-        {addBearer, logActivity},
-        {startIndex: mode === 'incremental' ? (addr.nextScanIndex ?? 0) : 0}
-      )
-      setLastCheck({
-        checkedFrom: result.checkedFrom,
-        serviceHint: result.serviceHint
-      })
-      if (result.error) {
-        notify(result.error, NotifyKind.ERROR)
-      } else {
-        const total = result.recovered.reduce((sum, n) => sum + n.amount, 0)
-        notify(
-          result.recovered.length > 0
-            ? `Found ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(total)} sats).`
-            : 'No new notes found.',
-          NotifyKind.SUCCESS
-        )
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // ---- mint-bearer rescan (LUD-25 recovery scoped to this mint's own
-  // fixed identity - see recovery.ts's scanMintForNotes) - moved in here
-  // from Mint.tsx's own per-mint card, since it's the same "re-derive and
-  // check every index" operation as Check notes/Full rescan above, just
-  // against this wallet's own directly-minted notes here rather than a
-  // registered username's. Shown regardless of whether an address is
-  // claimed at this mint - it has nothing to do with registration.
-  const [mintRescanBusy, setMintRescanBusy] = createSignal(false)
-  const [mintRescanIndex, setMintRescanIndex] = createSignal(0)
-
-  const rescanMintBearerNotes = async () => {
-    if (mintRescanBusy()) return
-    setMintRescanBusy(true)
-    setMintRescanIndex(0)
-    try {
-      // scanMintForNotes resolves input the same narrow way resolveMintInput
-      // does (bech32/Lightning Address/bare domain) - props.server is the
-      // full https://... origin (see serviceOriginOf), which that parser
-      // rejects outright, so this needs the bare host serverOf() strips it
-      // down to
-      const result = await scanMintForNotes(
-        serverOf(props.server),
-        index => setMintRescanIndex(index),
-        bearers()
-      )
-      for (const note of result.recovered) {
-        await addBearer(note)
-        logActivity(
-          'recovered',
-          `Recovered ${msatToSats(note.amount)} sats from ${result.server} while rescanning.`
-        )
-      }
-      if (result.highestUsedIndex !== null) {
-        mergeCashAddressSecretIndices({
-          [result.server]: result.highestUsedIndex + 1
-        })
-      }
-      if (result.error) {
-        notify(result.error, NotifyKind.ERROR)
-      } else {
-        notify(
-          result.recovered.length > 0
-            ? `Recovered ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(result.recovered.reduce((sum, n) => sum + n.amount, 0))} sats).`
-            : 'No missing notes found at this mint.',
-          NotifyKind.SUCCESS
-        )
-      }
-    } finally {
-      setMintRescanBusy(false)
-    }
-  }
 
   const unclaim = async (addr: RegisteredAddress) => {
     const proofKey = cashAddressSecretAtIndex(addr.server, 0)
@@ -248,20 +131,8 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     }
   }
 
-  // enabling auto-check is the one user gesture this feature has to hang
-  // a Notification permission prompt off of (TODO.md) - most browsers
-  // silently drop a request made outside a direct gesture, so this can't
-  // wait until the first scan actually finds something
-  const setAutoCheck = (
-    addr: RegisteredAddress,
-    minutes: AddressScanMinutes
-  ) => {
-    setAddressAutoScan(addr.server, addr.username, minutes)
-    if (minutes > 0) void requestNotificationPermission()
-  }
-
   return (
-    <Dialog onClose={props.onClose} hideCloseButton>
+    <Dialog onClose={props.onClose}>
       <Show
         when={registered()}
         fallback={
@@ -337,71 +208,6 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
-            <p class="bearer-hint">
-              Last index this device checked: {addr().nextScanIndex ?? 0}
-              <Show when={lastCheck()}>
-                {info => (
-                  <>
-                    {' '}
-                    · started this pass from {info().checkedFrom} · mint's
-                    suggested next index:{' '}
-                    {info().serviceHint ?? 'not advertised'}
-                  </>
-                )}
-              </Show>
-            </p>
-            <div class="btns">
-              <button
-                disabled={offlineMode() || !hasCashRoot() || busy()}
-                title={
-                  offlineMode()
-                    ? 'Offline mode is on'
-                    : `Check ${addr().username}@${serverOf(addr().server)} for new notes, resuming from where the last check left off`
-                }
-                onClick={() => checkNotes('incremental')}
-              >
-                <Show when={busy()} fallback={<IoSearchSharp />}>
-                  <IoRefreshSharp class="spin" />
-                </Show>
-                &nbsp;Check notes
-              </button>
-              <button
-                class="icon-btn icon-btn-gap"
-                disabled={offlineMode() || !hasCashRoot() || busy()}
-                title="Full rescan - re-walk every index from 0, ignoring what's already been checked"
-                onClick={() => checkNotes('all')}
-              >
-                <IoRefreshSharp />
-                &nbsp;Full rescan
-              </button>
-              <button
-                class="icon-btn icon-btn-gap"
-                classList={{active: showAutoCheck()}}
-                disabled={busy()}
-                title="Auto-check on a timer"
-                onClick={() => setShowAutoCheck(v => !v)}
-              >
-                <IoTimeSharp />
-              </button>
-            </div>
-            <Show when={showAutoCheck()}>
-              <p class="bearer-label">Auto-check every</p>
-              <div class="btns">
-                <For each={ADDRESS_SCAN_OPTIONS}>
-                  {option => (
-                    <button
-                      type="button"
-                      classList={{
-                        active: (addr().autoScanMinutes ?? 0) === option
-                      }}
-                      onClick={() => setAutoCheck(addr(), option)}
-                    >
-                      {ADDRESS_SCAN_LABEL[option]}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
             <Show
               when={confirmUnclaim()}
               fallback={
@@ -413,9 +219,6 @@ const AddressDialog: Component<AddressDialogProps> = props => {
                   >
                     <IoTrashSharp />
                     &nbsp;Unclaim
-                  </button>
-                  <button disabled={busy()} onClick={props.onClose}>
-                    Close
                   </button>
                 </div>
               }
@@ -445,36 +248,6 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             </Show>
           </>
         )}
-      </Show>
-      <hr />
-      <p class="bearer-label">
-        This mint's own bearer notes ({serverOf(props.server)})
-      </p>
-      <p class="bearer-hint">
-        Notes this wallet minted/rotated/split/merged directly here (not tied to
-        a registered username) - lost locally on this device, a sync gap, or
-        after a seed restore.
-      </p>
-      <div class="btns">
-        <button
-          disabled={offlineMode() || !hasCashRoot() || mintRescanBusy()}
-          title={
-            offlineMode()
-              ? 'Offline mode is on'
-              : !hasCashRoot()
-                ? 'No seed loaded for this wallet - restore your seed again first'
-                : 'Rescan this mint for seed-derived notes missing from this wallet (LUD-25)'
-          }
-          onClick={rescanMintBearerNotes}
-        >
-          <Show when={mintRescanBusy()} fallback={<IoSearchSharp />}>
-            <IoRefreshSharp class="spin" />
-          </Show>
-          &nbsp;Rescan
-        </button>
-      </div>
-      <Show when={mintRescanBusy()}>
-        <p class="bearer-hint">checking index {mintRescanIndex()}...</p>
       </Show>
     </Dialog>
   )
