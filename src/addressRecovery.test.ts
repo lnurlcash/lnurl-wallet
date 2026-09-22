@@ -181,7 +181,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(5)
   })
 
-  it('opts.startIndex skips indices below it, even ones that are live', async () => {
+  it('checkBehind still finds a live note below opts.startIndex (the safety-net window)', async () => {
     vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
@@ -189,8 +189,22 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
       [],
       {startIndex: 1}
     )
+    expect(result.recovered).toHaveLength(1)
+    expect(result.highestIndex).toBe(0)
+  })
+
+  it('a note beyond the checkBehind window is not found by a nonzero startIndex alone', async () => {
+    // gapLimit(). default 20 - a note far enough below startIndex to fall
+    // outside the checkBehind window is genuinely not covered by this pass
+    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 100}
+    )
     expect(result.recovered).toHaveLength(0)
-    expect(result.nextScanIndex).toBe(1)
+    expect(result.nextScanIndex).toBe(100)
   })
 
   it("never lets SERVICE's own text/xpub metadata hint skip a fresh device's unscanned floor", async () => {

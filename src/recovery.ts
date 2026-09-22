@@ -121,12 +121,18 @@ export const scanMintForNotes = async (
     // back whatever was confirmed before the error (see the catch below)
     await scanForAddressNotes(withdrawLink, branch, {
       gapLimit: gapLimit(),
+      // re-verifies gapLimit indices below the start floor too - a no-op
+      // today (this scan always starts at 0, so there is nothing behind it
+      // to check), but keeps this in lockstep with addressRecovery.ts's
+      // scanRegisteredAddress if a resume floor is ever added here too -
+      // see scanForAddressNotes' own doc comment
+      checkBehind: true,
       onProgress,
       onSpent: index => {
-        highestUsedIndex = index
+        highestUsedIndex = Math.max(highestUsedIndex ?? -1, index)
       },
       onFound: result => {
-        highestUsedIndex = result.index
+        highestUsedIndex = Math.max(highestUsedIndex ?? -1, result.index)
         const secretKey = cashAddressSecretAtIndex(server, result.index)
         // the cash root can only disappear mid-scan if the wallet locked
         // while it was running - skip rather than crash; a re-scan once

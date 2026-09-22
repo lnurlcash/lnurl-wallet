@@ -315,6 +315,89 @@ describe('scanForAddressNotes', () => {
       })
     ).rejects.toThrow()
   })
+
+  // fetch stub whose /w answers cp1-pubkey lookups for a fixed set of
+  // "live" indices on `branch` - reused by every checkBehind case below
+  const fakeMintWithLiveIndices = (liveIndices: number[]) => {
+    const live = new Set(liveIndices)
+    return vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      const p = request.searchParams.get('p')!
+      for (const i of live) {
+        if (p === encodeCp1(pubkeyAt(i))) {
+          return {
+            json: async () => ({
+              tag: 'withdrawRequest',
+              callback: 'https://mint.example.com/w/cb',
+              minWithdrawable: 1000,
+              maxWithdrawable: 1000,
+              mintPubkey: MINT_KEY
+            })
+          } as Response
+        }
+      }
+      return {
+        json: async () => ({status: 'ERROR', reason: 'Unknown note.'})
+      } as Response
+    })
+  }
+
+  it('checkBehind finds a live note below startIndex the forward walk alone would never reach', async () => {
+    // the note that would have been missed by the addressRecovery.ts
+    // regression this guards against: startIndex is past it, and the
+    // forward walk from there never looks back
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([0]))
+    const results = await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      {gapLimit: 5, startIndex: 3, checkBehind: true}
+    )
+    expect(results.map(r => r.index)).toEqual([0])
+  })
+
+  it('checkBehind checks the full gapLimit-sized window even past a run of unknowns', async () => {
+    // live at 0 only, startIndex 10, gapLimit 5 - the window is [5, 9], so
+    // this must NOT find it (0 is out of the window) but must still probe
+    // every index down to 5 without stopping early on the unknowns
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([0, 6]))
+    const probed: number[] = []
+    const results = await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      {
+        gapLimit: 5,
+        startIndex: 10,
+        checkBehind: true,
+        onProgress: index => probed.push(index)
+      }
+    )
+    expect(results.map(r => r.index).sort((a, b) => a - b)).toEqual([6])
+    expect(probed.filter(i => i < 10).sort((a, b) => a - b)).toEqual([
+      5, 6, 7, 8, 9
+    ])
+  })
+
+  it('checkBehind clamps its window at 0 and never probes a negative index', async () => {
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
+    const probed: number[] = []
+    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
+      gapLimit: 5,
+      startIndex: 2,
+      checkBehind: true,
+      onProgress: index => probed.push(index)
+    })
+    expect(Math.min(...probed)).toBe(0)
+  })
+
+  it('omitting checkBehind never probes anything below startIndex', async () => {
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([0]))
+    const results = await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      {gapLimit: 5, startIndex: 3}
+    )
+    expect(results).toEqual([])
+  })
 })
 
 describe('resolveScanStartIndex', () => {

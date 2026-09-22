@@ -35,14 +35,25 @@ export type AddressScanOutcome = {
   // nextScanIndex, which tracks that across calls even when this one finds
   // nothing new)
   highestIndex: number | null
+  // the index this pass actually started its forward walk from (after
+  // resolveScanStartIndex reconciled the caller's own floor against
+  // SERVICE's hint) - what checkBehind's window sits just below. Purely
+  // informational (a caller display value), never fed back into a later
+  // call the way nextScanIndex is.
+  checkedFrom: number
+  // SERVICE's own advertised next-unused-index hint for this pass (LUD-25
+  // Part 2's text/xpub metadata, see mintRequest.ts's
+  // PayRequestInfo.internalTransfer) - null when SERVICE didn't advertise
+  // one, or this pass never got far enough to learn it. Purely
+  // informational: resolveScanStartIndex already decided how (or whether)
+  // to use it: never trust this alone as "already recovered."
+  serviceHint: number | null
   // resume floor for the NEXT incremental "check notes" pass, as opposed
   // to a full "rescan all" (startIndex: 0) - the higher of: whatever floor
   // the caller already passed in (never regresses below what's already
-  // been checked), this scan's own highest found index + 1, and SERVICE's
-  // own advertised next-index hint (LUD-25 Part 2's text/xpub metadata,
-  // see mintRequest.ts's PayRequestInfo.internalTransfer). Always present,
-  // even on an error before any of that was learned, so a caller can feed
-  // it straight back into addressRegistry.ts's markAddressScanned
+  // been checked) and this scan's own highest found index + 1. Always
+  // present, even on an error before any of that was learned, so a caller
+  // can feed it straight back into addressRegistry.ts's markAddressScanned
   // unconditionally
   nextScanIndex: number
   error?: string
@@ -62,6 +73,8 @@ export const scanRegisteredAddress = async (
       username,
       recovered: [],
       highestIndex: null,
+      checkedFrom: startFloor,
+      serviceHint: null,
       nextScanIndex: startFloor,
       error:
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
@@ -77,6 +90,8 @@ export const scanRegisteredAddress = async (
       username,
       recovered: [],
       highestIndex: null,
+      checkedFrom: startFloor,
+      serviceHint: null,
       nextScanIndex: startFloor,
       error: 'Not a valid mint address.'
     }
@@ -88,6 +103,8 @@ export const scanRegisteredAddress = async (
       username,
       recovered: [],
       highestIndex: null,
+      checkedFrom: startFloor,
+      serviceHint: null,
       nextScanIndex: startFloor,
       error: 'Not a recognizable mint address.'
     }
@@ -95,6 +112,7 @@ export const scanRegisteredAddress = async (
 
   let withdrawUrl: string
   let startIndex = startFloor
+  let serviceHint: number | null = null
   try {
     const info = await fetchPayRequest(payUrl)
     if (!info.withdrawLink) {
@@ -103,25 +121,27 @@ export const scanRegisteredAddress = async (
         username,
         recovered: [],
         highestIndex: null,
+        checkedFrom: startFloor,
+        serviceHint: null,
         nextScanIndex: startFloor,
         error: 'This mint does not advertise LNURLcash minting.'
       }
     }
     withdrawUrl = fromLud17(info.withdrawLink)
+    serviceHint = info.internalTransfer?.startIndex ?? null
     // see resolveScanStartIndex's own doc comment (src/lib/addresses.ts) for
     // why this must never trust SERVICE's hint to skip a fresh scan (or an
     // explicit "full rescan", which always calls this with startIndex: 0)
     // past index 0 - the regression this guards against is documented there
-    startIndex = resolveScanStartIndex(
-      startFloor,
-      info.internalTransfer?.startIndex
-    )
+    startIndex = resolveScanStartIndex(startFloor, serviceHint ?? undefined)
   } catch (err) {
     return {
       server,
       username,
       recovered: [],
       highestIndex: null,
+      checkedFrom: startFloor,
+      serviceHint: null,
       nextScanIndex: startFloor,
       error: (err as Error).message
     }
@@ -133,8 +153,13 @@ export const scanRegisteredAddress = async (
     const results = await scanForAddressNotes(withdrawUrl, branch, {
       gapLimit: gapLimit(),
       startIndex,
+      // re-verifies gapLimit indices below startIndex too, every pass - the
+      // safety net that catches startIndex itself being wrong (a stale
+      // local floor, or a SERVICE hint that outran actual settlement) even
+      // when it is - see scanForAddressNotes' own doc comment
+      checkBehind: true,
       onFound: result => {
-        highestIndex = result.index
+        highestIndex = Math.max(highestIndex ?? -1, result.index)
       }
     })
     for (const result of results) {
@@ -174,6 +199,8 @@ export const scanRegisteredAddress = async (
       username,
       recovered,
       highestIndex,
+      checkedFrom: startIndex,
+      serviceHint,
       nextScanIndex: Math.max(startIndex, (highestIndex ?? -1) + 1),
       error: (err as Error).message
     }
@@ -183,6 +210,8 @@ export const scanRegisteredAddress = async (
     server,
     username,
     recovered,
+    checkedFrom: startIndex,
+    serviceHint,
     highestIndex,
     nextScanIndex: Math.max(startIndex, (highestIndex ?? -1) + 1)
   }

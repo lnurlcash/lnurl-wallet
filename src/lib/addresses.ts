@@ -122,6 +122,18 @@ export type AddressScanOptions = {
   // consecutive indices come back unknown
   gapLimit?: number
   startIndex?: number
+  // also re-checks up to `gapLimit` indices immediately BELOW startIndex
+  // (down to 0) before the ordinary forward walk - a fixed-size safety net
+  // that re-verifies the exact range startIndex claims is already covered,
+  // rather than only ever trusting it. Unlike the forward walk, this never
+  // stops early on a run of unknowns (there is nothing to "give up" on -
+  // it's a bounded, already-sized window, not an open-ended search), so it
+  // always checks the full window. See resolveScanStartIndex's own doc
+  // comment for the concrete regression this guards against: startIndex
+  // itself can be wrong (a stale local floor, or a SERVICE hint that
+  // reserved-but-never-settled invoices inflated), and this is the check
+  // that catches it even when it is.
+  checkBehind?: boolean
   // called as each note is found, so a caller can surface progress (or
   // start acting on a note) without waiting for the whole scan to finish
   onFound?: (result: AddressScanResult) => void
@@ -163,51 +175,68 @@ export const scanForAddressNotes = async (
   const gapLimit = opts.gapLimit ?? DEFAULT_GAP_LIMIT
   const backoffMs = opts.rateLimitBackoffMs ?? DEFAULT_RATE_LIMIT_BACKOFF_MS
   const found: AddressScanResult[] = []
-  let consecutiveUnknown = 0
-  let index = opts.startIndex ?? 0
+  const startIndex = opts.startIndex ?? 0
 
-  while (consecutiveUnknown < gapLimit) {
-    opts.onProgress?.(index)
-    const pubkey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index)
-    const cp1 = encodeCp1(pubkey)
-    try {
-      const info = await fetchNoteInfoByPubkey(withdrawUrl, cp1)
-      const result: AddressScanResult = {index, cp1, info}
-      found.push(result)
-      opts.onFound?.(result)
-      consecutiveUnknown = 0
-      index++
-    } catch (err) {
-      if (isRateLimited(err)) {
-        await new Promise(resolve => setTimeout(resolve, backoffMs))
-        continue // same index, does not count toward the gap limit
+  // probes a single index, transparently retrying through rate limits -
+  // shared by both the backward safety-net window and the ordinary forward
+  // walk below so the two report through the exact same onProgress/onFound/
+  // onSpent callbacks and a caller can't tell which pass found what
+  const probeOnce = async (
+    index: number
+  ): Promise<'found' | 'unknown' | 'spent'> => {
+    for (;;) {
+      opts.onProgress?.(index)
+      const pubkey = deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        index
+      )
+      const cp1 = encodeCp1(pubkey)
+      try {
+        const info = await fetchNoteInfoByPubkey(withdrawUrl, cp1)
+        const result: AddressScanResult = {index, cp1, info}
+        found.push(result)
+        opts.onFound?.(result)
+        return 'found'
+      } catch (err) {
+        if (isRateLimited(err)) {
+          await new Promise(resolve => setTimeout(resolve, backoffMs))
+          continue // same index, does not count toward the gap limit
+        }
+        if (err instanceof NoteUnknownError) return 'unknown'
+        // an already-spent index is still proof this branch is in active
+        // use (the mint DID mint something there at some point) - unlike an
+        // unknown index, it must reset the forward walk's gap counter
+        // rather than count toward it
+        if (err instanceof NoteSpentError) {
+          opts.onSpent?.(index)
+          return 'spent'
+        }
+        // anything else (transport failure, malformed response) is no
+        // evidence either way - unlike an explicit "unknown note" verdict,
+        // this must NOT count toward the gap limit and stop the scan
+        // early: that would risk permanently missing a real note past a
+        // transient blip. Surface it and let the caller resume the scan
+        // later (e.g. from `index`, via startIndex) instead of silently
+        // truncating.
+        throw classifyNoteError(err as Error)
       }
-      if (err instanceof NoteUnknownError) {
-        consecutiveUnknown++
-        index++
-        continue
-      }
-      // an already-spent index is still proof this branch is in active
-      // use (the mint DID mint something there at some point) - unlike an
-      // unknown index, it must reset the gap counter rather than count
-      // toward it, and it must never abort the scan the way a genuine
-      // transport/protocol error below does: an earlier note this holder
-      // already received and spent must not hide a later, still-unspent
-      // one sitting at a higher index right behind it.
-      if (err instanceof NoteSpentError) {
-        opts.onSpent?.(index)
-        consecutiveUnknown = 0
-        index++
-        continue
-      }
-      // anything else (transport failure, malformed response) is no
-      // evidence either way - unlike an explicit "unknown note" verdict,
-      // this must NOT count toward the gap limit and stop the scan early:
-      // that would risk permanently missing a real note past a transient
-      // blip. Surface it and let the caller resume the scan later (e.g.
-      // from `index`, via startIndex) instead of silently truncating.
-      throw classifyNoteError(err as Error)
     }
+  }
+
+  if (opts.checkBehind) {
+    const behindFloor = Math.max(0, startIndex - gapLimit)
+    for (let index = startIndex - 1; index >= behindFloor; index--) {
+      await probeOnce(index)
+    }
+  }
+
+  let consecutiveUnknown = 0
+  let index = startIndex
+  while (consecutiveUnknown < gapLimit) {
+    const outcome = await probeOnce(index)
+    consecutiveUnknown = outcome === 'unknown' ? consecutiveUnknown + 1 : 0
+    index++
   }
   return found
 }

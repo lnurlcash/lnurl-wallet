@@ -35,9 +35,18 @@ export const requestNotificationPermission = async (): Promise<boolean> => {
 }
 
 // never throws - a Notification construction can still fail per-platform
-// (e.g. some mobile browsers require a service-worker registration even
-// for a foreground notification) and this is always best-effort; the
-// caller's own toast is the guaranteed feedback path, this is a bonus
+// and this is always best-effort; the caller's own toast is the guaranteed
+// feedback path, this is a bonus. The specific failure this exists for:
+// `new Notification(...)` throws "Illegal constructor" on Android Chrome
+// (and other mobile browsers) the moment a service worker controls the
+// page - which this app's PWA build always does once installed (see
+// vite.config.ts's VitePWA) - and silently swallowing that (the previous
+// behavior here) meant AddressAutoScanner's notifications simply never
+// appeared on a PWA at all, permission grant and everything else working
+// correctly. The platform's own required fix is
+// ServiceWorkerRegistration.showNotification() instead - fired here as a
+// fallback, fire-and-forget (this function stays sync/void; nothing
+// downstream needs to know which path actually delivered it).
 export const sendNotification = (
   title: string,
   options?: NotificationOptions
@@ -46,6 +55,15 @@ export const sendNotification = (
   try {
     new Notification(title, options)
   } catch {
-    // best-effort only - see top comment
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.serviceWorker?.ready !== undefined
+    ) {
+      navigator.serviceWorker.ready
+        .then(registration => registration.showNotification(title, options))
+        .catch(() => {
+          // still best-effort only - see top comment
+        })
+    }
   }
 }
