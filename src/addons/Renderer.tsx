@@ -298,7 +298,13 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
           <label class="addon-field">
             <Show when={node.label}>{node.label}</Show>
             <input
-              type={node.kind === 'number' ? 'number' : 'text'}
+              type={
+                node.kind === 'number'
+                  ? 'number'
+                  : node.kind === 'datetime'
+                    ? 'datetime-local'
+                    : 'text'
+              }
               value={readRaw() == null ? '' : String(readRaw())}
               onInput={e => {
                 const v = e.currentTarget.value
