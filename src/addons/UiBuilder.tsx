@@ -576,11 +576,10 @@ const NodeInspector: Component<NodeInspectorProps> = props => {
         const n = () => node() as Extract<UiNode, {type: 'Button'}>
         return (
           <>
-            <label>Label</label>
-            <input
-              type="text"
-              value={n().label}
-              onInput={e => update({...n(), label: e.currentTarget.value})}
+            <ExprEditor
+              label="Label"
+              expr={n().label}
+              onChange={label => update({...n(), label})}
             />
             <label>On click</label>
             <ActionEditor

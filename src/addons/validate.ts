@@ -142,8 +142,10 @@ const isUiNode = (v: unknown, path: string): string | null => {
     case 'NotePicker':
       return typeof v.bind === 'string' ? null : `${path}.bind must be a string`
     case 'Button':
-      if (typeof v.label !== 'string') return `${path}.label must be a string`
-      return isAction(v.onClick, `${path}.onClick`)
+      return (
+        isExpr(v.label, `${path}.label`) ??
+        isAction(v.onClick, `${path}.onClick`)
+      )
     case 'For':
       return (
         isExpr(v.each, `${path}.each`) ??

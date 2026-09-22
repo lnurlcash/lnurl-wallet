@@ -30,6 +30,7 @@ import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
 import {parseBetReceipt, buildRedeemCw1} from './betlocker/betlock'
 import {
+  fetchOraclePubkey,
   fetchOracleEvents,
   fetchOracleAnnouncement,
   fetchOracleAttestation
@@ -265,10 +266,19 @@ export const VERBS: Record<string, VerbHandler> = {
     if (!receipt) {
       throw new Error('Not a valid bet receipt.')
     }
-    const cw1 = buildRedeemCw1(receipt, {
-      outcome: String(args.outcome ?? '').trim(),
-      signatureHex: String(args.signatureHex ?? '').trim()
-    })
+    // only meaningful (and only ever required) when the receipt itself
+    // names a counterparty - buildRedeemCw1 enforces that, this verb never
+    // second-guesses it. Never logged, never sent anywhere but into the
+    // local signing call below.
+    const redeemerSecretKeyHex = String(args.redeemerSecretKeyHex ?? '').trim()
+    const cw1 = buildRedeemCw1(
+      receipt,
+      {
+        outcome: String(args.outcome ?? '').trim(),
+        signatureHex: String(args.signatureHex ?? '').trim()
+      },
+      redeemerSecretKeyHex || undefined
+    )
     const outputKeyHex = outputKeyOfCw1(cw1)
     if (!outputKeyHex) {
       throw new Error(
@@ -420,13 +430,19 @@ export const VERBS: Record<string, VerbHandler> = {
     return {url, body}
   },
 
-  // Betlocker's own "browse a real oracle" trio - read-only GETs against a
-  // DLC oracle service's public REST API (oracleClient.ts), same posture
-  // as lnurl.fetch just above: no note/secret/wallet-state access, never
-  // mutates anything the oracle tracks, just asks it what it published.
-  // Deliberately NOT available to the sibling `dlc` Playground addon - see
-  // its manifest's own top comment on why permissions: [] there is
-  // load-bearing.
+  // Betlocker's own "browse a real oracle" verbs - read-only GETs against
+  // a DLC oracle service's public REST API (oracleClient.ts), same
+  // posture as lnurl.fetch just above: no note/secret/wallet-state
+  // access, never mutates anything the oracle tracks, just asks it what
+  // it published. Deliberately NOT available to the sibling `dlc`
+  // Playground addon - see its manifest's own top comment on why
+  // permissions: [] there is load-bearing.
+  'oracle.fetchPubkey': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    if (!baseUrl) throw new Error("Enter the oracle's URL first.")
+    return fetchOraclePubkey(baseUrl)
+  },
+
   'oracle.fetchEvents': async args => {
     const baseUrl = String(args.baseUrl ?? '').trim()
     if (!baseUrl) throw new Error("Enter the oracle's URL first.")

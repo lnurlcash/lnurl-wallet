@@ -26,6 +26,13 @@ import {
   verifyScriptPath,
   type ScriptTemplateId
 } from './taproot'
+import {attest} from '../dlc/dlc'
+import {
+  planBet,
+  betReceiptUrl,
+  parseBetReceipt,
+  buildRedeemCw1
+} from '../betlocker/betlock'
 
 const AMOUNT_MSAT = 20_000_000
 const LOCK = 1_800_000_000
@@ -198,11 +205,133 @@ const buildVector = (c: Case) => {
   }
 }
 
+// Betlocker's own counterparty-bound leaf (optional pubkey binding - see
+// betlock.ts's own top comment) - a multisig2 leaf built the same way the
+// generic CASES above are, but through betlock.ts's REAL functions
+// (planBet -> betReceiptUrl -> parseBetReceipt -> buildRedeemCw1) end to
+// end, not the low-level template directly, so this actually exercises
+// this addon's own witness-ordering wiring, not just multisig2 the
+// template in isolation (already covered by the 'multisig2' case above).
+const asKeypair = (secretKeyHex: string) => ({
+  secretKeyHex,
+  pubkeyHex: bytesToHex(schnorr.getPublicKey(hexToBytes(secretKeyHex)))
+})
+
+const buildBetlockerCounterpartyVector = () => {
+  // fixed, deterministic keys (same convention as internalSk/ownerSk/
+  // otherSk above) - a reproducible, reviewable committed fixture, not a
+  // fresh random vector on every regeneration
+  const oracle = asKeypair('44'.repeat(32))
+  const nonce = asKeypair('55'.repeat(32))
+  const counterparty = asKeypair('66'.repeat(32))
+  const outcomes = ['yes', 'no']
+
+  // a fixed, far-future, UTC-suffixed date string - dateToLocktime just
+  // needs anything Date-parseable, and the explicit 'Z' keeps this
+  // reproducible regardless of the test runner's own local timezone
+  // (unlike a real <input type="datetime-local"> value, which never has
+  // one - fine here, since only the resulting unix time matters)
+  const plan = planBet(
+    oracle.pubkeyHex,
+    nonce.pubkeyHex,
+    outcomes,
+    AMOUNT_MSAT,
+    '2030-01-01T00:00:00Z',
+    undefined,
+    undefined,
+    counterparty.pubkeyHex
+  )
+  const lockedNote = {
+    urlTemplate: 'https://mint.example.com/w',
+    amountMsat: AMOUNT_MSAT,
+    signature: 'deadbeef'.repeat(16),
+    groupPubkeyHex: plan.outputKeyHex
+  }
+  const receiptUrl = betReceiptUrl(lockedNote, plan)!
+  const receipt = parseBetReceipt(receiptUrl)!
+  expect(receipt.counterpartyPubkeyHex).toBe(counterparty.pubkeyHex)
+
+  const attestation = attest(oracle.secretKeyHex, nonce.secretKeyHex, 'yes')
+  const cw1 = buildRedeemCw1(receipt, attestation, counterparty.secretKeyHex)
+  const decoded = decodeCw1(cw1)!
+  expect(decoded.witness).toHaveLength(2) // both signatures present
+
+  return {
+    name: 'betlocker-counterparty-multisig2',
+    ct1: encodeCt1(hexToBytes(plan.outputKeyHex)),
+    output_key: plan.outputKeyHex,
+    amount_msat: AMOUNT_MSAT,
+    leaf_script: bytesToHex(decoded.script),
+    control_block: bytesToHex(decoded.controlBlock),
+    witness: decoded.witness.map(bytesToHex),
+    locktime: decoded.locktime,
+    sequence: decoded.sequence,
+    cw1,
+    locked_at: LOCKED_AT,
+    now: LOCKED_AT,
+    expect_kind: 'multisig2'
+  }
+}
+
+// Betlocker's own MANDATORY refund leaf (see betlock.ts's own top comment)
+// - planBet eagerly signs this one itself (the throwaway key IS known
+// immediately, unlike an outcome leaf), so this vector's own "redemption"
+// is just decoding plan.refundCw1 straight out, same as timelocker's own
+// single-leaf cw1. `now` is deliberately set just PAST its own locktime -
+// the positive case the generic parametrized mint tests already cover;
+// CLTV's own "refused before locktime" mechanics are independently proven
+// by the standalone 'cltv' case above, not re-proven per addon here.
+const buildBetlockerRefundVector = () => {
+  const oracle = asKeypair('77'.repeat(32))
+  const nonce = asKeypair('88'.repeat(32))
+  const refundDate = '2031-06-15T00:00:00Z'
+
+  const plan = planBet(
+    oracle.pubkeyHex,
+    nonce.pubkeyHex,
+    ['yes', 'no'],
+    AMOUNT_MSAT,
+    refundDate
+  )
+  const decoded = decodeCw1(plan.refundCw1)!
+  expect(decoded.witness).toHaveLength(1)
+  expect(
+    verifyScriptPath(plan.outputKeyHex, {
+      script: decoded.script,
+      controlBlock: decoded.controlBlock
+    })
+  ).toBe(true)
+
+  return {
+    name: 'betlocker-refund-cltv',
+    ct1: encodeCt1(hexToBytes(plan.outputKeyHex)),
+    output_key: plan.outputKeyHex,
+    amount_msat: AMOUNT_MSAT,
+    leaf_script: bytesToHex(decoded.script),
+    control_block: bytesToHex(decoded.controlBlock),
+    witness: decoded.witness.map(bytesToHex),
+    locktime: decoded.locktime,
+    sequence: decoded.sequence,
+    cw1: plan.refundCw1,
+    locked_at: LOCKED_AT,
+    now: decoded.locktime + 1,
+    expect_kind: 'cltv'
+  }
+}
+
 describe('ct1/cw1 interop vectors (wallet -> lnurlcashkernel -> Bitcoin Core)', () => {
-  const vectors = CASES.map(buildVector)
+  const vectors = [
+    ...CASES.map(buildVector),
+    buildBetlockerCounterpartyVector(),
+    buildBetlockerRefundVector()
+  ]
 
   it('builds a vector for every supported leaf shape', () => {
-    expect(vectors.map(v => v.name)).toEqual(CASES.map(c => c.name))
+    expect(vectors.map(v => v.name)).toEqual([
+      ...CASES.map(c => c.name),
+      'betlocker-counterparty-multisig2',
+      'betlocker-refund-cltv'
+    ])
     for (const v of vectors) {
       expect(v.ct1.startsWith('ct1')).toBe(true)
       expect(v.cw1.startsWith('cw1')).toBe(true)

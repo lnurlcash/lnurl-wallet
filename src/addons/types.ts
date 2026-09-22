@@ -67,7 +67,12 @@ export type UiNode =
       filter?: {spent?: boolean}
       label?: string
     }
-  | {type: 'Button'; label: string; onClick: Action}
+  // label is an Expr (not a plain string) so a button rendered from a For
+  // loop can show the item's own value - e.g. one button per outcome in a
+  // fetched event, each labeled with that outcome's real name. A literal
+  // string is still a valid Expr and remains the overwhelmingly common
+  // case; nothing about a static-label button changes.
+  | {type: 'Button'; label: Expr; onClick: Action}
   | {type: 'For'; each: Expr; children: UiNode[]}
   | {type: 'Show'; when: Expr; children: UiNode[]}
   | {type: 'QrDisplay'; value: Expr}

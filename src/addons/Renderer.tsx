@@ -373,7 +373,7 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
             type="button"
             onClick={() => void runAction(node.onClick, vars)}
           >
-            {node.label}
+            {String(resolveExpr(node.label, vars) ?? '')}
           </button>
         )
 

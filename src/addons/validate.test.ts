@@ -89,6 +89,46 @@ describe('validateManifest', () => {
     expect(() => validateManifest(manifest)).toThrow(/unknown verb/)
   })
 
+  it('accepts a Button label that is a dynamic expression, not just a literal string', () => {
+    const manifest = {
+      ...MINIMAL,
+      ui: {
+        type: 'View',
+        children: [
+          {
+            type: 'For',
+            each: {var: 'outcomes'},
+            children: [
+              {
+                type: 'Button',
+                label: {var: 'item'},
+                onClick: {action: 'set', path: 'x', value: {var: 'item'}}
+              }
+            ]
+          }
+        ]
+      }
+    }
+    expect(() => validateManifest(manifest)).not.toThrow()
+  })
+
+  it('rejects a malformed Button label', () => {
+    const manifest = {
+      ...MINIMAL,
+      ui: {
+        type: 'View',
+        children: [
+          {
+            type: 'Button',
+            label: {gt: 'not-a-pair'},
+            onClick: {action: 'set', path: 'x', value: 1}
+          }
+        ]
+      }
+    }
+    expect(() => validateManifest(manifest)).toThrow(/label/)
+  })
+
   it('rejects an unrecognized UI node type', () => {
     const manifest = {...MINIMAL, ui: {type: 'ScriptTag', src: 'evil.js'}}
     expect(() => validateManifest(manifest)).toThrow(/type/)

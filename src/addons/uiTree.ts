@@ -175,7 +175,7 @@ export const describeNode = (node: UiNode): string => {
     case 'NotePicker':
       return `NotePicker -> ${node.bind || '(unbound)'}`
     case 'Button':
-      return `Button: "${node.label}"`
+      return `Button: ${describeExprShort(node.label)}`
     case 'For':
       return `For each ${describeExprShort(node.each)}`
     case 'Show':

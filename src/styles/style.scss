@@ -2182,7 +2182,12 @@ nav {
 
 .addon-field {
   min-width: 0;
-  input,
+  // block for a text/number/datetime input or a select (label above, full-
+  // width field below) - NOT for a checkbox, which renders its label
+  // straight after it in the same <label> (Renderer.tsx's own Input case)
+  // and needs to stay inline so that label lands on the same line, not
+  // pushed onto its own
+  input:not([type='checkbox']),
   select {
     display: block;
   }
