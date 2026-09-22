@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
+import {toBech32Lnurl} from '../../lnurlcash'
 import {decodeCw1} from '../../lib/recoverableNotes'
 import {verifyScriptPath} from '../taproot/taproot'
 import {
@@ -251,6 +252,24 @@ describe('seal consignment: build, parse, round-trip', () => {
     expect(parseSealConsignment('https://mint.example.com/w')).toBeNull()
     expect(sealConsignmentUrl(null, [genesis])).toBeNull()
     expect(sealConsignmentUrl(lockedNote, [])).toBeNull()
+  })
+
+  it('round-trips through a bech32-encoded consignment, not just the plain URL', () => {
+    const plain = sealConsignmentUrl(lockedNote, [genesis])!
+    const bech32 = toBech32Lnurl(plain)
+    expect(bech32.toUpperCase().startsWith('LNURL1')).toBe(true)
+    const parsed = parseSealConsignment(bech32)!
+    expect(parsed).not.toBeNull()
+    expect(parsed.amountMsat).toBe(AMOUNT_MSAT)
+    expect(parsed.states).toEqual([genesis])
+  })
+
+  it('round-trips a bech32-encoded consignment regardless of case, and with surrounding whitespace', () => {
+    const plain = sealConsignmentUrl(lockedNote, [genesis])!
+    const bech32 = toBech32Lnurl(plain)
+    expect(parseSealConsignment(`  ${bech32.toLowerCase()}  `)).toEqual(
+      parseSealConsignment(bech32)
+    )
   })
 
   it('rejects a states param that is not real JSON, not an array, or contains malformed entries', () => {

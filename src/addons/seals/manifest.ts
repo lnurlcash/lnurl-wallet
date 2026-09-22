@@ -67,6 +67,21 @@ const prepareGenesis = (
   return {state, outputKeyHex: planSealLock(state).outputKeyHex}
 }
 
+// bech32's own encoder throws rather than truncates once the payload
+// exceeds its length budget (toBech32Lnurl raises that budget to 2048
+// characters, but a consignment grows with every transition, so a long
+// enough history can still exceed it) - caught here so a live Text
+// binding never crashes the page over it, same "fail visibly, not
+// silently, not catastrophically" reasoning as every other addon's own
+// defensive parsing
+const bech32OrPlain = (plain: string): string => {
+  try {
+    return toBech32Lnurl(plain)
+  } catch {
+    return `${plain}\n(too long to also encode as bech32 - this plain link still works)`
+  }
+}
+
 const issuedConsignmentUrl = (
   issuedNote: unknown,
   genesisPlan: unknown,
@@ -77,7 +92,7 @@ const issuedConsignmentUrl = (
   const url = sealConsignmentUrl(issuedNote, [plan.state])
   if (!url) return null
   const plain = toLud17w(url)
-  return bech32 ? toBech32Lnurl(plain) : plain
+  return bech32 ? bech32OrPlain(plain) : plain
 }
 
 const issuedConsignmentText = (
@@ -293,6 +308,23 @@ const currentStateOf = (consignmentInput: unknown): SealState | null => {
   return states.length ? states[states.length - 1]! : null
 }
 
+// whether an address you resolved (note.resolveAddressPubkey, the SAME
+// verb the Lock side already uses to name an owner) actually matches this
+// consignment's own CURRENT owner - lets a holder check "is this mine?"
+// by resolving their own identity rather than eyeballing two 64-character
+// hex strings against each other. Purely a convenience/confirmation: it
+// can never fill in a secret key (this wallet's addons never touch the
+// real seed - see this file's own top comment), so "yes, this is you"
+// still means going on to paste your own secret key by hand below.
+const isCurrentOwner = (
+  consignmentInput: unknown,
+  resolvedPubkeyHex: unknown
+): boolean => {
+  const current = currentStateOf(consignmentInput)
+  const resolved = xOnlyPubkeyHex(resolvedPubkeyHex)
+  return !!current && !!resolved && current.ownerPubkeyHex === resolved
+}
+
 const consignmentValid = (consignmentInput: unknown): boolean =>
   !!String(consignmentInput ?? '').trim() &&
   !consignmentProblem(consignmentInput)
@@ -350,7 +382,7 @@ const nextConsignmentUrl = (
   )
   if (!url) return null
   const plain = toLud17w(url)
-  return bech32 ? toBech32Lnurl(plain) : plain
+  return bech32 ? bech32OrPlain(plain) : plain
 }
 
 const manageUi: UiNode[] = [
@@ -391,6 +423,64 @@ const manageUi: UiNode[] = [
         each: {helper: 'parsedStatesOf', args: [{var: 'consignmentInput'}]},
         children: [
           {type: 'Text', value: {helper: 'stateLine', args: [{var: 'item'}]}}
+        ]
+      },
+      {type: 'Text', value: 'Is this seal currently yours?'},
+      {
+        type: 'Input',
+        bind: 'myAddress',
+        label: 'Your Lightning Address, cx1/cp1 address, or username'
+      },
+      {
+        type: 'Button',
+        label: 'Check ownership',
+        onClick: {
+          verb: 'note.resolveAddressPubkey',
+          args: {address: {var: 'myAddress'}},
+          result: 'myResolvedPubkeyHex'
+        }
+      },
+      {
+        type: 'Show',
+        when: {var: 'myResolvedPubkeyHex'},
+        children: [
+          {
+            type: 'Show',
+            when: {
+              helper: 'isCurrentOwner',
+              args: [{var: 'consignmentInput'}, {var: 'myResolvedPubkeyHex'}]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  '✓ This seal is currently yours - enter your own secret key below to transition or cash it out.',
+                style: 'response-block'
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [
+                {
+                  helper: 'isCurrentOwner',
+                  args: [
+                    {var: 'consignmentInput'},
+                    {var: 'myResolvedPubkeyHex'}
+                  ]
+                }
+              ]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  'Not currently yours - someone else owns this seal right now.'
+              }
+            ]
+          }
         ]
       },
       {type: 'Text', value: 'Transition to a new owner', style: 'subheading'},
@@ -571,7 +661,7 @@ const sealsManifest: AddonManifest = {
     {
       verb: 'note.resolveAddressPubkey',
       reason:
-        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to name a seal’s owner'
+        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to name a seal’s owner, or to check whether a seal is currently yours'
     },
     {
       verb: 'seal.transition',
@@ -592,6 +682,8 @@ const sealsManifest: AddonManifest = {
     issuedNote: null,
     useBech32: false,
     consignmentInput: '',
+    myAddress: '',
+    myResolvedPubkeyHex: '',
     ownerSecretKeyHex: '',
     nextOwnerAddress: '',
     nextOwnerPubkeyHex: '',
@@ -628,6 +720,7 @@ const sealsHelpers: Record<string, AddonHelper> = {
   consignmentSummary: consignmentSummary as AddonHelper,
   parsedStatesOf: parsedStatesOf as AddonHelper,
   currentStateOf: currentStateOf as AddonHelper,
+  isCurrentOwner: isCurrentOwner as AddonHelper,
   stateLine: stateLine as AddonHelper,
   canTransition: canTransition as AddonHelper,
   consignmentUrlTemplateOf: consignmentUrlTemplateOf as AddonHelper,
