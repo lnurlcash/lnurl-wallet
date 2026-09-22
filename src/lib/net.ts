@@ -164,12 +164,23 @@ const readBoundedJson = async (response: Response): Promise<any> => {
   }
 }
 
-// the one choke point every LNURLcash request in this kit goes through -
-// lookups, melt, split, merge, rotate, verify, minting.
-export const lnurlFetch = async (
+export type FetchedJson = {status: number; body: any}
+
+// The generic building block underneath lnurlFetch below: bounded-size,
+// redirect-safe, SSRF-policy-checked JSON fetch through whatever transport
+// this host configured. Unlike lnurlFetch, this does NOT assume LNURLcash's
+// own {status:'ERROR', reason} response convention - not every plain JSON
+// service this wallet talks to speaks it (e.g. an addon's own oracle
+// client, reaching a DLC oracle service's REST API), so callers get the
+// real HTTP status code back and decide for themselves what a given status
+// means. Every addon that needs to reach a plain JSON HTTP service should
+// build on this rather than calling fetch() directly, so a sandboxed
+// host's transport hook and this kit's own URL allowlist apply uniformly
+// instead of each call site reimplementing them.
+export const fetchJson = async (
   url: string | URL,
   method: string = 'GET'
-): Promise<any> => {
+): Promise<FetchedJson> => {
   networkGuard()
   if (!isAllowedServiceUrl(url.toString())) {
     throw new Error(
@@ -178,6 +189,16 @@ export const lnurlFetch = async (
   }
   const res = await fetchFollowingSafeRedirects(url.toString(), method)
   const body = await readBoundedJson(res)
+  return {status: res.status, body}
+}
+
+// the one choke point every LNURLcash request in this kit goes through -
+// lookups, melt, split, merge, rotate, verify, minting.
+export const lnurlFetch = async (
+  url: string | URL,
+  method: string = 'GET'
+): Promise<any> => {
+  const {body} = await fetchJson(url, method)
   if (body?.status === 'ERROR') {
     throw new ServiceError(typeof body.reason === 'string' ? body.reason : '')
   }

@@ -29,6 +29,11 @@ import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
 import {parseBetReceipt, buildRedeemCw1} from './betlocker/betlock'
+import {
+  fetchOracleEvents,
+  fetchOracleAnnouncement,
+  fetchOracleAttestation
+} from './dlc/oracleClient'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -413,6 +418,37 @@ export const VERBS: Record<string, VerbHandler> = {
     }
     const body = await lnurlFetch(url)
     return {url, body}
+  },
+
+  // Betlocker's own "browse a real oracle" trio - read-only GETs against a
+  // DLC oracle service's public REST API (oracleClient.ts), same posture
+  // as lnurl.fetch just above: no note/secret/wallet-state access, never
+  // mutates anything the oracle tracks, just asks it what it published.
+  // Deliberately NOT available to the sibling `dlc` Playground addon - see
+  // its manifest's own top comment on why permissions: [] there is
+  // load-bearing.
+  'oracle.fetchEvents': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    if (!baseUrl) throw new Error("Enter the oracle's URL first.")
+    return fetchOracleEvents(baseUrl)
+  },
+
+  'oracle.fetchAnnouncement': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    const eventId = String(args.eventId ?? '').trim()
+    if (!baseUrl || !eventId) {
+      throw new Error("Enter the oracle's URL and pick an event first.")
+    }
+    return fetchOracleAnnouncement(baseUrl, eventId)
+  },
+
+  'oracle.fetchAttestation': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    const eventId = String(args.eventId ?? '').trim()
+    if (!baseUrl || !eventId) {
+      throw new Error("Missing the oracle's URL or this bet's event id.")
+    }
+    return fetchOracleAttestation(baseUrl, eventId)
   },
 
   // resolves a THIRD PARTY's LUD-25 pubkey from a cp1/cx1 address, a full
