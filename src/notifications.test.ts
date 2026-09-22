@@ -94,4 +94,30 @@ describe('sendNotification', () => {
     })
     expect(() => mod.sendNotification('title')).not.toThrow()
   })
+
+  it('falls back to ServiceWorkerRegistration.showNotification when the plain constructor is refused (Android Chrome/PWA)', async () => {
+    const ctor = stubNotification('granted')
+    vi.mocked(ctor).mockImplementation(() => {
+      throw new DOMException('Illegal constructor', 'InvalidStateError')
+    })
+    const showNotification = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', {
+      serviceWorker: {ready: Promise.resolve({showNotification})}
+    })
+    mod.sendNotification('title', {body: 'body'})
+    // showNotification is reached via the ready promise resolving - flush
+    // the microtask queue before asserting
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(showNotification).toHaveBeenCalledWith('title', {body: 'body'})
+  })
+
+  it('never throws when no serviceWorker is available either', () => {
+    const ctor = stubNotification('granted')
+    vi.mocked(ctor).mockImplementation(() => {
+      throw new Error('platform refused')
+    })
+    vi.stubGlobal('navigator', {})
+    expect(() => mod.sendNotification('title')).not.toThrow()
+  })
 })

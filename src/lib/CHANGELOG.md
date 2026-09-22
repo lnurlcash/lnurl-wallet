@@ -2,6 +2,14 @@
 
 ## 0.14.0 - unreleased
 
+- Add `checkBehind` to `scanForAddressNotes`'s options: also re-checks up to
+  `gapLimit` indices immediately below `startIndex` (down to 0) as a
+  fixed-size safety net, before the ordinary forward walk - re-verifying
+  the exact range `startIndex` claims is already covered, rather than only
+  ever trusting it. Unlike the forward walk this never stops early on a
+  run of unknowns (it's a bounded window, not an open-ended search).
+  `lnurl-wallet`'s own `addressRecovery.ts`/`recovery.ts` now pass this on
+  every scan.
 - Add `resolveScanStartIndex` to `addresses.ts`: the LUD-25 Part 2 rule for
   combining a caller's own already-confirmed scan floor with a
   SERVICE-advertised `text/xpub` index hint, factored out of

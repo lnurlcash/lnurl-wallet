@@ -20,7 +20,6 @@ import {
   IoLockClosedSharp,
   IoHelpCircleSharp,
   IoCopySharp,
-  IoSearchSharp,
   IoAtCircleSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
@@ -100,12 +99,7 @@ import {
   savePendingDeviceMint,
   type PendingDeviceMint
 } from '../pendingDeviceMint'
-import {scanMintForNotes} from '../recovery'
-import {
-  hasCashRoot,
-  clearPendingMintSecret,
-  mergeCashAddressSecretIndices
-} from '../cashSecrets'
+import {clearPendingMintSecret} from '../cashSecrets'
 import {registeredAddresses} from '../addressRegistry'
 import {
   storeableMints,
@@ -1041,13 +1035,6 @@ const Mint: Component = () => {
   const [refreshingServer, setRefreshingServer] = createSignal<string | null>(
     null
   )
-  // which trusted mint's own Rescan button is currently in flight (see
-  // recovery.ts's scanMintForNotes) - single-flight same as refreshingServer
-  // above, plus the index it's currently probing for a live progress line
-  const [rescanningServer, setRescanningServer] = createSignal<string | null>(
-    null
-  )
-  const [rescanIndex, setRescanIndex] = createSignal(0)
   // which trusted mint's own "@" button opened AddressDialog (LUD-25 Part
   // 2's cx1 registration and everything that follows from having one -
   // claim, check notes, unclaim, auto-check - all live in that one dialog
@@ -1178,67 +1165,17 @@ const Mint: Component = () => {
     }
   }
 
-  // LUD-25 recovery (see recovery.ts), scoped to one already-trusted mint
-  // instead of Setup.tsx's post-restore multi-mint picker - for the case a
-  // note this wallet minted/rotated/split/merged here got lost locally
-  // (storage cleared on one device, a sync gap, etc) without needing a full
-  // seed restore to get it back
-  const rescanMint = async (mint: TrustedMint) => {
-    if (rescanningServer()) return
-    setRescanningServer(mint.server)
-    setRescanIndex(0)
-    try {
-      // scanMintForNotes resolves input the same narrow way resolveMintInput
-      // does (bech32/Lightning Address/bare domain) - mint.server itself is
-      // the full https://... origin (see serviceOriginOf), which that parser
-      // rejects outright ("Not a recognizable mint address or LNURL."), so
-      // this needs the bare host serverOf() strips it down to
-      const result = await scanMintForNotes(
-        serverOf(mint.server),
-        index => setRescanIndex(index),
-        bearers()
-      )
-      for (const note of result.recovered) {
-        await addBearer(note)
-        logActivity(
-          'recovered',
-          `Recovered ${msatToSats(note.amount)} sats from ${result.server} while rescanning.`
-        )
-      }
-      if (result.highestUsedIndex !== null) {
-        mergeCashAddressSecretIndices({
-          [result.server]: result.highestUsedIndex + 1
-        })
-      }
-      if (result.error) {
-        notify(result.error, NotifyKind.ERROR)
-      } else {
-        notify(
-          result.recovered.length > 0
-            ? `Recovered ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(result.recovered.reduce((sum, n) => sum + n.amount, 0))} sats).`
-            : 'No missing notes found at this mint.',
-          NotifyKind.SUCCESS
-        )
-      }
-    } finally {
-      setRescanningServer(null)
-    }
-  }
-
-  // bulk variants of the two buttons above - run every trusted mint's own
-  // refresh/rescan one at a time, reusing the exact same calls (and their
-  // existing addressBusy/rescanningServer single-flight guards), so a
-  // lone mint's own button is disabled for the same reason while either
-  // runs, and each card's own spinner lights up as its turn comes
+  // bulk variant of the refresh button above - runs every trusted mint's
+  // own refresh one at a time, reusing the exact same call (and its
+  // existing addressBusy single-flight guard), so a lone mint's own button
+  // is disabled for the same reason while it runs, and each card's own
+  // spinner lights up as its turn comes. The mint-bearer rescan this used
+  // to have a bulk sibling for now lives per-mint inside AddressDialog (see
+  // that component's own top comment) - opening each mint's dialog in turn
+  // is what a "rescan every mint" pass looks like now.
   const refreshAllMints = async () => {
     for (const mint of trustedMints()) {
       await refreshMint(mint)
-    }
-  }
-
-  const rescanAllMints = async () => {
-    for (const mint of trustedMints()) {
-      await rescanMint(mint)
     }
   }
 
@@ -1300,32 +1237,6 @@ const Mint: Component = () => {
                 <IoRefreshSharp classList={{spin: addressBusy()}} />
                 &nbsp;Refresh all
               </button>
-              <Show when={state() === 'unlocked'}>
-                <button
-                  type="button"
-                  disabled={
-                    offlineMode() ||
-                    !hasCashRoot() ||
-                    rescanningServer() !== null
-                  }
-                  title={
-                    offlineMode()
-                      ? 'Offline mode is on'
-                      : !hasCashRoot()
-                        ? 'No seed loaded for this wallet - restore your seed again first'
-                        : 'Rescan every trusted mint for missing notes, one at a time'
-                  }
-                  onClick={rescanAllMints}
-                >
-                  <Show
-                    when={rescanningServer() !== null}
-                    fallback={<IoSearchSharp />}
-                  >
-                    <IoRefreshSharp class="spin" />
-                  </Show>
-                  &nbsp;Rescan all
-                </button>
-              </Show>
             </div>
           </Show>
           <Show
@@ -1463,10 +1374,11 @@ const Mint: Component = () => {
                       {/* only meaningful with an unlocked wallet - this whole
                     section otherwise stays usable locked/offline (see the
                     top-of-file comment), but starting a mint needs the AES
-                    key to store the resulting bearer, and rescanning needs
-                    the seed-derived cash root - split onto its own row
-                    (with labels) since it's a different .btns block, rather
-                    than crammed unlabeled among the icon-only row below */}
+                    key to store the resulting bearer - split onto its own
+                    row (with labels) since it's a different .btns block,
+                    rather than crammed unlabeled among the icon-only row
+                    below. Rescanning this mint's own seed-derived notes
+                    lives in AddressDialog now (opened via the button below) */}
                       <Show when={state() === 'unlocked'}>
                         <div class="btns">
                           <button
@@ -1478,29 +1390,6 @@ const Mint: Component = () => {
                             Mint
                           </button>
                           <button
-                            disabled={
-                              offlineMode() ||
-                              !hasCashRoot() ||
-                              rescanningServer() !== null
-                            }
-                            title={
-                              offlineMode()
-                                ? 'Offline mode is on'
-                                : !hasCashRoot()
-                                  ? 'No seed loaded for this wallet - restore your seed again first'
-                                  : 'Rescan this mint for seed-derived notes missing from this wallet (LUD-25)'
-                            }
-                            onClick={() => rescanMint(mint)}
-                          >
-                            <Show
-                              when={rescanningServer() === mint.server}
-                              fallback={<IoSearchSharp />}
-                            >
-                              <IoRefreshSharp class="spin" />
-                            </Show>
-                            &nbsp;Rescan
-                          </button>
-                          <button
                             class="icon-btn icon-btn-gap"
                             title={
                               registered()
@@ -1510,6 +1399,8 @@ const Mint: Component = () => {
                             onClick={() => setAddressDialogFor(mint.server)}
                           >
                             <IoAtCircleSharp />
+                            &nbsp;
+                            {registered() ? registered()!.username : 'Address'}
                           </button>
                         </div>
                       </Show>
@@ -1572,11 +1463,6 @@ const Mint: Component = () => {
                           </button>
                         </Show>
                       </div>
-                      <Show when={rescanningServer() === mint.server}>
-                        <p class="bearer-hint">
-                          checking index {rescanIndex()}...
-                        </p>
-                      </Show>
                       <Show
                         when={
                           !hasNotesFrom(mint.server) &&

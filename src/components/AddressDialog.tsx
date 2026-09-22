@@ -23,7 +23,8 @@ import {
 import {
   cashAddressBranch,
   cashAddressSecretAtIndex,
-  hasCashRoot
+  hasCashRoot,
+  mergeCashAddressSecretIndices
 } from '../cashSecrets'
 import {
   registeredAddresses,
@@ -36,6 +37,7 @@ import {
   type AddressScanMinutes
 } from '../addressRegistry'
 import {runAddressScan} from '../addressRecovery'
+import {scanMintForNotes} from '../recovery'
 import {requestNotificationPermission} from '../notifications'
 import {isValidNpub} from '../nostrAddress'
 
@@ -115,6 +117,20 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   const [confirmUnclaim, setConfirmUnclaim] = createSignal(false)
   const [showAutoCheck, setShowAutoCheck] = createSignal(false)
 
+  // what the most recent Check notes/Full rescan pass (this dialog
+  // session only - not persisted) actually saw: where it started walking
+  // forward from, and SERVICE's own advertised next-index hint at that
+  // moment. Shown alongside addr().nextScanIndex (this device's own
+  // persisted floor, always available with no scan needed) so a holder can
+  // see all three numbers - SERVICE's, this device's, and where the last
+  // pass actually started - side by side rather than having to trust any
+  // one of them blindly (see resolveScanStartIndex's own doc comment for
+  // why the SERVICE hint alone is never enough).
+  const [lastCheck, setLastCheck] = createSignal<{
+    checkedFrom: number
+    serviceHint: number | null
+  } | null>(null)
+
   // "Check notes"/"Full rescan" - the same split TODO.md asked for: "check
   // notes" resumes from wherever this address's own nextScanIndex (or
   // SERVICE's own metadata hint) left off, "full rescan" always re-walks
@@ -134,6 +150,10 @@ const AddressDialog: Component<AddressDialogProps> = props => {
         {addBearer, logActivity},
         {startIndex: mode === 'incremental' ? (addr.nextScanIndex ?? 0) : 0}
       )
+      setLastCheck({
+        checkedFrom: result.checkedFrom,
+        serviceHint: result.serviceHint
+      })
       if (result.error) {
         notify(result.error, NotifyKind.ERROR)
       } else {
@@ -147,6 +167,58 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       }
     } finally {
       setBusy(false)
+    }
+  }
+
+  // ---- mint-bearer rescan (LUD-25 recovery scoped to this mint's own
+  // fixed identity - see recovery.ts's scanMintForNotes) - moved in here
+  // from Mint.tsx's own per-mint card, since it's the same "re-derive and
+  // check every index" operation as Check notes/Full rescan above, just
+  // against this wallet's own directly-minted notes here rather than a
+  // registered username's. Shown regardless of whether an address is
+  // claimed at this mint - it has nothing to do with registration.
+  const [mintRescanBusy, setMintRescanBusy] = createSignal(false)
+  const [mintRescanIndex, setMintRescanIndex] = createSignal(0)
+
+  const rescanMintBearerNotes = async () => {
+    if (mintRescanBusy()) return
+    setMintRescanBusy(true)
+    setMintRescanIndex(0)
+    try {
+      // scanMintForNotes resolves input the same narrow way resolveMintInput
+      // does (bech32/Lightning Address/bare domain) - props.server is the
+      // full https://... origin (see serviceOriginOf), which that parser
+      // rejects outright, so this needs the bare host serverOf() strips it
+      // down to
+      const result = await scanMintForNotes(
+        serverOf(props.server),
+        index => setMintRescanIndex(index),
+        bearers()
+      )
+      for (const note of result.recovered) {
+        await addBearer(note)
+        logActivity(
+          'recovered',
+          `Recovered ${msatToSats(note.amount)} sats from ${result.server} while rescanning.`
+        )
+      }
+      if (result.highestUsedIndex !== null) {
+        mergeCashAddressSecretIndices({
+          [result.server]: result.highestUsedIndex + 1
+        })
+      }
+      if (result.error) {
+        notify(result.error, NotifyKind.ERROR)
+      } else {
+        notify(
+          result.recovered.length > 0
+            ? `Recovered ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(result.recovered.reduce((sum, n) => sum + n.amount, 0))} sats).`
+            : 'No missing notes found at this mint.',
+          NotifyKind.SUCCESS
+        )
+      }
+    } finally {
+      setMintRescanBusy(false)
     }
   }
 
@@ -189,7 +261,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   }
 
   return (
-    <Dialog onClose={props.onClose}>
+    <Dialog onClose={props.onClose} hideCloseButton>
       <Show
         when={registered()}
         fallback={
@@ -265,6 +337,19 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
+            <p class="bearer-hint">
+              Last index this device checked: {addr().nextScanIndex ?? 0}
+              <Show when={lastCheck()}>
+                {info => (
+                  <>
+                    {' '}
+                    · started this pass from {info().checkedFrom} · mint's
+                    suggested next index:{' '}
+                    {info().serviceHint ?? 'not advertised'}
+                  </>
+                )}
+              </Show>
+            </p>
             <div class="btns">
               <button
                 disabled={offlineMode() || !hasCashRoot() || busy()}
@@ -287,6 +372,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
                 onClick={() => checkNotes('all')}
               >
                 <IoRefreshSharp />
+                &nbsp;Full rescan
               </button>
               <button
                 class="icon-btn icon-btn-gap"
@@ -359,6 +445,36 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             </Show>
           </>
         )}
+      </Show>
+      <hr />
+      <p class="bearer-label">
+        This mint's own bearer notes ({serverOf(props.server)})
+      </p>
+      <p class="bearer-hint">
+        Notes this wallet minted/rotated/split/merged directly here (not tied to
+        a registered username) - lost locally on this device, a sync gap, or
+        after a seed restore.
+      </p>
+      <div class="btns">
+        <button
+          disabled={offlineMode() || !hasCashRoot() || mintRescanBusy()}
+          title={
+            offlineMode()
+              ? 'Offline mode is on'
+              : !hasCashRoot()
+                ? 'No seed loaded for this wallet - restore your seed again first'
+                : 'Rescan this mint for seed-derived notes missing from this wallet (LUD-25)'
+          }
+          onClick={rescanMintBearerNotes}
+        >
+          <Show when={mintRescanBusy()} fallback={<IoSearchSharp />}>
+            <IoRefreshSharp class="spin" />
+          </Show>
+          &nbsp;Rescan
+        </button>
+      </div>
+      <Show when={mintRescanBusy()}>
+        <p class="bearer-hint">checking index {mintRescanIndex()}...</p>
       </Show>
     </Dialog>
   )
