@@ -1,8 +1,6 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
-import {p2tr} from '@scure/btc-signer'
-import {Script} from '@scure/btc-signer/script.js'
 import {
   fetchNoteInfo,
   fetchNoteInfoByPubkey,
@@ -287,22 +285,25 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  // a real, independently built (via @scure/btc-signer's own p2tr(), not
-  // anything in lib/recoverableNotes.ts) script-path proof - the same
-  // "cross-validate against a construction that never goes through the
-  // code under test" approach recoverableNotes.test.ts uses
-  const internalKey = schnorr.getPublicKey(hexToBytes('11'.repeat(32)))
-  const leaf = Script.encode([hexToBytes('aa'.repeat(32)), 'CHECKSIG'])
-  const tree = p2tr(internalKey, [{script: leaf}], undefined, true) as {
-    tweakedPubkey: Uint8Array
-    leaves: {script: Uint8Array; controlBlock?: Uint8Array}[]
-  }
-  const ct1 = encodeCt1(tree.tweakedPubkey)
+  // A real, pinned script-path proof - generated once with @scure/btc-
+  // signer's own p2tr() tree builder (independent of anything in
+  // lib/recoverableNotes.ts) and hardcoded here rather than built live:
+  // this package ships without @scure/btc-signer as a dependency (see
+  // recoverableNotes.ts's own top comment), and its isolated test run
+  // (release-kit.yml) has no access to it. Same vectors
+  // recoverableNotes.test.ts's own deriveScriptPathCommitment tests use.
+  const leaf = hexToBytes(`20${'aa'.repeat(32)}ac`) // <32x 0xaa> CHECKSIG
+  const controlBlock = hexToBytes(
+    'c0' + '4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa'
+  )
+  const outputKeyHex =
+    'd37208c49a038f693bc0b362b5a7f804938bfea0b3381cfb88fb69340bb92495'
+  const ct1 = encodeCt1(hexToBytes(outputKeyHex))
   const cw1 = encodeCw1({
     locktime: 1_800_000_000,
     sequence: 0xfffffffe,
     script: leaf,
-    controlBlock: tree.leaves[0]!.controlBlock!,
+    controlBlock,
     witness: [hexToBytes('cc'.repeat(64))]
   })
   const CW1_NOTE_URL = `https://mint.example.com/withdraw?k1=${cw1}&amount=21000`
