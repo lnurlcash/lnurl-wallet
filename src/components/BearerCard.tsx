@@ -10,7 +10,8 @@ import {
   IoCopySharp,
   IoRefreshSharp,
   IoCheckmarkSharp,
-  IoWarningSharp
+  IoWarningSharp,
+  IoCodeSlashSharp
 } from 'solid-icons/io'
 
 import type {Bearer} from '../storage'
@@ -27,6 +28,7 @@ import {
   verifyNoteSignatureHash,
   withoutSignature,
   isCk1,
+  isCw1,
   recoverNoteOwnershipPubkey
 } from '../lnurlcash'
 import {
@@ -51,6 +53,7 @@ import {
 import Qr from './Qr'
 import FiatValue from './FiatValue'
 import Dialog from './Dialog'
+import ScriptPreviewDialog from './ScriptPreviewDialog'
 import {decodeTag, parseLabelTags} from '../noteTags'
 
 export type BearerCardProps = {
@@ -96,9 +99,15 @@ const BearerCard: Component<BearerCardProps> = props => {
   >('bech32')
   const encodeForHandover = (url: string): string =>
     handoverEncoding() === 'lud17' ? toLud17w(url) : toBech32Lnurl(url)
+  const [showScriptPreview, setShowScriptPreview] = createSignal(false)
 
   const k1 = () => noteK1(props.bearer.url) || ''
   const isSpent = () => !!props.bearer.spent
+  // a ct1 note whose own k1 is a cw1 script-path spend, rather than a ck1
+  // key-path one or a legacy hash preimage - see isValidK1/lib/
+  // recoverableNotes.ts. k1() is '' for a device-backed bearer (no raw k1
+  // kept in browser storage), which isCw1('') correctly reads as false.
+  const isScriptNote = () => !!k1() && isCw1(k1())
 
   // a leading run of [tag] brackets on the label (see noteTags.ts) reads as
   // this note's tags; whatever's left after them is the free-text label
@@ -311,14 +320,31 @@ const BearerCard: Component<BearerCardProps> = props => {
             page) - k1() is '' for a device-backed bearer (no raw k1 kept
             in browser storage), which isCk1('') correctly reads as false;
             gated on a non-empty k1 too so a device note doesn't wrongly
-            claim a scheme this wallet can't actually see from here */}
-            <Show when={k1() && !isCk1(k1())}>
+            claim a scheme this wallet can't actually see from here. Also
+            excludes a cw1 script-path note (its own pill below) - it's a
+            Part 2 note too, just not a ck1 key-path one. */}
+            <Show when={k1() && !isCk1(k1()) && !isScriptNote()}>
               <span
                 class="bearer-plain"
                 title="This note's own secret is a legacy hash preimage (LUD-25 Part 1), not a Part 2 pubkey/signature"
               >
                 plain secret
               </span>
+            </Show>
+            {/* A ct1 note redeemed by revealing a Tapscript leaf (a cw1),
+            not by a ck1 signature - clicking it decodes and shows exactly
+            what that leaf says (ScriptPreviewDialog), rather than asking a
+            holder to trust a one-word label. */}
+            <Show when={isScriptNote()}>
+              <button
+                type="button"
+                class="bearer-badge-btn bearer-script"
+                title="This note's secret reveals a Tapscript leaf, not a plain signature - click to preview it"
+                onClick={() => setShowScriptPreview(true)}
+              >
+                <IoCodeSlashSharp />
+                &nbsp;/script
+              </button>
             </Show>
             {/* TODO(deprecated): this note's ck1 was produced under an old
             signing scheme - either the OLD bare recoverable-ECDSA shape (no
@@ -568,6 +594,12 @@ const BearerCard: Component<BearerCardProps> = props => {
           </button>
           <button onClick={() => setConfirmDelete(false)}>Cancel</button>
         </div>
+      </Show>
+      <Show when={showScriptPreview()}>
+        <ScriptPreviewDialog
+          cw1={k1()}
+          onClose={() => setShowScriptPreview(false)}
+        />
       </Show>
       <p class="bearer-dates" title={formatDate(props.bearer.updatedAt)}>
         updated {formatRelativeTime(props.bearer.updatedAt)}

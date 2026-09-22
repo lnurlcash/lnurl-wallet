@@ -1,5 +1,8 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
+import {p2tr} from '@scure/btc-signer'
+import {Script} from '@scure/btc-signer/script.js'
 import {
   fetchNoteInfo,
   fetchNoteInfoByPubkey,
@@ -12,7 +15,13 @@ import {
   mergeNotes
 } from './request'
 import {hashK1, signNoteOwnership, cp1FromCk1} from './signature'
-import {encodeCk1, encodeCp1, encodeCs1} from './recoverableNotes'
+import {
+  encodeCk1,
+  encodeCp1,
+  encodeCt1,
+  encodeCs1,
+  encodeCw1
+} from './recoverableNotes'
 import {AmbiguousMintError, PendingNoteError} from './errors'
 import {configureSecretProvider, configurePubkeySecretProvider} from './secrets'
 
@@ -276,6 +285,66 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
     const info = await fetchNoteInfo(CK1_NOTE_URL)
     expect(info.k1).toBe(ck1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  // a real, independently built (via @scure/btc-signer's own p2tr(), not
+  // anything in lib/recoverableNotes.ts) script-path proof - the same
+  // "cross-validate against a construction that never goes through the
+  // code under test" approach recoverableNotes.test.ts uses
+  const internalKey = schnorr.getPublicKey(hexToBytes('11'.repeat(32)))
+  const leaf = Script.encode([hexToBytes('aa'.repeat(32)), 'CHECKSIG'])
+  const tree = p2tr(internalKey, [{script: leaf}], undefined, true) as {
+    tweakedPubkey: Uint8Array
+    leaves: {script: Uint8Array; controlBlock?: Uint8Array}[]
+  }
+  const ct1 = encodeCt1(tree.tweakedPubkey)
+  const cw1 = encodeCw1({
+    locktime: 1_800_000_000,
+    sequence: 0xfffffffe,
+    script: leaf,
+    controlBlock: tree.leaves[0]!.controlBlock!,
+    witness: [hexToBytes('cc'.repeat(64))]
+  })
+  const CW1_NOTE_URL = `https://mint.example.com/withdraw?k1=${cw1}&amount=21000`
+
+  it('looks a cw1 note up by its derived output key (p=ct1<Q>), never its secret - Q comes from the script itself, no mint round trip needed to find it', async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.get('k1')).toBeNull()
+      expect(request.searchParams.get('h')).toBeNull()
+      expect(request.searchParams.get('p')).toBe(ct1)
+      return {
+        json: async () => ({
+          tag: 'withdrawRequest',
+          callback: 'https://mint.example.com/w/cb',
+          minWithdrawable: 21000,
+          maxWithdrawable: 21000,
+          mintPubkey: MINT_KEY
+        })
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const info = await fetchNoteInfo(CW1_NOTE_URL)
+    expect(info.k1).toBe(cw1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a cw1 with a malformed control block before ever touching the network', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const badCw1 = encodeCw1({
+      locktime: 1_800_000_000,
+      sequence: 0xfffffffe,
+      script: leaf,
+      controlBlock: new Uint8Array([1, 2, 3]),
+      witness: []
+    })
+    await expect(
+      fetchNoteInfo(
+        `https://mint.example.com/withdraw?k1=${badCw1}&amount=21000`
+      )
+    ).rejects.toThrow(/output key/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('fetchNoteInfoByPubkey sends p=<value> directly', async () => {

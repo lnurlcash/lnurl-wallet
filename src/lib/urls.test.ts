@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest'
+import {hexToBytes} from '@noble/hashes/utils.js'
 import {
   toBech32Lnurl,
   fromBech32Lnurl,
@@ -24,7 +25,7 @@ import {
   lightningAddressUsername,
   isAllowedServiceUrl
 } from './urls'
-import {encodeCs1WithAmount} from './recoverableNotes'
+import {encodeCs1WithAmount, encodeCw1} from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 const NOTE_URL = `https://mint.example.com/withdraw?k1=${K1}&amount=21000`
@@ -123,6 +124,19 @@ describe('input resolution', () => {
     expect(resolveNoteInput('https://mint.example.com/withdraw')).toBeNull()
     expect(isValidNoteInput(NOTE_URL)).toBe(true)
     expect(isValidNoteInput('you@example.com')).toBe(false)
+  })
+
+  it('accepts a ct1 note whose k1 is a cw1 script-path spend - the wallet can hold one', () => {
+    const cw1 = encodeCw1({
+      locktime: 1_800_000_000,
+      sequence: 0xfffffffe,
+      script: hexToBytes('51'.repeat(40)),
+      controlBlock: hexToBytes('c0' + 'ab'.repeat(32)),
+      witness: []
+    })
+    const url = `https://mint.example.com/withdraw?k1=${cw1}&amount=21000`
+    expect(resolveNoteInput(url)).toBe(url)
+    expect(isValidNoteInput(url)).toBe(true)
   })
 
   it('only accepts a note when its k1 is well-formed 32-byte hex', () => {

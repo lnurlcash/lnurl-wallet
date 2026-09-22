@@ -1,3 +1,4 @@
+import {hexToBytes} from '@noble/hashes/utils.js'
 import {requireNoteK1, serverOf, withNewK1} from './urls'
 import {
   MINT_PUBKEY_PATTERN,
@@ -21,10 +22,12 @@ import {generateSecret, generatePubkeySecret} from './secrets'
 import {lnurlFetch} from './net'
 import {
   isCk1,
-  isCp1,
+  isCw1,
   isPubkeyCommitment,
   isAnyCs1,
-  encodeCp1
+  encodeCp1,
+  encodeCt1,
+  outputKeyOfCw1
 } from './recoverableNotes'
 
 export type WithdrawRequestInfo = {
@@ -120,12 +123,15 @@ const requestNoteInfoByHash = async (
 
 const requestNoteInfoByPubkey = async (
   url: string,
-  cp1Value: string
+  pubkeyValue: string
 ): Promise<HashWithdrawRequestInfo> => {
-  if (!isCp1(cp1Value)) {
-    throw new Error('A note pubkey must be a valid cp1 value.')
+  // cp1 (key-path only) or ct1 (also script-path capable) - see
+  // isPubkeyCommitment's own doc comment. Both are looked up identically;
+  // they only diverge at redemption.
+  if (!isPubkeyCommitment(pubkeyValue)) {
+    throw new Error('A note pubkey must be a valid cp1 or ct1 value.')
   }
-  return requestNoteInfoByField(url, 'p', cp1Value)
+  return requestNoteInfoByField(url, 'p', pubkeyValue)
 }
 
 // For device-held notes the companion already has h in public recovery
@@ -142,17 +148,19 @@ export const fetchNoteInfoByHash = async (
   }
 }
 
-// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a cp1 note up by
-// its public commitment, never its ck1 secret. The one piece a recovery
-// scan (deriving pk_0, pk_1, ... off a registered cx1 branch) needs: each
-// probe is exactly this call, never anything that could redeem the note it
-// finds.
+// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a cp1 or ct1 note
+// up by its public commitment, never a secret (ck1, or a ct1's cw1). One of
+// the two things a recovery scan (deriving pk_0, pk_1, ... off a registered
+// cx1 branch) needs, and also how fetchNoteInfo resolves a bare cw1 (whose
+// commitment is derived locally, see recoverableNotes.ts's
+// deriveScriptPathCommitment) - never anything that could redeem the note
+// it finds.
 export const fetchNoteInfoByPubkey = async (
   url: string,
-  cp1Value: string
+  pubkeyValue: string
 ): Promise<HashWithdrawRequestInfo> => {
   try {
-    return await requestNoteInfoByPubkey(url, cp1Value)
+    return await requestNoteInfoByPubkey(url, pubkeyValue)
   } catch (err) {
     throw classifyNoteError(err as Error)
   }
@@ -191,6 +199,29 @@ export const fetchNoteInfo = async (
     const info = await fetchNoteInfoByPubkey(
       rawUrl.toString(),
       encodeCp1(owner.pubkeyXOnly)
+    )
+    return {...info, k1: queried}
+  }
+
+  // A ct1 note's own cw1 script-path spend - same "looked up by its PUBLIC
+  // commitment, never the secret itself" shape as ck1 above, except the
+  // commitment (Q) is derived locally from the cw1's own script + control
+  // block (deriveScriptPathCommitment - pure BIP341 math, no mint round
+  // trip needed to know which note this is) rather than recovered from a
+  // signature. Whether the mint will actually HONOUR this cw1 (script
+  // conditions satisfied, its own clock past any timelock) is for the
+  // mutating callback to decide - this is only "which note is this",
+  // exactly like every other branch here.
+  if (isCw1(queried)) {
+    const outputKeyHex = outputKeyOfCw1(queried)
+    if (!outputKeyHex) {
+      throw new Error(
+        "This note's cw1 secret does not commit to a valid output key."
+      )
+    }
+    const info = await fetchNoteInfoByPubkey(
+      rawUrl.toString(),
+      encodeCt1(hexToBytes(outputKeyHex))
     )
     return {...info, k1: queried}
   }
@@ -528,18 +559,24 @@ export const mergeNotesWithHash = async (
 
 export type RotateResult = {k1: string; signature?: string}
 
-// LUD-25 Part 2: an output whose OWN k1 is already ck1-shaped proves key
-// ownership already - reissuing it as a legacy preimage on every rotate/
-// split/merge would silently downgrade it back to Part 1 forever (a pub/
-// sig note that never survives its first refresh). `preferPubkey` names
-// whether the note(s) feeding this mutation were themselves ck1-shaped;
-// generatePubkeySecret returning null (no Part 2 provider configured, or
-// the seed-derived key isn't available right now) always falls back to
-// the ordinary legacy provider, same as an application that never wired
-// Part 2 up at all - this never throws on its own. Exported: reused by
-// internalTransfer.ts for a split's own change output, the one output of
-// an internal transfer this wallet actually keeps for itself (the other
-// output names the recipient's pk_i directly - see payInternalTransfer).
+// LUD-25 Part 2: an output whose OWN k1 already proves key ownership - ck1
+// directly, or a ct1's cw1 script-path spend (its leaf's own signature, or
+// for a keyless leaf the mere ability to satisfy it, already establishes
+// the redeemer controls the note) - reissuing it as a legacy preimage on
+// every rotate/split/merge would silently downgrade it back to Part 1
+// forever (a pub/sig note that never survives its first refresh).
+// `isUpgradedSecret` names which input shapes count. `preferPubkey` names
+// whether the note(s) feeding this mutation were themselves one of those
+// shapes; generatePubkeySecret returning null (no Part 2 provider
+// configured, or the seed-derived key isn't available right now) always
+// falls back to the ordinary legacy provider, same as an application that
+// never wired Part 2 up at all - this never throws on its own. Exported:
+// reused by internalTransfer.ts for a split's own change output, the one
+// output of an internal transfer this wallet actually keeps for itself
+// (the other output names the recipient's pk_i directly - see
+// payInternalTransfer).
+export const isUpgradedSecret = (k1: string): boolean => isCk1(k1) || isCw1(k1)
+
 export const generateOutputSecret = (
   domain: string,
   preferPubkey: boolean
@@ -580,7 +617,7 @@ export const rotateNote = async (
   callback: string,
   k1: string
 ): Promise<RotateResult> => {
-  const newK1 = generateOutputSecret(serverOf(callback), isCk1(k1))
+  const newK1 = generateOutputSecret(serverOf(callback), isUpgradedSecret(k1))
   try {
     const result = await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
     return {k1: newK1, signature: result.signature}
@@ -607,16 +644,16 @@ export type SplitResult = {
 // disclosed as h/h2. Splitting several notes at once needs no prior merge:
 // this burns all of them in a single request, same as mergeNotes does.
 // Both outputs prefer a pubkey-bound secret only when EVERY input already
-// is one - a mixed batch (at least one legacy input) keeps the existing,
-// safe default rather than guessing which side of the split "owns" the
-// upgrade.
+// is one (ck1 or cw1 - see isUpgradedSecret) - a mixed batch (at least one
+// legacy input) keeps the existing, safe default rather than guessing
+// which side of the split "owns" the upgrade.
 export const splitNote = async (
   callback: string,
   k1s: string[],
   amountMsat: number
 ): Promise<SplitResult> => {
   const domain = serverOf(callback)
-  const preferPubkey = k1s.every(isCk1)
+  const preferPubkey = k1s.every(isUpgradedSecret)
   const newK1 = generateOutputSecret(domain, preferPubkey)
   const changeK1 = generateOutputSecret(domain, preferPubkey)
   try {
@@ -648,12 +685,15 @@ export const splitNote = async (
 
 // merge: burn all given notes, mint one worth their sum - wallet-generated
 // secret per LUD-25 (see rotateNote), disclosed as h. Same all-or-nothing
-// pubkey preference as splitNote above.
+// pubkey preference as splitNote above (isUpgradedSecret).
 export const mergeNotes = async (
   callback: string,
   k1s: string[]
 ): Promise<RotateResult> => {
-  const newK1 = generateOutputSecret(serverOf(callback), k1s.every(isCk1))
+  const newK1 = generateOutputSecret(
+    serverOf(callback),
+    k1s.every(isUpgradedSecret)
+  )
   try {
     const result = await mergeNotesWithHash(
       callback,

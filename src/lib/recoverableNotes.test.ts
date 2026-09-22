@@ -2,6 +2,8 @@ import {describe, expect, it} from 'vitest'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bech32, bech32m} from '@scure/base'
+import {p2tr} from '@scure/btc-signer'
+import {Script} from '@scure/btc-signer/script.js'
 import {
   encodeCp1,
   decodeCp1,
@@ -13,6 +15,9 @@ import {
   encodeCw1,
   decodeCw1,
   isCw1,
+  deriveScriptPathCommitment,
+  outputKeyOfScriptPath,
+  outputKeyOfCw1,
   encodeCk1,
   decodeCk1,
   isCk1,
@@ -248,6 +253,69 @@ describe('bech32m codec', () => {
     expect(() =>
       encodeCx1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(31)))
     ).toThrow()
+  })
+})
+
+describe('deriveScriptPathCommitment / outputKeyOfCw1', () => {
+  // built independently of anything in recoverableNotes.ts - straight
+  // through @scure/btc-signer's own p2tr() tree builder, the same
+  // real-wallet code path addons/taproot/taproot.ts's scriptPathProofs
+  // uses, so this cross-validates deriveScriptPathCommitment's own
+  // from-scratch merkle-walk against a construction that never goes
+  // through it.
+  const internalKey = schnorr.getPublicKey(hexToBytes('11'.repeat(32)))
+  const leafA = Script.encode([hexToBytes('aa'.repeat(32)), 'CHECKSIG'])
+  const leafB = Script.encode([hexToBytes('bb'.repeat(32)), 'CHECKSIG'])
+
+  const buildProof = (leaves: Uint8Array[], pick: Uint8Array) => {
+    const tree = leaves.map(script => ({script}))
+    const out = p2tr(internalKey, tree, undefined, true) as {
+      tweakedPubkey: Uint8Array
+      leaves: {script: Uint8Array; controlBlock?: Uint8Array}[]
+    }
+    const leaf = out.leaves.find(l => bytesToHex(l.script) === bytesToHex(pick))
+    if (!leaf?.controlBlock) throw new Error('no control block')
+    return {tweakedPubkey: out.tweakedPubkey, controlBlock: leaf.controlBlock}
+  }
+
+  it('derives exactly the same Q a real p2tr() tree was built with (single leaf)', () => {
+    const {tweakedPubkey, controlBlock} = buildProof([leafA], leafA)
+    const commitment = deriveScriptPathCommitment(leafA, controlBlock)
+    expect(commitment).not.toBeNull()
+    expect(bytesToHex(commitment!.outputKey)).toBe(bytesToHex(tweakedPubkey))
+    expect(outputKeyOfScriptPath(leafA, controlBlock)).toEqual(
+      commitment!.outputKey
+    )
+  })
+
+  it('walks a real multi-leaf merkle path (not just a depth-0 tree)', () => {
+    const {tweakedPubkey, controlBlock} = buildProof([leafA, leafB], leafA)
+    // depth 1: version/parity byte + 32-byte internal key + one 32-byte sibling
+    expect(controlBlock.length).toBe(1 + 32 + 32)
+    const commitment = deriveScriptPathCommitment(leafA, controlBlock)
+    expect(bytesToHex(commitment!.outputKey)).toBe(bytesToHex(tweakedPubkey))
+  })
+
+  it('round-trips through a real cw1 end to end', () => {
+    const {tweakedPubkey, controlBlock} = buildProof([leafA], leafA)
+    const cw1 = encodeCw1({
+      locktime: 1_800_000_000,
+      sequence: 0xfffffffe,
+      script: leafA,
+      controlBlock,
+      witness: [hexToBytes('cc'.repeat(64))]
+    })
+    expect(outputKeyOfCw1(cw1)).toBe(bytesToHex(tweakedPubkey))
+  })
+
+  it('never throws on a malformed control block, returns null instead', () => {
+    expect(deriveScriptPathCommitment(leafA, new Uint8Array(0))).toBeNull()
+    expect(deriveScriptPathCommitment(leafA, new Uint8Array(10))).toBeNull()
+    expect(
+      outputKeyOfScriptPath(leafA, hexToBytes('c0' + 'ab'.repeat(31)))
+    ).toBeNull()
+    expect(outputKeyOfCw1('cw1nonsense')).toBeNull()
+    expect(outputKeyOfCw1(encodeCp1(hexToBytes('ab'.repeat(32))))).toBeNull()
   })
 })
 

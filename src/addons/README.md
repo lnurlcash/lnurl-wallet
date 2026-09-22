@@ -318,13 +318,18 @@ rotated to a `ct1` whose only spend path is the stock `cltv` leaf
 key-path is unspendable and nobody can unlock early; the mint's own clock
 enforces the date (a custodial policy, see lnurl-mint's `ct1.py`).
 
-- The lock's whole state is a 72-hex **timelock secret** (`sk || u32 time`);
-  the shareable note link is the mint's note URL with that secret as `tl` and
-  no `k1`. The wallet cannot hold a cw1 note (`isValidK1` rejects it), so the
-  link is the only record once the lock lands - copy it.
-- Redeem uses the `note.redeemTimelock` verb: it builds and signs the cw1 at
-  redeem time (the signature commits to the mint's own figure for the amount),
-  saves the replacement note to the wallet _before_ the irreversible rotate,
-  and only removes it again on a definitive refusal.
+- The note being locked already has a known amount, and a tapscript
+  `CHECKSIG` signature commits to amount, locktime and sequence - so
+  `planTimelock` builds and signs the full `cw1` script-path spend up front,
+  with a throwaway key generated and discarded on the spot. The result is
+  already a complete `?k1=cw1...` note; there is no separate redeem step or
+  redeem verb, in this addon or the mint - `router.py`'s `_note_id_from_k1`
+  resolves a `cw1` the same way as any other `k1`, so any LUD-03
+  withdraw-capable wallet can spend it once the unlock time has passed.
+- The wallet cannot hold a cw1 note itself (`isValidK1` rejects it), so the
+  link shown right after locking is the only record of the value - copy it.
+  It's shown as `lnurlw://` (LUD-17), with a per-lock toggle for the classic
+  bech32 (`LNURL1...`) encoding and one for whether to include the mint's
+  offline-verification signature.
 - Needs a mint with `lnurl-mint[ct1]`; without it the lock is refused before
   anything is burned.

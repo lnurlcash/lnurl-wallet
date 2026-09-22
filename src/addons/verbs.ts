@@ -14,9 +14,6 @@ import {
   deriveNotePubkey,
   parseInternalTransferHint,
   requireNoteK1,
-  fetchNoteInfoByPubkey,
-  generateOutputSecret,
-  hashK1,
   rotateNoteWithHash,
   verifyNoteSignatureHash,
   noteSignature,
@@ -27,12 +24,6 @@ import {
 import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
-import {
-  buildRedeemCw1,
-  outputKeyOfSecret,
-  secretOfLink,
-  unlockTimeOfSecret
-} from './timerlocker/timelock'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -213,8 +204,12 @@ export const VERBS: Record<string, VerbHandler> = {
       : false
     // the burn already landed server-side (the mutation above returned
     // OK) - this wallet's own copy of the old secret is now worthless
-    // either way, verified or not
-    ctx.removeBearer(bearer.id)
+    // either way, verified or not. Marked spent rather than removed, same
+    // convention every other burn in this wallet follows (MeltDialog,
+    // TransferDialog, noteSplitting's own remainder, "mark spent" on
+    // BearerCard/Wallet.tsx) - it stays visible in history instead of
+    // silently vanishing from the list.
+    await ctx.updateBearer(bearer.id, {spent: true})
     ctx.logActivity(
       'spent',
       `Locked a ${bearer.amount} msat note at ${serverOf(bearer.url)} to a ${kind} pubkey via an addon.`,
@@ -291,76 +286,6 @@ export const VERBS: Record<string, VerbHandler> = {
       // verb's own top comment
     }
     return {id: added.id, verified}
-  },
-
-  // The redeem half of the timerlocker addon: `url` is a timelocked note
-  // link (the mint's own note URL carrying the lock's secret as `tl`, no k1 -
-  // see timerlocker/timelock.ts). Once the mint's clock passes the unlock time
-  // a cw1 is built and signed here and burned into an ordinary note of the
-  // same value, generated locally.
-  //
-  // Order matters (a rotate is irreversible): the replacement note is saved to
-  // the wallet FIRST, unverified, and only removed again on a DEFINITIVE
-  // refusal. An ambiguous outcome (timeout, dropped connection) leaves it in
-  // place - the burn may have landed, and this wallet's copy is then the only
-  // record of the value. A refresh on the Wallet page settles which it was.
-  'note.redeemTimelock': async (args, ctx) => {
-    const url = String(args.url ?? '').trim()
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      throw new Error('That is not a timelocked note link.')
-    }
-    const secret = secretOfLink(url)
-    const unlockAt = unlockTimeOfSecret(secret)
-    const outputKeyHex = outputKeyOfSecret(secret)
-    if (unlockAt === null || outputKeyHex === null) {
-      throw new Error('That link carries no valid timelock secret.')
-    }
-    if (Date.now() / 1000 < unlockAt) {
-      throw new Error(
-        `Still locked - unlocks ${new Date(unlockAt * 1000).toLocaleString()}.`
-      )
-    }
-    parsed.searchParams.delete('sig')
-    parsed.searchParams.delete('tl')
-    const info = await fetchNoteInfoByPubkey(
-      parsed.toString(),
-      encodeCt1(hexToBytes(outputKeyHex))
-    )
-    const amountMsat = info.maxWithdrawable
-    const cw1 = buildRedeemCw1(secret, amountMsat)
-    const newK1 = generateOutputSecret(serverOf(info.callback), false)
-    const base = parsed.toString()
-    const saved = await ctx.addBearer({
-      url: withNewK1(base, newK1, amountMsat),
-      callback: info.callback,
-      amount: amountMsat,
-      verified: false
-    })
-    let signature: string | undefined
-    try {
-      signature = (await rotateNoteWithHash(info.callback, cw1, hashK1(newK1)))
-        .signature
-    } catch (err) {
-      if (err instanceof AmbiguousMintError) {
-        throw new Error(
-          `${(err as Error).message} The redemption may or may not have landed - a replacement note was saved to your wallet; refresh it on the Wallet page to find out. Do not retry until you have.`
-        )
-      }
-      ctx.removeBearer(saved.id)
-      throw err
-    }
-    await ctx.updateBearer(saved.id, {
-      url: withNewK1(base, newK1, amountMsat, signature),
-      verified: true
-    })
-    ctx.logActivity(
-      'mint',
-      `Redeemed a timelocked ${amountMsat} msat note at ${serverOf(base)} via an addon.`
-    )
-    return {id: saved.id, amountMsat}
   },
 
   'file.download': async args => {
