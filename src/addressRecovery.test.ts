@@ -193,22 +193,26 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(1)
   })
 
-  it("raises the scan floor from SERVICE's own text/xpub metadata hint", async () => {
+  it("never lets SERVICE's own text/xpub metadata hint skip a fresh device's unscanned floor", async () => {
     const branch = cashSecrets.cashAddressBranch(SERVER)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(
       'fetch',
       fakeMint([0], undefined, `${cx1}:3`) as unknown as typeof fetch
     )
-    // index 0 is live, but the hint says SERVICE already knows up to 3 -
-    // a bare "check notes" (no local nextScanIndex yet) should still skip
-    // straight past it instead of re-finding something already claimed
+    // index 0 is live (a real payment this device has never seen), and the
+    // hint says SERVICE already handed out invoices up to 3 - but
+    // `next_index` advances the moment SERVICE creates an invoice, not once
+    // it settles (lnurl-mint's own claim_next_index), so a bare "check
+    // notes" from a device with no local nextScanIndex yet MUST NOT trust
+    // the hint to skip straight past index 0: nothing below it has actually
+    // been confirmed recovered by this device
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
-    expect(result.recovered).toHaveLength(0)
-    expect(result.nextScanIndex).toBeGreaterThanOrEqual(3)
+    expect(result.recovered).toHaveLength(1)
+    expect(result.highestIndex).toBe(0)
   })
 
-  it('the metadata hint only ever raises the floor, never lowers a higher local one', async () => {
+  it('the metadata hint only ever raises an already-nonzero local floor, never lowers it', async () => {
     const branch = cashSecrets.cashAddressBranch(SERVER)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(
@@ -222,5 +226,24 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
       {startIndex: 10}
     )
     expect(result.nextScanIndex).toBe(10)
+  })
+
+  it('the metadata hint DOES raise an already-nonzero local floor forward', async () => {
+    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:5`) as unknown as typeof fetch
+    )
+    // this device already confirmed up through index 1 on a prior pass
+    // (startIndex: 1, a genuine nonzero resume point, not a fresh scan) -
+    // SERVICE's hint of 5 is allowed to skip it ahead from there
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 1}
+    )
+    expect(result.nextScanIndex).toBe(5)
   })
 })

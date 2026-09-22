@@ -7,6 +7,7 @@ import {
   noteK1,
   withNewK1,
   scanForAddressNotes,
+  resolveScanStartIndex,
   encodeCk1,
   signNoteOwnership
 } from './lnurlcash'
@@ -107,10 +108,14 @@ export const scanRegisteredAddress = async (
       }
     }
     withdrawUrl = fromLud17(info.withdrawLink)
-    // SERVICE's own best-known next-unused index (if it advertised one) -
-    // only ever raises the floor, never lowers it below what this device
-    // already confirmed for itself
-    startIndex = Math.max(startFloor, info.internalTransfer?.startIndex ?? 0)
+    // see resolveScanStartIndex's own doc comment (src/lib/addresses.ts) for
+    // why this must never trust SERVICE's hint to skip a fresh scan (or an
+    // explicit "full rescan", which always calls this with startIndex: 0)
+    // past index 0 - the regression this guards against is documented there
+    startIndex = resolveScanStartIndex(
+      startFloor,
+      info.internalTransfer?.startIndex
+    )
   } catch (err) {
     return {
       server,

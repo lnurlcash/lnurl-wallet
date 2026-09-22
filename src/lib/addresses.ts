@@ -211,3 +211,28 @@ export const scanForAddressNotes = async (
   }
   return found
 }
+
+// LUD-25 Part 2's own resume-floor rule for combining a caller's own
+// already-confirmed floor with a SERVICE-advertised `text/xpub` index hint
+// (25.md's Internal mint transfers metadata - see internalTransfer.ts's
+// parseInternalTransferHint for the identical wire format). The hint names
+// the next index SERVICE will hand out - it advances the moment SERVICE
+// creates an invoice for that index, not once it settles (nothing on the
+// wire distinguishes the two), so an address with exactly one payment
+// already advertises hint=1 even though index 0 - the note that payment
+// minted - has never been confirmed recovered by anyone scanning it.
+//
+// `localFloor` is whatever the caller already independently trusts as
+// "everything below this has been checked" - a device's own resume point
+// from an earlier pass, or 0 for either a device that has never scanned
+// this branch before, or an explicit "start over from the very beginning"
+// request. Only once `localFloor` is already nonzero - a genuine
+// self-confirmed resume point - is the hint trusted to skip it forward
+// faster than re-walking one index at a time; at `localFloor === 0` the
+// hint is ignored outright, so neither case above can ever skip past the
+// very first index, however high SERVICE's own hint claims to be.
+export const resolveScanStartIndex = (
+  localFloor: number,
+  serviceHint?: number
+): number =>
+  localFloor > 0 ? Math.max(localFloor, serviceHint ?? 0) : localFloor

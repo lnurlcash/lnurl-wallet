@@ -2,6 +2,15 @@
 
 ## 0.14.0 - unreleased
 
+- Add `resolveScanStartIndex` to `addresses.ts`: the LUD-25 Part 2 rule for
+  combining a caller's own already-confirmed scan floor with a
+  SERVICE-advertised `text/xpub` index hint, factored out of
+  `lnurl-wallet`'s own `addressRecovery.ts` after a real bug there let the
+  hint skip a fresh scan (and an explicit full rescan) straight past a
+  genuinely unrecovered note - `next_index` advances the moment SERVICE
+  hands out an invoice, not once it settles, so it is never safe to trust
+  as "already recovered" ground below any floor a caller hasn't confirmed
+  itself. See the function's own doc comment.
 - Publish the protocol library maintained and exercised by `lnurl-wallet`
   directly from the wallet repository.
 - Include LN address registration and recovery scanning, Part 2 public-key
