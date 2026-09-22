@@ -269,6 +269,13 @@ describe('describeNode / describeExprShort', () => {
       describeNode({type: 'Button', label: 'Go', onClick: true as any})
     ).toBe('Button: "Go"')
     expect(
+      describeNode({
+        type: 'Button',
+        label: {var: 'item'},
+        onClick: true as any
+      })
+    ).toBe('Button: {item}')
+    expect(
       describeNode({type: 'For', each: {var: 'items'}, children: []})
     ).toBe('For each {items}')
     expect(describeNode({type: 'Show', when: true, children: []})).toBe(

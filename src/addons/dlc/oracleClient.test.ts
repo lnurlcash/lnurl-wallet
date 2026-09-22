@@ -3,7 +3,8 @@ import {configureTransport, type Transport} from '../../lnurlcash'
 import {
   fetchOracleAnnouncement,
   fetchOracleAttestation,
-  fetchOracleEvents
+  fetchOracleEvents,
+  fetchOraclePubkey
 } from './oracleClient'
 
 const defaultTransport: Transport = (url, signal, method) =>
@@ -15,6 +16,45 @@ afterEach(() => {
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {status})
+
+describe('fetchOraclePubkey', () => {
+  const PUBKEY = '11'.repeat(32)
+
+  it('returns the pubkey on 200, lowercased', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {oraclePubkeyHex: PUBKEY.toUpperCase()})
+    )
+    await expect(fetchOraclePubkey('https://oracle.example.com')).resolves.toBe(
+      PUBKEY
+    )
+  })
+
+  it('strips a trailing slash from the base URL', async () => {
+    let seenUrl = ''
+    configureTransport(async url => {
+      seenUrl = url
+      return jsonResponse(200, {oraclePubkeyHex: PUBKEY})
+    })
+    await fetchOraclePubkey('https://oracle.example.com/')
+    expect(seenUrl).toBe('https://oracle.example.com/oracle-pubkey')
+  })
+
+  it('refuses a malformed pubkey rather than passing it through', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {oraclePubkeyHex: 'not-hex'})
+    )
+    await expect(
+      fetchOraclePubkey('https://oracle.example.com')
+    ).rejects.toThrow(/unexpected/)
+  })
+
+  it('surfaces the FastAPI detail message on a non-200 status', async () => {
+    configureTransport(async () => jsonResponse(500, {detail: 'db is down'}))
+    await expect(
+      fetchOraclePubkey('https://oracle.example.com')
+    ).rejects.toThrow('db is down')
+  })
+})
 
 describe('fetchOracleEvents', () => {
   it('returns the parsed event list on 200', async () => {
@@ -55,6 +95,40 @@ describe('fetchOracleEvents', () => {
     await expect(
       fetchOracleEvents('https://oracle.example.com')
     ).rejects.toThrow(/unexpected/)
+  })
+
+  it('refuses an event whose fields do not actually match the declared shape - a hostile/buggy oracle cannot smuggle an unexpected type past this into the addon', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, [
+        {
+          eventId: {evil: 'object'},
+          category: 'btc-price',
+          outcomes: ['above', 'below'],
+          maturityTime: 123,
+          status: 'announced'
+        }
+      ])
+    )
+    await expect(
+      fetchOracleEvents('https://oracle.example.com')
+    ).rejects.toThrow(/malformed event/)
+  })
+
+  it('refuses an event whose outcomes is not really an array of strings', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, [
+        {
+          eventId: 'btc-100k',
+          category: 'btc-price',
+          outcomes: 'above,below',
+          maturityTime: 123,
+          status: 'announced'
+        }
+      ])
+    )
+    await expect(
+      fetchOracleEvents('https://oracle.example.com')
+    ).rejects.toThrow(/malformed event/)
   })
 
   it('still refuses a disallowed URL before the transport is ever called', async () => {
@@ -99,6 +173,24 @@ describe('fetchOracleAnnouncement', () => {
       fetchOracleAnnouncement('https://oracle.example.com', 'nope')
     ).rejects.toThrow('No such event.')
   })
+
+  it('refuses a non-hex oraclePubkeyHex/nonceHex rather than passing it through to the crypto layer', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {...ANNOUNCEMENT, oraclePubkeyHex: 'not-hex-at-all'})
+    )
+    await expect(
+      fetchOracleAnnouncement('https://oracle.example.com', 'btc-100k-2026')
+    ).rejects.toThrow(/malformed announcement/)
+  })
+
+  it('refuses outcomes that are not a real array of strings', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {...ANNOUNCEMENT, outcomes: [1, 2]})
+    )
+    await expect(
+      fetchOracleAnnouncement('https://oracle.example.com', 'btc-100k-2026')
+    ).rejects.toThrow(/malformed announcement/)
+  })
 })
 
 describe('fetchOracleAttestation', () => {
@@ -129,5 +221,28 @@ describe('fetchOracleAttestation', () => {
     await expect(
       fetchOracleAttestation('https://oracle.example.com', 'btc-100k-2026')
     ).rejects.toThrow('boom')
+  })
+
+  it('refuses a signatureHex that is not real 64-byte hex', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {
+        outcome: 'above',
+        signatureHex: 'not-hex',
+        resolvedAt: '2026-01-01T00:00:00Z',
+        source: 'x'
+      })
+    )
+    await expect(
+      fetchOracleAttestation('https://oracle.example.com', 'btc-100k-2026')
+    ).rejects.toThrow(/malformed attestation/)
+  })
+
+  it('refuses a body missing required fields', async () => {
+    configureTransport(async () =>
+      jsonResponse(200, {outcome: 'above', signatureHex: '33'.repeat(64)})
+    )
+    await expect(
+      fetchOracleAttestation('https://oracle.example.com', 'btc-100k-2026')
+    ).rejects.toThrow(/malformed attestation/)
   })
 })

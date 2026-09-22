@@ -35,6 +35,13 @@ const canAddOutcome = (outcomes: unknown, input: unknown): boolean => {
   return value !== '' && !list.includes(value)
 }
 
+// a checkmark on whichever outcome button is currently selected - the
+// outcomes list is already fixed and known once added above, so "which
+// one happened" is a selection among THESE exact values, not free text
+// that could drift from what's actually shown per-row below
+const outcomeButtonLabel = (item: unknown, selected: unknown): string =>
+  item === selected ? `✓ ${String(item)}` : String(item)
+
 // ---- per-outcome leaf preview - reuses the taproot addon's own `pk`
 // template directly (an outcome point is just a 32-byte x-only pubkey) ----
 
@@ -311,10 +318,30 @@ const builderUi: UiNode[] = [
       args: [{var: 'oracle'}, {var: 'nonce'}, {var: 'outcomes'}]
     },
     children: [
+      {type: 'Text', value: 'Which outcome happened?'},
       {
-        type: 'Input',
-        bind: 'outcomeToAttest',
-        label: 'Which outcome happened?'
+        type: 'View',
+        style: 'row',
+        children: [
+          {
+            type: 'For',
+            each: {var: 'outcomes'},
+            children: [
+              {
+                type: 'Button',
+                label: {
+                  helper: 'outcomeButtonLabel',
+                  args: [{var: 'item'}, {var: 'outcomeToAttest'}]
+                },
+                onClick: {
+                  action: 'set',
+                  path: 'outcomeToAttest',
+                  value: {var: 'item'}
+                }
+              }
+            ]
+          }
+        ]
       },
       {
         type: 'Button',
@@ -420,6 +447,7 @@ const dlcHelpers: Record<string, AddonHelper> = {
   generateOracleKeypair: generateOracleKeypair as AddonHelper,
   generateNonce: generateNonce as AddonHelper,
   canAddOutcome: canAddOutcome as AddonHelper,
+  outcomeButtonLabel: outcomeButtonLabel as AddonHelper,
   outcomePointFor: outcomePointFor as AddonHelper,
   rowOpcodes: rowOpcodes as AddonHelper,
   rowLeafHash: rowLeafHash as AddonHelper,

@@ -3,9 +3,13 @@ import {toLud17w, toBech32Lnurl} from '../../lnurlcash'
 import {
   betProblem,
   betReceiptUrl,
+  counterpartyProblem,
+  formatUnlock,
   parseBetReceipt,
   planBet,
   receiptProblem,
+  refundDateProblem,
+  refundNoteUrl,
   type BetPlan,
   type BetReceipt
 } from './betlock'
@@ -23,12 +27,16 @@ import type {
 // flow (LOCK now, REDEEM only once an attestation exists) where
 // timelocker's own equivalent collapses to one.
 //
-// Deliberately race-to-claim, not counterparty-bound: a leaf is
+// Race-to-claim by default, not counterparty-bound: a leaf is
 // `<outcome point> CHECKSIG` alone, with no combination against a specific
 // winner's own key. Once the oracle attests, whoever redeems first gets
 // the note - hand the lock's own receipt only to whoever should be able
 // to claim it, and redeem promptly once you expect the oracle to have
-// attested.
+// attested. Optionally name a specific redeemer instead (see betlock.ts's
+// own top comment) - either way, every bet also gets a MANDATORY refund
+// leaf: if the oracle never resolves the event, the note isn't locked
+// forever - the original staker can reclaim it after the deadline they
+// pick at lock time.
 
 const problemOf = (
   oracle: unknown,
@@ -49,13 +57,14 @@ const canAddOutcome = (outcomes: unknown, input: unknown): boolean => {
 }
 
 // ---- browsing a live oracle (Lock side) - see verbs.ts's own
-// oracle.fetchEvents/oracle.fetchAnnouncement, and oracleClient.ts for
-// what a fetched event/announcement actually looks like. Purely an
-// alternative way to arrive at the exact same `plan` the manual
-// oraclePubkeyHex/nonceHex/outcomes fields above already produce via
-// planBet - see the "Use this event" button below, which calls planBet
-// with the fetched announcement's fields plus oracleBaseUrl/eventId so the
-// resulting plan (and later, the receipt) carries them along too. ----
+// oracle.fetchPubkey/oracle.fetchEvents/oracle.fetchAnnouncement, and
+// oracleClient.ts for what a fetched pubkey/event/announcement actually
+// looks like. Purely an alternative way to arrive at the exact same `plan`
+// the manual oraclePubkeyHex/nonceHex/outcomes fields above already
+// produce via planBet - see the "Use this event" button below, which
+// calls planBet with the fetched announcement's fields plus
+// oracleBaseUrl/eventId so the resulting plan (and later, the receipt)
+// carries them along too. ----
 
 // only an event that hasn't resolved yet makes sense to offer for a NEW
 // bet - not unsafe to lock against a resolved one (the crypto doesn't
@@ -65,6 +74,22 @@ const isOpenEvent = (item: unknown): boolean =>
 
 const joinOutcomes = (outcomes: unknown): string =>
   Array.isArray(outcomes) ? (outcomes as string[]).join(', ') : ''
+
+// ---- naming a counterparty (optional, Lock side) - note.resolveAddressPubkey
+// (verbs.ts) returns a 33-byte COMPRESSED pubkey (02||x, the musig2 addon's
+// own convention), but every leaf template here works in BIP340's 32-byte
+// x-only form (see taproot.ts's own CHECKSIG templates) - strips that
+// prefix. Already-x-only input passes through unchanged, so this is safe
+// to apply everywhere counterpartyPubkeyHex is actually used, regardless
+// of exactly which shape produced it. ----
+const xOnlyPubkeyHex = (value: unknown): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (/^[0-9a-f]{64}$/.test(v)) return v
+  if (/^0[23][0-9a-f]{64}$/.test(v)) return v.slice(2)
+  return v
+}
 
 type LockedNote = {
   urlTemplate: string
@@ -110,6 +135,19 @@ const receiptOutcomes = (value: unknown): string => {
   return receipt ? receipt.outcomes.join(', ') : ''
 }
 
+// the same list as receiptOutcomes above, unjoined - a receipt's own
+// outcomes are a fixed, known set the instant it parses, so picking which
+// one the oracle attested to is a selection among THESE exact values, not
+// free text a holder could mistype against them
+const receiptOutcomesList = (value: unknown): string[] =>
+  parseBetReceipt(value)?.outcomes ?? []
+
+// a checkmark on whichever outcome button is currently selected (manually,
+// or via an auto-fetched attestation - see this file's own call site,
+// which passes effectiveOutcome(...) rather than the raw bound field)
+const outcomeButtonLabel = (item: unknown, selected: unknown): string =>
+  item === selected ? `✓ ${String(item)}` : String(item)
+
 // ---- auto-fetching an attestation (Redeem side) - only possible when the
 // receipt itself carries the discovery metadata a real oracle's own
 // announcement puts there (see BetPlan's own doc comment in betlock.ts);
@@ -126,6 +164,24 @@ const receiptOracleServiceUrl = (receiptInput: unknown): string =>
 
 const receiptEventId = (receiptInput: unknown): string =>
   parseBetReceipt(receiptInput)?.eventId ?? ''
+
+// whether THIS receipt is locked to a specific redeemer (see betlock.ts's
+// own top comment) - only then does the Redeem UI need to ask for a
+// secret key at all; a plain race-to-claim receipt redeems exactly as it
+// always has
+const receiptNeedsRedeemerSecret = (receiptInput: unknown): boolean =>
+  !!parseBetReceipt(receiptInput)?.counterpartyPubkeyHex
+
+// gates the Redeem button on top of canRedeem below - a counterparty-bound
+// receipt additionally needs a well-shaped secret key entered; a plain
+// receipt needs nothing extra (buildRedeemCw1 itself is the real check
+// either way, this is just when to let the button enable at all)
+const hasRedeemerSecretIfNeeded = (
+  receiptInput: unknown,
+  redeemerSecretKeyHex: unknown
+): boolean =>
+  !receiptNeedsRedeemerSecret(receiptInput) ||
+  /^[0-9a-f]{64}$/i.test(String(redeemerSecretKeyHex ?? '').trim())
 
 const attestationResolved = (fetched: unknown): boolean =>
   (fetched as OracleAttestationResult | null)?.resolved === true
@@ -169,11 +225,129 @@ const lockUi: UiNode[] = [
         filter: {spent: false},
         label: 'Note to stake'
       },
+      {type: 'Text', value: 'Let someone else redeem this (optional)'},
+      {
+        type: 'Text',
+        value:
+          'Leave blank for the default: whoever has the receipt once the oracle attests, first to redeem wins. Fill this in to also require a signature from one specific person - only they (and the oracle, together) can ever redeem it.'
+      },
+      {
+        type: 'Input',
+        bind: 'counterpartyAddress',
+        label: 'Their Lightning Address, cx1/cp1 address, or username'
+      },
+      {
+        type: 'Button',
+        label: 'Resolve pubkey',
+        onClick: {
+          verb: 'note.resolveAddressPubkey',
+          args: {
+            address: {var: 'counterpartyAddress'},
+            mintNote: {var: 'selectedNote.id'}
+          },
+          result: 'counterpartyPubkeyHex'
+        }
+      },
+      {
+        type: 'Show',
+        when: {var: 'counterpartyPubkeyHex'},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Redeemer pubkey: ',
+                {
+                  helper: 'xOnlyPubkeyHex',
+                  args: [{var: 'counterpartyPubkeyHex'}]
+                }
+              ]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Button',
+            label: 'Clear',
+            onClick: {action: 'set', path: 'counterpartyPubkeyHex', value: ''}
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'counterpartyProblem',
+          args: [
+            {helper: 'xOnlyPubkeyHex', args: [{var: 'counterpartyPubkeyHex'}]}
+          ]
+        },
+        children: [
+          {
+            type: 'Text',
+            value: {
+              helper: 'counterpartyProblem',
+              args: [
+                {
+                  helper: 'xOnlyPubkeyHex',
+                  args: [{var: 'counterpartyPubkeyHex'}]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {type: 'Text', value: 'Refund deadline (required)'},
+      {
+        type: 'Text',
+        value:
+          'Every bet locked here gets a built-in escape hatch: if the oracle never resolves this event, you can reclaim your stake yourself after this date. Pick it well past when you expect the event to actually resolve.'
+      },
+      {
+        type: 'Input',
+        bind: 'refundDate',
+        kind: 'datetime',
+        label: 'Reclaim after'
+      },
+      {
+        type: 'Show',
+        when: {helper: 'refundDateProblem', args: [{var: 'refundDate'}]},
+        children: [
+          {
+            type: 'Text',
+            value: {helper: 'refundDateProblem', args: [{var: 'refundDate'}]}
+          }
+        ]
+      },
       {type: 'Text', value: 'Browse a live oracle (optional)'},
       {
         type: 'Input',
         bind: 'oracleBaseUrl',
         label: 'Oracle URL (set a default on the Settings page)'
+      },
+      {
+        type: 'Button',
+        label: 'Fetch oracle pubkey',
+        onClick: {
+          verb: 'oracle.fetchPubkey',
+          args: {baseUrl: {var: 'oracleBaseUrl'}},
+          // straight into the SAME field the manual "Oracle pubkey" input
+          // further down binds to (Renderer.tsx's runAction does a raw
+          // setStore(path, result), and this verb returns a bare pubkey
+          // string, matching note.resolveAddressPubkey's own convention) -
+          // no separate field to keep in sync, and it's exactly what a
+          // holder would otherwise have had to copy-paste in by hand
+          result: 'oraclePubkeyHex'
+        }
+      },
+      {
+        type: 'Show',
+        when: {var: 'oraclePubkeyHex'},
+        children: [
+          {
+            type: 'Text',
+            value: {cat: ['This oracle: ', {var: 'oraclePubkeyHex'}]},
+            style: 'response-block'
+          }
+        ]
       },
       {
         type: 'Button',
@@ -263,7 +437,17 @@ const lockUi: UiNode[] = [
           },
           {
             type: 'Show',
-            when: {var: 'selectedNote'},
+            when: {
+              and: [
+                {var: 'selectedNote'},
+                {
+                  helper: 'not',
+                  args: [
+                    {helper: 'refundDateProblem', args: [{var: 'refundDate'}]}
+                  ]
+                }
+              ]
+            },
             children: [
               {
                 type: 'Button',
@@ -277,8 +461,17 @@ const lockUi: UiNode[] = [
                       {var: 'fetchedAnnouncement.oraclePubkeyHex'},
                       {var: 'fetchedAnnouncement.nonceHex'},
                       {var: 'fetchedAnnouncement.outcomes'},
+                      {
+                        helper: 'satsToMsat',
+                        args: [{var: 'selectedNote.amountSat'}]
+                      },
+                      {var: 'refundDate'},
                       {var: 'oracleBaseUrl'},
-                      {var: 'fetchedAnnouncement.eventId'}
+                      {var: 'fetchedAnnouncement.eventId'},
+                      {
+                        helper: 'xOnlyPubkeyHex',
+                        args: [{var: 'counterpartyPubkeyHex'}]
+                      }
                     ]
                   }
                 }
@@ -375,6 +568,10 @@ const lockUi: UiNode[] = [
                 {var: 'nonceHex'},
                 {var: 'outcomes'}
               ]
+            },
+            {
+              helper: 'not',
+              args: [{helper: 'refundDateProblem', args: [{var: 'refundDate'}]}]
             }
           ]
         },
@@ -390,7 +587,18 @@ const lockUi: UiNode[] = [
                 args: [
                   {var: 'oraclePubkeyHex'},
                   {var: 'nonceHex'},
-                  {var: 'outcomes'}
+                  {var: 'outcomes'},
+                  {
+                    helper: 'satsToMsat',
+                    args: [{var: 'selectedNote.amountSat'}]
+                  },
+                  {var: 'refundDate'},
+                  null,
+                  null,
+                  {
+                    helper: 'xOnlyPubkeyHex',
+                    args: [{var: 'counterpartyPubkeyHex'}]
+                  }
                 ]
               }
             }
@@ -450,6 +658,62 @@ const lockUi: UiNode[] = [
             {helper: 'outcomeList', args: [{var: 'plan'}]}
           ]
         }
+      },
+      {
+        type: 'Show',
+        when: {var: 'plan.counterpartyPubkeyHex'},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: ['Redeemable only by: ', {var: 'plan.counterpartyPubkeyHex'}]
+            }
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {helper: 'not', args: [{var: 'refundClaimResult'}]},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'A refund note was also generated - if the oracle never resolves this event, you can reclaim your stake after ',
+                {helper: 'formatUnlock', args: [{var: 'plan.refundLocktime'}]},
+                '. Add it to your wallet now so it’s not lost.'
+              ]
+            }
+          },
+          {
+            type: 'Button',
+            label: 'Add refund note to wallet',
+            onClick: {
+              verb: 'note.claim',
+              args: {
+                url: {
+                  helper: 'refundNoteUrl',
+                  args: [{var: 'lockedNote'}, {var: 'plan'}]
+                },
+                callback: {var: 'lockedNote.callback'},
+                amountMsat: {var: 'lockedNote.amountMsat'}
+              },
+              result: 'refundClaimResult'
+            }
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {var: 'refundClaimResult'},
+        children: [
+          {
+            type: 'Text',
+            value:
+              '✓ Refund note added to your wallet - it behaves like any other note, just not spendable until its own deadline.',
+            style: 'response-block'
+          }
+        ]
       },
       {
         type: 'Input',
@@ -524,14 +788,42 @@ const redeemUi: UiNode[] = [
     type: 'Show',
     when: {helper: 'receiptOutcomes', args: [{var: 'receiptInput'}]},
     children: [
+      {type: 'Text', value: 'Which outcome did the oracle attest to?'},
       {
-        type: 'Text',
-        value: {
-          cat: [
-            'Outcomes: ',
-            {helper: 'receiptOutcomes', args: [{var: 'receiptInput'}]}
-          ]
-        }
+        type: 'View',
+        style: 'row',
+        children: [
+          {
+            type: 'For',
+            each: {
+              helper: 'receiptOutcomesList',
+              args: [{var: 'receiptInput'}]
+            },
+            children: [
+              {
+                type: 'Button',
+                label: {
+                  helper: 'outcomeButtonLabel',
+                  args: [
+                    {var: 'item'},
+                    {
+                      helper: 'effectiveOutcome',
+                      args: [
+                        {var: 'fetchedAttestation'},
+                        {var: 'attestOutcome'}
+                      ]
+                    }
+                  ]
+                },
+                onClick: {
+                  action: 'set',
+                  path: 'attestOutcome',
+                  value: {var: 'item'}
+                }
+              }
+            ]
+          }
+        ]
       }
     ]
   },
@@ -606,16 +898,11 @@ const redeemUi: UiNode[] = [
           {
             type: 'Text',
             value:
-              'Not resolved yet - check back after the event matures, or enter the attestation manually below if you have it from elsewhere.'
+              'Not resolved yet - check back after the event matures, or select the outcome above and paste the signature below if you have it from elsewhere.'
           }
         ]
       }
     ]
-  },
-  {
-    type: 'Input',
-    bind: 'attestOutcome',
-    label: 'Which outcome did the oracle attest to?'
   },
   {
     type: 'Input',
@@ -624,17 +911,41 @@ const redeemUi: UiNode[] = [
   },
   {
     type: 'Show',
+    when: {helper: 'receiptNeedsRedeemerSecret', args: [{var: 'receiptInput'}]},
+    children: [
+      {
+        type: 'Text',
+        value:
+          'This bet is locked to a specific redeemer - only your own secret key for that pubkey can complete it. Never transmitted anywhere; used only to sign locally.'
+      },
+      {
+        type: 'Input',
+        bind: 'redeemerSecretKeyHex',
+        label: 'Your secret key (32-byte hex)'
+      }
+    ]
+  },
+  {
+    type: 'Show',
     when: {
-      helper: 'canRedeem',
-      args: [
-        {var: 'receiptInput'},
+      and: [
         {
-          helper: 'effectiveOutcome',
-          args: [{var: 'fetchedAttestation'}, {var: 'attestOutcome'}]
+          helper: 'canRedeem',
+          args: [
+            {var: 'receiptInput'},
+            {
+              helper: 'effectiveOutcome',
+              args: [{var: 'fetchedAttestation'}, {var: 'attestOutcome'}]
+            },
+            {
+              helper: 'effectiveSignatureHex',
+              args: [{var: 'fetchedAttestation'}, {var: 'attestSignatureHex'}]
+            }
+          ]
         },
         {
-          helper: 'effectiveSignatureHex',
-          args: [{var: 'fetchedAttestation'}, {var: 'attestSignatureHex'}]
+          helper: 'hasRedeemerSecretIfNeeded',
+          args: [{var: 'receiptInput'}, {var: 'redeemerSecretKeyHex'}]
         }
       ]
     },
@@ -653,7 +964,8 @@ const redeemUi: UiNode[] = [
             signatureHex: {
               helper: 'effectiveSignatureHex',
               args: [{var: 'fetchedAttestation'}, {var: 'attestSignatureHex'}]
-            }
+            },
+            redeemerSecretKeyHex: {var: 'redeemerSecretKeyHex'}
           },
           result: 'redeemResult'
         }
@@ -685,16 +997,23 @@ const docsUi: UiNode[] = [
     ordered: true,
     each: [
       'Build (or paste, from the sibling DLC addon) an oracle’s announcement: its pubkey, its nonce for this event, and every outcome the event could resolve to.',
-      'Pick one of your own notes to stake, click ’Prepare bet’, then ’Lock this note’. It’s burned at the mint and re-issued as a taproot note with one leaf per outcome - nobody can spend ANY of them yet.',
+      'Optionally name someone else’s pubkey to require their signature too, and pick a refund deadline (required on every bet).',
+      'Pick one of your own notes to stake, click ’Prepare bet’, then ’Lock this note’. It’s burned at the mint and re-issued as a taproot note with one leaf per outcome plus a refund leaf - nobody can spend ANY of them yet.',
+      'Add the refund note to your wallet right away - it only becomes spendable after the deadline, and only by you.',
       'Copy the receipt - it’s the only record of this bet, though it cannot redeem anything by itself.',
-      'Once the event resolves and the oracle publishes its attestation (an outcome plus a signature), paste the receipt and the attestation here and redeem.'
+      'Once the event resolves and the oracle publishes its attestation (an outcome plus a signature), paste the receipt and the attestation here and redeem. If it never resolves, redeem your refund note instead once its own deadline passes.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
   },
   {
     type: 'Text',
     value:
-      'Race-to-claim, by design: a leaf is just <outcome point> CHECKSIG, not bound to any specific counterparty’s own key. Once the oracle attests, whoever redeems first gets the note. The outcomes that did NOT happen stay provably unspendable forever - the oracle never signs them, so nobody, ever, can compute a private key for their leaf.'
+      'Race-to-claim by default: a leaf is just <outcome point> CHECKSIG, not bound to any specific counterparty’s own key, unless you named one at lock time. Once the oracle attests, whoever redeems first gets the note. The outcomes that did NOT happen stay provably unspendable forever - the oracle never signs them, so nobody, ever, can compute a private key for their leaf.'
+  },
+  {
+    type: 'Text',
+    value:
+      'Never locked forever: every bet also gets a refund leaf, spendable only by the original staker, only after the deadline picked at lock time - a real escape hatch if the oracle simply never resolves the event.'
   },
   {
     type: 'Text',
@@ -709,7 +1028,7 @@ const betlockerManifest: AddonManifest = {
   version: '1',
   icon: 'dice',
   description:
-    'Lock one of your notes on the outcome of a real-world event via a Discreet Log Contract oracle - a race-to-claim bearer bet, nobody (including you) can redeem before the oracle attests.',
+    'Lock one of your notes on the outcome of a real-world event via a Discreet Log Contract oracle - a race-to-claim bearer bet (or, optionally, bound to one named redeemer), with a built-in refund deadline so it’s never locked forever.',
   permissions: [
     {
       verb: 'note.lockToPubkey',
@@ -728,6 +1047,10 @@ const betlockerManifest: AddonManifest = {
       reason: 'Save a receipt file containing the bet receipt'
     },
     {
+      verb: 'oracle.fetchPubkey',
+      reason: 'Fetch a real oracle service’s own published identity pubkey'
+    },
+    {
       verb: 'oracle.fetchEvents',
       reason: 'List the events a real oracle service has published'
     },
@@ -740,11 +1063,24 @@ const betlockerManifest: AddonManifest = {
       verb: 'oracle.fetchAttestation',
       reason:
         'Check whether an oracle has published an attestation yet for a bet you’re redeeming'
+    },
+    {
+      verb: 'note.resolveAddressPubkey',
+      reason:
+        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to optionally name who else can redeem a bet you lock'
+    },
+    {
+      verb: 'note.claim',
+      reason:
+        'Add this bet’s own refund note to your wallet right after locking, so you can reclaim your stake later if the oracle never resolves'
     }
   ],
   nav: {position: 'right', icon: 'dice', label: 'Betlocker'},
   state: {
     selectedNote: null,
+    counterpartyAddress: '',
+    counterpartyPubkeyHex: '',
+    refundDate: '',
     oracleBaseUrl: '',
     oracleEvents: null,
     fetchedAnnouncement: null,
@@ -754,11 +1090,13 @@ const betlockerManifest: AddonManifest = {
     newOutcome: '',
     plan: null,
     lockedNote: null,
+    refundClaimResult: null,
     useBech32: false,
     receiptInput: '',
     fetchedAttestation: null,
     attestOutcome: '',
     attestSignatureHex: '',
+    redeemerSecretKeyHex: '',
     redeemResult: null
   },
   ui: {
@@ -810,15 +1148,24 @@ const betlockerHelpers: Record<string, AddonHelper> = {
   canAddOutcome: canAddOutcome as AddonHelper,
   isOpenEvent: isOpenEvent as AddonHelper,
   joinOutcomes: joinOutcomes as AddonHelper,
+  xOnlyPubkeyHex: xOnlyPubkeyHex as AddonHelper,
+  counterpartyProblem: counterpartyProblem as AddonHelper,
+  refundDateProblem: refundDateProblem as AddonHelper,
+  refundNoteUrl: refundNoteUrl as AddonHelper,
+  formatUnlock: formatUnlock as AddonHelper,
   planBet: planBet as AddonHelper,
   outcomeList: outcomeList as AddonHelper,
   receiptUrlFor: receiptUrlFor as AddonHelper,
   receiptText: receiptText as AddonHelper,
   receiptOutcomes: receiptOutcomes as AddonHelper,
+  receiptOutcomesList: receiptOutcomesList as AddonHelper,
+  outcomeButtonLabel: outcomeButtonLabel as AddonHelper,
   receiptProblem: receiptProblem as AddonHelper,
   canAutoFetchAttestation: canAutoFetchAttestation as AddonHelper,
   receiptOracleServiceUrl: receiptOracleServiceUrl as AddonHelper,
   receiptEventId: receiptEventId as AddonHelper,
+  receiptNeedsRedeemerSecret: receiptNeedsRedeemerSecret as AddonHelper,
+  hasRedeemerSecretIfNeeded: hasRedeemerSecretIfNeeded as AddonHelper,
   attestationResolved: attestationResolved as AddonHelper,
   effectiveOutcome: effectiveOutcome as AddonHelper,
   effectiveSignatureHex: effectiveSignatureHex as AddonHelper,
