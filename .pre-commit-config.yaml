@@ -1,0 +1,37 @@
+# Local, language-agnostic hooks - every one just delegates to this repo's
+# own npm scripts (see Makefile/package.json), rather than duplicating any
+# check logic here. Install with `make install-precommit`.
+#
+# Split across two stages so an ordinary commit stays fast: format+typecheck
+# run on every commit, the full test suite (and src/lib's own isolated
+# check - see recoverableNotes.ts's own top comment on why src/lib is
+# published standalone with a narrower dependency list than the wallet) run
+# once, before a push.
+repos:
+  - repo: local
+    hooks:
+      - id: format
+        name: prettier (auto-fix)
+        entry: npm run format
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: tsc
+        name: typescript typecheck (wallet)
+        entry: npm run tsc
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: test
+        name: vitest (wallet)
+        entry: npm test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: kit-check
+        name: typecheck + test @lnurlcash/kit (src/lib, in isolation)
+        entry: bash -c 'cd src/lib && npm run typecheck && npm test'
+        language: system
+        pass_filenames: false
+        files: ^src/lib/
+        stages: [pre-push]

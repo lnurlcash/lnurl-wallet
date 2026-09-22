@@ -631,6 +631,40 @@ export const rotateNote = async (
   }
 }
 
+// The holder-initiated counterpart to rotateNote's own passive "never
+// downgrade" policy (isUpgradedSecret above): rotateNote only ever
+// PRESERVES a note that's already ck1/cw1-shaped, it never turns a plain
+// legacy preimage into one on its own (a silent, surprising upgrade is not
+// what an ordinary refresh/rotate should do). This is for the explicit
+// "Upgrade" action a holder picks for exactly that (see BearerCard.tsx) -
+// unlike generateOutputSecret's own soft preference, a caller here has
+// asked for the upgrade specifically, so a missing Part 2 provider (no
+// seed loaded, or none configured at all) throws rather than silently
+// completing an ordinary same-kind rotate that isn't the upgrade it was
+// asked to do.
+export const upgradeNote = async (
+  callback: string,
+  k1: string
+): Promise<RotateResult> => {
+  const newK1 = generatePubkeySecret(serverOf(callback))
+  if (!newK1) {
+    throw new Error(
+      'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
+    )
+  }
+  try {
+    const result = await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
+    return {k1: newK1, signature: result.signature}
+  } catch (err) {
+    // the request may have landed - the fresh secret is then the only copy
+    // of the upgraded note, so it rides the error rather than vanishing
+    if (err instanceof AmbiguousMintError) {
+      throw new AmbiguousMutationError((err as Error).message, [newK1])
+    }
+    throw err
+  }
+}
+
 export type SplitResult = {
   k1: string
   signature?: string

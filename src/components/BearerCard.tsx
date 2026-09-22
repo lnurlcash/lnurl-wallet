@@ -11,7 +11,8 @@ import {
   IoRefreshSharp,
   IoCheckmarkSharp,
   IoWarningSharp,
-  IoCodeSlashSharp
+  IoCodeSlashSharp,
+  IoArrowUpCircleSharp
 } from 'solid-icons/io'
 
 import type {Bearer} from '../storage'
@@ -64,6 +65,11 @@ export type BearerCardProps = {
   // encapsulates the full device/rotate-on-refresh flow shared with the
   // selection toolbar's own Refresh action; not worth duplicating here
   onRefresh: (bearer: Bearer) => Promise<void>
+  // Wallet.tsx's own upgradeOneBearer - the explicit "plain secret ->
+  // recoverable pub/sig" action (see the plain-secret badge below), same
+  // "lives at the page level, not duplicated per-card" reasoning as
+  // onRefresh above (ambiguous-mutation reconciliation, addBearer access)
+  onUpgrade: (bearer: Bearer) => Promise<void>
 }
 
 const BearerCard: Component<BearerCardProps> = props => {
@@ -72,6 +78,7 @@ const BearerCard: Component<BearerCardProps> = props => {
   const [confirmDelete, setConfirmDelete] = createSignal(false)
   const [confirmUnspend, setConfirmUnspend] = createSignal(false)
   const [refreshing, setRefreshing] = createSignal(false)
+  const [upgrading, setUpgrading] = createSignal(false)
   // whether the "hand this note over" panel is open at all - separate from
   // revealedUrl below, since a device-backed note opens the panel before
   // its secret is actually known (see revealDeviceNote)
@@ -195,6 +202,19 @@ const BearerCard: Component<BearerCardProps> = props => {
       await props.onRefresh(props.bearer)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  // upgrades a plain legacy secret to a recoverable pub/sig (ck1) one -
+  // see the plain-secret badge below (only shown/enabled for exactly this
+  // shape) and Wallet.tsx's own upgradeOneBearer for the actual mutation
+  const upgradeThisNote = async () => {
+    if (upgrading()) return
+    setUpgrading(true)
+    try {
+      await props.onUpgrade(props.bearer)
+    } finally {
+      setUpgrading(false)
     }
   }
 
@@ -453,6 +473,29 @@ const BearerCard: Component<BearerCardProps> = props => {
                     <IoRefreshSharp class="spin" />
                   </Show>
                 </button>
+                {/* only for a plain legacy secret (see the badge above) -
+                a ck1/cw1 note is already upgraded, nothing to do */}
+                <Show when={k1() && !isCk1(k1()) && !isScriptNote()}>
+                  <button
+                    class="icon-btn"
+                    disabled={upgrading()}
+                    title="Upgrade to a recoverable pub/sig secret"
+                    onClick={e => {
+                      // same detached-node concern refreshThisNote's own
+                      // click handler documents - stop the click before
+                      // it bubbles to onCardClick
+                      e.stopPropagation()
+                      upgradeThisNote()
+                    }}
+                  >
+                    <Show
+                      when={upgrading()}
+                      fallback={<IoArrowUpCircleSharp />}
+                    >
+                      <IoArrowUpCircleSharp class="spin" />
+                    </Show>
+                  </button>
+                </Show>
               </div>
             </div>
           }

@@ -9,6 +9,7 @@ import {
   splitNoteWithHash,
   mergeNotesWithHash,
   rotateNote,
+  upgradeNote,
   splitNote,
   mergeNotes
 } from './request'
@@ -20,7 +21,11 @@ import {
   encodeCs1,
   encodeCw1
 } from './recoverableNotes'
-import {AmbiguousMintError, PendingNoteError} from './errors'
+import {
+  AmbiguousMintError,
+  AmbiguousMutationError,
+  PendingNoteError
+} from './errors'
 import {configureSecretProvider, configurePubkeySecretProvider} from './secrets'
 
 const K1 = 'a'.repeat(64)
@@ -647,5 +652,59 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
       ck1
     ])
     expect(result.k1).toBe(ck1)
+  })
+})
+
+describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', () => {
+  const secretKey = schnorr.utils.randomSecretKey()
+  const ownership = signNoteOwnership(secretKey)
+  const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
+
+  afterEach(() => {
+    configureSecretProvider(() => 'f'.repeat(64))
+    configurePubkeySecretProvider(() => null)
+  })
+
+  const okResponse = () =>
+    ({
+      json: async () => ({status: 'OK', sig: '00'.repeat(65)})
+    }) as Response
+
+  it('reissues a plain legacy secret as a ck1, unlike an ordinary rotate', async () => {
+    configurePubkeySecretProvider(() => ck1)
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.get('h')).toBeNull()
+      expect(request.searchParams.get('p1')).toBe(cp1FromCk1(ck1))
+      return okResponse()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await upgradeNote(
+      'https://mint.example.com/w/cb',
+      'a'.repeat(64)
+    )
+    expect(result.k1).toBe(ck1)
+  })
+
+  it('refuses (before touching the network) rather than silently completing a same-kind rotate when no provider is configured', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      upgradeNote('https://mint.example.com/w/cb', 'a'.repeat(64))
+    ).rejects.toThrow(/seed-derived key/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('wraps an ambiguous mutation with the fresh secret, same as rotateNote', async () => {
+    configurePubkeySecretProvider(() => ck1)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network down')
+      })
+    )
+    await expect(
+      upgradeNote('https://mint.example.com/w/cb', 'a'.repeat(64))
+    ).rejects.toBeInstanceOf(AmbiguousMutationError)
   })
 })
