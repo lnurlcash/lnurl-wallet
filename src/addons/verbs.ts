@@ -35,6 +35,12 @@ import {
   fetchOracleAnnouncement,
   fetchOracleAttestation
 } from './dlc/oracleClient'
+import {
+  redeemCurrentStateCw1,
+  nextState,
+  planSealLock,
+  type SealState
+} from './seals/seals'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -319,6 +325,67 @@ export const VERBS: Record<string, VerbHandler> = {
       `Redeemed a ${amountMsat} msat DLC bet at ${serverOf(receipt.urlTemplate)} via an addon.`
     )
     return {id: saved.id, amountMsat}
+  },
+
+  // The Seals addon's own transition step: reveals the CURRENT state (the
+  // hashlock's own preimage, via redeemCurrentStateCw1) and signs with
+  // the current owner's key to redeem the current leaf, in the SAME mint
+  // call rotating directly into the NEXT state's own ct1 output - never a
+  // plain secret, unlike note.redeemBet above. Deliberately its own verb
+  // rather than reusing note.redeemBet (always rotates to a plain bearer
+  // secret) or note.lockToPubkey (only ever rotates a note THIS wallet
+  // already holds via requireNoteK1, never an externally-constructed
+  // cw1). No note is added to this wallet's own Bearer list here - the
+  // NEXT state's note isn't something the transitioning party can
+  // meaningfully "hold" (redeeming it later needs the NEXT owner's own
+  // secret key, which this call never sees) - see seals/manifest.ts's own
+  // top comment on why the consignment itself is what carries custody
+  // forward, not this wallet's Bearer storage.
+  'seal.transition': async args => {
+    const urlTemplate = String(args.urlTemplate ?? '').trim()
+    const currentState = args.currentState as SealState
+    const ownerSecretKeyHex = String(args.ownerSecretKeyHex ?? '').trim()
+    const nextOwnerPubkeyHex = String(args.nextOwnerPubkeyHex ?? '').trim()
+    const amountMsat = Number(args.amountMsat)
+    if (!urlTemplate || !currentState) {
+      throw new Error('Missing this seal’s own note or current state.')
+    }
+    const cw1 = redeemCurrentStateCw1(
+      currentState,
+      ownerSecretKeyHex,
+      amountMsat
+    )
+    const currentOutputKeyHex = outputKeyOfCw1(cw1)
+    if (!currentOutputKeyHex) {
+      throw new Error(
+        "Internal error: could not derive this seal's own current output key."
+      )
+    }
+    const info = await fetchNoteInfoByPubkey(
+      urlTemplate,
+      encodeCt1(hexToBytes(currentOutputKeyHex))
+    )
+    const next = nextState(currentState, nextOwnerPubkeyHex)
+    const nextOutputKeyHex = planSealLock(next).outputKeyHex
+    try {
+      await rotateNoteWithHash(
+        info.callback,
+        cw1,
+        encodeCt1(hexToBytes(nextOutputKeyHex))
+      )
+    } catch (err) {
+      if (err instanceof AmbiguousMintError) {
+        throw new Error(
+          `${(err as Error).message} The transition may or may not have landed - check with the next owner before retrying, and do not sign a second transition until you know which.`
+        )
+      }
+      throw err
+    }
+    return {
+      urlTemplate,
+      amountMsat: info.maxWithdrawable,
+      state: next
+    }
   },
 
   // adds an already fully-known note (url/callback/amount[/mintPubkey])

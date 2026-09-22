@@ -33,6 +33,7 @@ import {
   parseBetReceipt,
   buildRedeemCw1
 } from '../betlocker/betlock'
+import {genesisState, planSealLock, redeemCurrentStateCw1} from '../seals/seals'
 
 const AMOUNT_MSAT = 20_000_000
 const LOCK = 1_800_000_000
@@ -319,18 +320,63 @@ const buildBetlockerRefundVector = () => {
   }
 }
 
+// The Seals addon's own genesis leaf - built through seals.ts's real
+// functions end to end (genesisState -> planSealLock -> the taproot
+// addon's own EXISTING `hashlock` template -> redeemCurrentStateCw1),
+// proving Seals' own new code (its canonical state encoding in
+// particular - encodeSealState is new, unlike the already-proven
+// hashlock template itself) produces a witness Bitcoin Core genuinely
+// accepts, not just one that looks right by analogy to the standalone
+// 'hashlock' case above.
+const buildSealsVector = () => {
+  const owner = asKeypair('99'.repeat(32))
+  const state = genesisState(
+    'Provenance Test #1',
+    'a real test asset',
+    owner.pubkeyHex
+  )
+  const {outputKeyHex} = planSealLock(state)
+  const cw1 = redeemCurrentStateCw1(state, owner.secretKeyHex, AMOUNT_MSAT)
+  const decoded = decodeCw1(cw1)!
+  expect(decoded.witness).toHaveLength(2)
+  expect(
+    verifyScriptPath(outputKeyHex, {
+      script: decoded.script,
+      controlBlock: decoded.controlBlock
+    })
+  ).toBe(true)
+
+  return {
+    name: 'seals-genesis-hashlock',
+    ct1: encodeCt1(hexToBytes(outputKeyHex)),
+    output_key: outputKeyHex,
+    amount_msat: AMOUNT_MSAT,
+    leaf_script: bytesToHex(decoded.script),
+    control_block: bytesToHex(decoded.controlBlock),
+    witness: decoded.witness.map(bytesToHex),
+    locktime: decoded.locktime,
+    sequence: decoded.sequence,
+    cw1,
+    locked_at: LOCKED_AT,
+    now: LOCKED_AT,
+    expect_kind: 'hashlock'
+  }
+}
+
 describe('ct1/cw1 interop vectors (wallet -> lnurlcashkernel -> Bitcoin Core)', () => {
   const vectors = [
     ...CASES.map(buildVector),
     buildBetlockerCounterpartyVector(),
-    buildBetlockerRefundVector()
+    buildBetlockerRefundVector(),
+    buildSealsVector()
   ]
 
   it('builds a vector for every supported leaf shape', () => {
     expect(vectors.map(v => v.name)).toEqual([
       ...CASES.map(c => c.name),
       'betlocker-counterparty-multisig2',
-      'betlocker-refund-cltv'
+      'betlocker-refund-cltv',
+      'seals-genesis-hashlock'
     ])
     for (const v of vectors) {
       expect(v.ct1.startsWith('ct1')).toBe(true)
