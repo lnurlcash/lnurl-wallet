@@ -2,8 +2,6 @@ import {describe, expect, it} from 'vitest'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bech32, bech32m} from '@scure/base'
-import {p2tr} from '@scure/btc-signer'
-import {Script} from '@scure/btc-signer/script.js'
 import {
   encodeCp1,
   decodeCp1,
@@ -257,55 +255,73 @@ describe('bech32m codec', () => {
 })
 
 describe('deriveScriptPathCommitment / outputKeyOfCw1', () => {
-  // built independently of anything in recoverableNotes.ts - straight
-  // through @scure/btc-signer's own p2tr() tree builder, the same
-  // real-wallet code path addons/taproot/taproot.ts's scriptPathProofs
-  // uses, so this cross-validates deriveScriptPathCommitment's own
-  // from-scratch merkle-walk against a construction that never goes
-  // through it.
-  const internalKey = schnorr.getPublicKey(hexToBytes('11'.repeat(32)))
-  const leafA = Script.encode([hexToBytes('aa'.repeat(32)), 'CHECKSIG'])
-  const leafB = Script.encode([hexToBytes('bb'.repeat(32)), 'CHECKSIG'])
-
-  const buildProof = (leaves: Uint8Array[], pick: Uint8Array) => {
-    const tree = leaves.map(script => ({script}))
-    const out = p2tr(internalKey, tree, undefined, true) as {
-      tweakedPubkey: Uint8Array
-      leaves: {script: Uint8Array; controlBlock?: Uint8Array}[]
-    }
-    const leaf = out.leaves.find(l => bytesToHex(l.script) === bytesToHex(pick))
-    if (!leaf?.controlBlock) throw new Error('no control block')
-    return {tweakedPubkey: out.tweakedPubkey, controlBlock: leaf.controlBlock}
-  }
+  // Real, spec-shaped vectors - generated once with @scure/btc-signer's own
+  // p2tr() tree builder (a construction wholly independent of anything in
+  // recoverableNotes.ts) and pinned here as literal bytes, rather than
+  // built live in this test file: this package (@lnurlcash/kit) ships
+  // without @scure/btc-signer as a dependency (a full transaction-building
+  // library, see this file's own top comment) and its own isolated test
+  // run (release-kit.yml, npm ci scoped to src/lib alone) has no access to
+  // it even as a devDependency of the wallet monorepo it's vendored in.
+  // Regenerate by temporarily dumping p2tr()'s own output from
+  // addons/taproot/taproot.test.ts (which does have @scure/btc-signer) if
+  // these primitives ever change - see its git history for the exact
+  // one-off script used to produce the values below.
+  const internalKey = hexToBytes(
+    '4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa'
+  )
+  // Script.encode([<32 bytes of 0xaa/0xbb>, 'CHECKSIG']): 0x20 (push32) ||
+  // pubkey || 0xac (OP_CHECKSIG)
+  const leafA = hexToBytes(`20${'aa'.repeat(32)}ac`)
+  const leafB = hexToBytes(`20${'bb'.repeat(32)}ac`)
+  // depth-0 (leafA alone): version/parity byte || internal key, no siblings
+  const singleLeafControlBlock = hexToBytes(
+    'c0' + '4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa'
+  )
+  const singleLeafOutputKeyHex =
+    'd37208c49a038f693bc0b362b5a7f804938bfea0b3381cfb88fb69340bb92495'
+  // depth-1 (leafA + leafB, two equal-weight leaves): version/parity byte
+  // || internal key || one 32-byte sibling (leafB's own TapLeaf hash)
+  const multiLeafControlBlock = hexToBytes(
+    'c1' +
+      '4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa' +
+      '5c95326c4af903b97f2c63f4809184af217e7f5421041ba5c25d17212c7fb36c'
+  )
+  const multiLeafOutputKeyHex =
+    'cef5e074133b91e081f2771a28d13e46837fea794df3ff52b6e61bc46f912202'
 
   it('derives exactly the same Q a real p2tr() tree was built with (single leaf)', () => {
-    const {tweakedPubkey, controlBlock} = buildProof([leafA], leafA)
-    const commitment = deriveScriptPathCommitment(leafA, controlBlock)
+    const commitment = deriveScriptPathCommitment(leafA, singleLeafControlBlock)
     expect(commitment).not.toBeNull()
-    expect(bytesToHex(commitment!.outputKey)).toBe(bytesToHex(tweakedPubkey))
-    expect(outputKeyOfScriptPath(leafA, controlBlock)).toEqual(
+    expect(bytesToHex(commitment!.outputKey)).toBe(singleLeafOutputKeyHex)
+    expect(outputKeyOfScriptPath(leafA, singleLeafControlBlock)).toEqual(
       commitment!.outputKey
     )
   })
 
   it('walks a real multi-leaf merkle path (not just a depth-0 tree)', () => {
-    const {tweakedPubkey, controlBlock} = buildProof([leafA, leafB], leafA)
-    // depth 1: version/parity byte + 32-byte internal key + one 32-byte sibling
-    expect(controlBlock.length).toBe(1 + 32 + 32)
-    const commitment = deriveScriptPathCommitment(leafA, controlBlock)
-    expect(bytesToHex(commitment!.outputKey)).toBe(bytesToHex(tweakedPubkey))
+    // version/parity byte + 32-byte internal key + one 32-byte sibling
+    expect(multiLeafControlBlock.length).toBe(1 + 32 + 32)
+    const commitment = deriveScriptPathCommitment(leafA, multiLeafControlBlock)
+    expect(bytesToHex(commitment!.outputKey)).toBe(multiLeafOutputKeyHex)
   })
 
   it('round-trips through a real cw1 end to end', () => {
-    const {tweakedPubkey, controlBlock} = buildProof([leafA], leafA)
     const cw1 = encodeCw1({
       locktime: 1_800_000_000,
       sequence: 0xfffffffe,
       script: leafA,
-      controlBlock,
+      controlBlock: singleLeafControlBlock,
       witness: [hexToBytes('cc'.repeat(64))]
     })
-    expect(outputKeyOfCw1(cw1)).toBe(bytesToHex(tweakedPubkey))
+    expect(outputKeyOfCw1(cw1)).toBe(singleLeafOutputKeyHex)
+  })
+
+  it('unused leaf B never leaks its own script from the multi-leaf proof', () => {
+    // only leafB's TapLeaf hash (already folded into the control block's
+    // sibling) is ever seen - the script itself stays private, exactly as
+    // BIP341 intends for an unrevealed leaf
+    expect(bytesToHex(multiLeafControlBlock)).not.toContain(bytesToHex(leafB))
   })
 
   it('never throws on a malformed control block, returns null instead', () => {

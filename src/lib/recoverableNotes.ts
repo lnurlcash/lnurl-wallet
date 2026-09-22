@@ -1,15 +1,20 @@
 // LUD-25 "Part 2: Recoverable signatures" - pure protocol math, no wallet
-// dependency (same principle as the rest of src/lib - see its README).
-// Covers the two pieces every Part-2-aware peer (wallet or SERVICE)
-// computes the same way regardless of how either side happens to derive
-// its own keys:
+// dependency (same principle as the rest of src/lib - see its README, and
+// its own deliberately narrow package.json dependency list: this file
+// hand-rolls the couple of BIP341 primitives it needs from @noble/curves
+// alone below, rather than pulling in a full transaction-building library
+// just for those). Covers the three pieces every Part-2-aware peer
+// (wallet or SERVICE) computes the same way regardless of how either side
+// happens to derive its own keys:
 //
 //   1. bech32m (BIP-350, NOT the classic bech32/BIP-173 this repo's own
-//      LUD-01 lnurl encoding in urls.ts uses) codecs for the 4 new fixed-
-//      length value types: cp1 (a note's pubkey commitment), ck1 (a
+//      LUD-01 lnurl encoding in urls.ts uses) codecs for the 5 new fixed-
+//      or variable-length value types: cp1 (a note's pubkey commitment),
+//      ct1 (a taproot output key, ALSO script-path redeemable), ck1 (a
 //      BIP-340 Schnorr ownership signature, pubkey attached - the note's
 //      actual bearer secret; TODO(deprecated) still decodes the OLD bare
-//      recoverable-ECDSA shape too, see isLegacyCk1), cs1 (a SERVICE
+//      recoverable-ECDSA shape too, see isLegacyCk1), cw1 (a ct1's own
+//      script-path spend: leaf, control block, witness), cs1 (a SERVICE
 //      issuance certificate, still recoverable ECDSA - unchanged), cx1 (a
 //      watch-only branch export: pubkey + chain code).
 //   2. The non-hardened, taproot-style per-note key tweak a watch-only cx1
@@ -20,11 +25,12 @@
 //      would be unfindable (see recoverableNotes.test.ts's cross-checked
 //      vectors, generated from that actual mint code, not just internal
 //      self-consistency).
+//   3. BIP341 script-path commitment derivation (deriveScriptPathCommitment
+//      et al, near the bottom of this file) - which taproot output key Q a
+//      revealed (script, control block) proves, the read side of a cw1.
 import {bech32m} from '@scure/base'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
-import {tapLeafHash} from '@scure/btc-signer/payment.js'
-import {taprootTweakPubkey} from '@scure/btc-signer/utils.js'
 import {encodeBolt11AmountSuffix, decodeBolt11AmountSuffix} from './bolt11'
 
 // ---- bech32m codec ----
@@ -282,66 +288,6 @@ export const decodeCw1 = (value: string): Cw1 | null => {
 
 export const isCw1 = (value: string): boolean => decodeCw1(value) !== null
 
-// BIP341 script-path verification's own first half: which taproot output
-// key Q a revealed (script, control block) commits to. Walks the merkle
-// path in the control block up to its root (leaf hash, then each sibling
-// folded in with a sorted-pair TapBranch tagged hash), then tweaks the
-// control block's own internal key by that root - the same algorithm
-// lnurl-mint's own ct1.py:derive_output_key runs, and the verification half
-// of the addons/taproot playground's own tree-building. Self-certifying:
-// whoever presents a leaf can only ever reach the one Q it was built
-// forward from - this is what lets a bare cw1 name its own note without a
-// mint-issued pointer. Never throws; a malformed control block is null.
-export type ScriptPathCommitment = {outputKey: Uint8Array; parity: 0 | 1}
-
-const compareBytesLex = (a: Uint8Array, b: Uint8Array): number => {
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    if (a[i] !== b[i]) return a[i]! - b[i]!
-  }
-  return a.length - b.length
-}
-
-export const deriveScriptPathCommitment = (
-  script: Uint8Array,
-  controlBlock: Uint8Array
-): ScriptPathCommitment | null => {
-  if (controlBlock.length < 33) return null
-  if ((controlBlock.length - 33) % 32 !== 0) return null
-  if ((controlBlock.length - 33) / 32 > 128) return null // BIP341's own cap
-  try {
-    const leafVersion = controlBlock[0]! & 0xfe
-    const internalKey = controlBlock.subarray(1, 33)
-    let node = tapLeafHash(script, leafVersion)
-    for (let i = 33; i < controlBlock.length; i += 32) {
-      const sibling = controlBlock.subarray(i, i + 32)
-      const [a, b] =
-        compareBytesLex(node, sibling) <= 0 ? [node, sibling] : [sibling, node]
-      node = schnorr.utils.taggedHash('TapBranch', a, b)
-    }
-    const [outputKey, parity] = taprootTweakPubkey(internalKey, node)
-    return {outputKey, parity: parity as 0 | 1}
-  } catch {
-    return null
-  }
-}
-
-// convenience for callers that just want Q, e.g. resolving a held cw1 note
-// against a mint (encodeCt1(outputKeyOfScriptPath(cw1.script, cw1.controlBlock)))
-export const outputKeyOfScriptPath = (
-  script: Uint8Array,
-  controlBlock: Uint8Array
-): Uint8Array | null =>
-  deriveScriptPathCommitment(script, controlBlock)?.outputKey ?? null
-
-// the ct1 output key hex a bare cw1 value commits to, or null if it isn't a
-// well-formed cw1 or its control block is malformed
-export const outputKeyOfCw1 = (value: string): string | null => {
-  const cw1 = decodeCw1(value)
-  if (!cw1) return null
-  const key = outputKeyOfScriptPath(cw1.script, cw1.controlBlock)
-  return key ? bytesToHex(key) : null
-}
-
 // LEGACY, fixed-HRP form: a cs1 certificate with no amount encoded in it
 // at all (SERVICE and WALLET had to carry amount_msat alongside it
 // separately - see request.ts's own `amount` query param history). Kept
@@ -497,4 +443,124 @@ export const deriveNoteSecretKey = (
       : (CURVE_ORDER - rawScalar) % CURVE_ORDER
   const noteScalar = (evenYScalar + t) % CURVE_ORDER
   return numberToBytesBE(noteScalar, 32)
+}
+
+// ---- BIP341 script-path commitment (what a bare cw1 names) ----
+//
+// Which taproot output key Q a revealed (script, control block) commits to
+// - the same algorithm lnurl-mint's own ct1.py:derive_output_key runs, and
+// the verification half of the addons/taproot playground's own tree-
+// building (addons/taproot/taproot.ts's verifyScriptPath calls this
+// directly rather than duplicating it). Self-certifying: whoever presents
+// a leaf can only ever reach the one Q it was built forward from - this is
+// what lets a bare cw1 name its own note without a mint-issued pointer.
+//
+// Built from this package's own already-declared dependencies only
+// (@noble/curves - the same point-tweak math deriveNotePubkey above
+// already does, just under BIP341's own tags/encoding instead of this
+// scheme's LNURLcash/derive one) rather than pulling in @scure/btc-signer,
+// a full transaction-building library this package (@lnurlcash/kit, a
+// deliberately dependency-light protocol client - see this file's own top
+// comment) has no other reason to depend on for two small primitives it
+// can already build from what it has.
+
+// Bitcoin's CompactSize (VarInt) length prefix - only the small range
+// tapLeafHash below ever needs (no Script this package handles is anywhere
+// near the 0xfd/0xfe thresholds, but the encoding is cheap to get exactly
+// right regardless).
+const compactSize = (n: number): Uint8Array => {
+  if (n < 0xfd) return new Uint8Array([n])
+  if (n <= 0xffff) {
+    const bytes = new Uint8Array(3)
+    bytes[0] = 0xfd
+    new DataView(bytes.buffer).setUint16(1, n, true)
+    return bytes
+  }
+  const bytes = new Uint8Array(5)
+  bytes[0] = 0xfe
+  new DataView(bytes.buffer).setUint32(1, n, true)
+  return bytes
+}
+
+// BIP341: tagged_hash("TapLeaf", leaf_version || compact_size(len(script)) || script)
+const tapLeafHash = (script: Uint8Array, leafVersion: number): Uint8Array =>
+  schnorr.utils.taggedHash(
+    'TapLeaf',
+    new Uint8Array([leafVersion]),
+    compactSize(script.length),
+    script
+  )
+
+// BIP341: Q = lift_x(P) + tagged_hash("TapTweak", P || merkleRoot)·G,
+// serialized x-only (BIP340 convention) alongside Q's own y-parity - a
+// verifier needs both: the control block is required to carry that same
+// parity bit, and a mismatch means the control block doesn't actually
+// describe how Q was built (see verifyScriptPath's own extra check).
+const taprootTweakPubkey = (
+  internalKeyXOnly: Uint8Array,
+  merkleRoot: Uint8Array
+): {outputKey: Uint8Array; parity: 0 | 1} => {
+  const t =
+    bytesToNumberBE(
+      schnorr.utils.taggedHash('TapTweak', internalKeyXOnly, merkleRoot)
+    ) % CURVE_ORDER
+  const internalPoint = schnorr.utils.lift_x(bytesToNumberBE(internalKeyXOnly))
+  const tweakedPoint = internalPoint.add(schnorr.Point.BASE.multiply(t))
+  return {
+    outputKey: schnorr.utils.pointToBytes(tweakedPoint),
+    parity: tweakedPoint.y % 2n === 0n ? 0 : 1
+  }
+}
+
+export type ScriptPathCommitment = {outputKey: Uint8Array; parity: 0 | 1}
+
+const compareBytesLex = (a: Uint8Array, b: Uint8Array): number => {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i]! - b[i]!
+  }
+  return a.length - b.length
+}
+
+// Walks the merkle path in the control block up to its root (leaf hash,
+// then each sibling folded in with a sorted-pair TapBranch tagged hash),
+// then tweaks the control block's own internal key by that root. Never
+// throws; a malformed control block is null.
+export const deriveScriptPathCommitment = (
+  script: Uint8Array,
+  controlBlock: Uint8Array
+): ScriptPathCommitment | null => {
+  if (controlBlock.length < 33) return null
+  if ((controlBlock.length - 33) % 32 !== 0) return null
+  if ((controlBlock.length - 33) / 32 > 128) return null // BIP341's own cap
+  try {
+    const leafVersion = controlBlock[0]! & 0xfe
+    const internalKey = controlBlock.subarray(1, 33)
+    let node = tapLeafHash(script, leafVersion)
+    for (let i = 33; i < controlBlock.length; i += 32) {
+      const sibling = controlBlock.subarray(i, i + 32)
+      const [a, b] =
+        compareBytesLex(node, sibling) <= 0 ? [node, sibling] : [sibling, node]
+      node = schnorr.utils.taggedHash('TapBranch', a, b)
+    }
+    return taprootTweakPubkey(internalKey, node)
+  } catch {
+    return null
+  }
+}
+
+// convenience for callers that just want Q, e.g. resolving a held cw1 note
+// against a mint (encodeCt1(outputKeyOfScriptPath(cw1.script, cw1.controlBlock)))
+export const outputKeyOfScriptPath = (
+  script: Uint8Array,
+  controlBlock: Uint8Array
+): Uint8Array | null =>
+  deriveScriptPathCommitment(script, controlBlock)?.outputKey ?? null
+
+// the ct1 output key hex a bare cw1 value commits to, or null if it isn't a
+// well-formed cw1 or its control block is malformed
+export const outputKeyOfCw1 = (value: string): string | null => {
+  const cw1 = decodeCw1(value)
+  if (!cw1) return null
+  const key = outputKeyOfScriptPath(cw1.script, cw1.controlBlock)
+  return key ? bytesToHex(key) : null
 }
