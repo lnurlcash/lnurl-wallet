@@ -69,6 +69,7 @@ import {
   utf8ToBytes
 } from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
+import {fromBech32Lnurl} from '../../lnurlcash'
 import {encodeCw1} from '../../lib/recoverableNotes'
 import {
   compileLeaf,
@@ -342,7 +343,15 @@ export const parseSealConsignment = (
   value: unknown
 ): SealConsignment | null => {
   try {
-    const url = new URL(String(value ?? '').trim())
+    const trimmed = String(value ?? '').trim()
+    // sealConsignmentUrl's own bech32 output (LNURL1...) isn't itself a
+    // URL - decode it back to the plain https:// form first, same
+    // fromBech32Lnurl this kit already uses for every other LNURL input,
+    // so a consignment shared bech32-encoded round-trips correctly
+    // instead of silently failing to parse at all
+    const plain = /^lnurl1/i.test(trimmed) ? fromBech32Lnurl(trimmed) : trimmed
+    if (!plain) return null
+    const url = new URL(plain)
     const amountRaw = url.searchParams.get('amount')
     const statesRaw = url.searchParams.get('states')
     if (!amountRaw || !statesRaw) return null
