@@ -3,7 +3,8 @@ import {schnorr} from '@noble/curves/secp256k1.js'
 import {
   registerUsername,
   unregisterUsername,
-  scanForAddressNotes
+  scanForAddressNotes,
+  resolveScanStartIndex
 } from './addresses'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 
@@ -313,5 +314,21 @@ describe('scanForAddressNotes', () => {
         gapLimit: 5
       })
     ).rejects.toThrow()
+  })
+})
+
+describe('resolveScanStartIndex', () => {
+  it('ignores the hint entirely at localFloor 0 (fresh scan or explicit full rescan)', () => {
+    expect(resolveScanStartIndex(0, 5)).toBe(0)
+    expect(resolveScanStartIndex(0, undefined)).toBe(0)
+  })
+
+  it('raises an already-nonzero floor forward to a higher hint', () => {
+    expect(resolveScanStartIndex(1, 5)).toBe(5)
+  })
+
+  it('never lowers an already-nonzero floor below itself', () => {
+    expect(resolveScanStartIndex(10, 2)).toBe(10)
+    expect(resolveScanStartIndex(10, undefined)).toBe(10)
   })
 })
