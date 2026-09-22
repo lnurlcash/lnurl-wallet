@@ -5,6 +5,7 @@ import {A} from '@solidjs/router'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
 import {requireDeviceClient} from '../deviceOrchestration'
+import {serverOf} from '../lnurlcash'
 import {notify, NotifyKind} from '../helpers'
 import Qr from '../components/Qr'
 import {evaluate, type EvalContext} from './expr'
@@ -356,7 +357,8 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
               <For each={options}>
                 {b => (
                   <option value={b.id}>
-                    {Math.floor(b.amount / 1000).toLocaleString()} sats
+                    {Math.floor(b.amount / 1000).toLocaleString()} sats -{' '}
+                    {serverOf(b.url)}
                   </option>
                 )}
               </For>
