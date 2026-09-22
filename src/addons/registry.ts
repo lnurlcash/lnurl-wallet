@@ -8,6 +8,7 @@ import {nostrToolsAddon} from './nostrTools/manifest'
 import {giftCardAddon} from './giftcard/manifest'
 import {taprootAddon} from './taproot/manifest'
 import {musig2Addon} from './musig2/manifest'
+import {timerlockerAddon} from './timerlocker/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
@@ -21,7 +22,8 @@ export const ADDONS: Addon[] = [
   nostrToolsAddon,
   giftCardAddon,
   taprootAddon,
-  musig2Addon
+  musig2Addon,
+  timerlockerAddon
 ]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))

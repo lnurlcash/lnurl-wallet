@@ -526,3 +526,39 @@ describe("VERBS['note.lockToPubkey']", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe("VERBS['note.redeemTimelock']", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const ctx = {
+    addBearer: vi.fn(),
+    updateBearer: vi.fn(),
+    removeBearer: vi.fn(),
+    logActivity: vi.fn()
+  } as unknown as VerbContext
+
+  const link = (secret: string) => `https://mock-mint.test/w?tl=${secret}`
+
+  it('rejects a link with no or malformed timelock secret, offline', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    for (const bad of ['nonsense', 'https://mock-mint.test/w', link('ab')]) {
+      await expect(
+        VERBS['note.redeemTimelock']!({url: bad}, ctx)
+      ).rejects.toThrow()
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses before the unlock time, without touching the network or wallet', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const future = Math.floor(Date.now() / 1000) + 86400
+    const secret = '11'.repeat(32) + future.toString(16).padStart(8, '0')
+    await expect(
+      VERBS['note.redeemTimelock']!({url: link(secret)}, ctx)
+    ).rejects.toThrow(/Still locked/)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(ctx.addBearer).not.toHaveBeenCalled()
+  })
+})

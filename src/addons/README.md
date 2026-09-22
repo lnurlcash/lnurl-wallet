@@ -308,3 +308,23 @@ JSON can do - e.g. it needs its own pure logic like raffle's shuffle):
    primitive by stuffing more logic into a "helper."
 5. If it needs to touch notes in a way `note.query`/`note.split` can't
    express, that's a new verb in `verbs.ts`, not a new helper.
+
+## Bundled addon: Timerlocker
+
+`timerlocker/` locks one of your own notes until a date picked with the
+`Input` `kind: 'datetime'` (a native `datetime-local` control). The note is
+rotated to a `ct1` whose only spend path is the stock `cltv` leaf
+(`<t> CLTV DROP <pk> CHECKSIG`) under BIP341's NUMS internal key, so the
+key-path is unspendable and nobody can unlock early; the mint's own clock
+enforces the date (a custodial policy, see lnurl-mint's `ct1.py`).
+
+- The lock's whole state is a 72-hex **timelock secret** (`sk || u32 time`);
+  the shareable note link is the mint's note URL with that secret as `tl` and
+  no `k1`. The wallet cannot hold a cw1 note (`isValidK1` rejects it), so the
+  link is the only record once the lock lands - copy it.
+- Redeem uses the `note.redeemTimelock` verb: it builds and signs the cw1 at
+  redeem time (the signature commits to the mint's own figure for the amount),
+  saves the replacement note to the wallet _before_ the irreversible rotate,
+  and only removes it again on a definitive refusal.
+- Needs a mint with `lnurl-mint[ct1]`; without it the lock is refused before
+  anything is burned.

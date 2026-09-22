@@ -58,7 +58,7 @@ export type UiNode =
   | {
       type: 'Input'
       bind: string
-      kind?: 'text' | 'number' | 'checkbox'
+      kind?: 'text' | 'number' | 'checkbox' | 'datetime'
       label?: string
     }
   | {
