@@ -9,6 +9,10 @@ import {
   type BetPlan,
   type BetReceipt
 } from './betlock'
+import type {
+  OracleAttestationResult,
+  OracleEventSummary
+} from '../dlc/oracleClient'
 
 // Betlocker: lock one of your notes to the outcome of a real-world event,
 // via a Discreet Log Contract oracle - the sibling `timelocker` addon, but
@@ -43,6 +47,24 @@ const canAddOutcome = (outcomes: unknown, input: unknown): boolean => {
   const value = String(input ?? '').trim()
   return value !== '' && !list.includes(value)
 }
+
+// ---- browsing a live oracle (Lock side) - see verbs.ts's own
+// oracle.fetchEvents/oracle.fetchAnnouncement, and oracleClient.ts for
+// what a fetched event/announcement actually looks like. Purely an
+// alternative way to arrive at the exact same `plan` the manual
+// oraclePubkeyHex/nonceHex/outcomes fields above already produce via
+// planBet - see the "Use this event" button below, which calls planBet
+// with the fetched announcement's fields plus oracleBaseUrl/eventId so the
+// resulting plan (and later, the receipt) carries them along too. ----
+
+// only an event that hasn't resolved yet makes sense to offer for a NEW
+// bet - not unsafe to lock against a resolved one (the crypto doesn't
+// care), just a pointless bet since the outcome is already public
+const isOpenEvent = (item: unknown): boolean =>
+  (item as OracleEventSummary | null)?.status === 'announced'
+
+const joinOutcomes = (outcomes: unknown): string =>
+  Array.isArray(outcomes) ? (outcomes as string[]).join(', ') : ''
 
 type LockedNote = {
   urlTemplate: string
@@ -88,6 +110,40 @@ const receiptOutcomes = (value: unknown): string => {
   return receipt ? receipt.outcomes.join(', ') : ''
 }
 
+// ---- auto-fetching an attestation (Redeem side) - only possible when the
+// receipt itself carries the discovery metadata a real oracle's own
+// announcement puts there (see BetPlan's own doc comment in betlock.ts);
+// a receipt built from a hand-typed/pasted announcement falls back to the
+// manual attestOutcome/attestSignatureHex fields below unchanged. ----
+
+const canAutoFetchAttestation = (receiptInput: unknown): boolean => {
+  const receipt = parseBetReceipt(receiptInput)
+  return !!receipt?.oracleServiceUrl && !!receipt?.eventId
+}
+
+const receiptOracleServiceUrl = (receiptInput: unknown): string =>
+  parseBetReceipt(receiptInput)?.oracleServiceUrl ?? ''
+
+const receiptEventId = (receiptInput: unknown): string =>
+  parseBetReceipt(receiptInput)?.eventId ?? ''
+
+const attestationResolved = (fetched: unknown): boolean =>
+  (fetched as OracleAttestationResult | null)?.resolved === true
+
+// the value actually used to redeem: a resolved auto-fetch always wins
+// over whatever's sitting in the manual field (a fresh fetch reflects the
+// oracle's own current state; a stale manual paste shouldn't silently
+// override it), otherwise falls back to the manual field untouched
+const effectiveOutcome = (fetched: unknown, manual: unknown): string => {
+  const f = fetched as OracleAttestationResult | null
+  return f?.resolved ? f.outcome : String(manual ?? '').trim()
+}
+
+const effectiveSignatureHex = (fetched: unknown, manual: unknown): string => {
+  const f = fetched as OracleAttestationResult | null
+  return f?.resolved ? f.signatureHex : String(manual ?? '').trim()
+}
+
 const canRedeem = (
   receiptInput: unknown,
   outcome: unknown,
@@ -113,6 +169,125 @@ const lockUi: UiNode[] = [
         filter: {spent: false},
         label: 'Note to stake'
       },
+      {type: 'Text', value: 'Browse a live oracle (optional)'},
+      {
+        type: 'Input',
+        bind: 'oracleBaseUrl',
+        label: 'Oracle URL (set a default on the Settings page)'
+      },
+      {
+        type: 'Button',
+        label: 'Fetch events',
+        onClick: {
+          verb: 'oracle.fetchEvents',
+          args: {baseUrl: {var: 'oracleBaseUrl'}},
+          result: 'oracleEvents'
+        }
+      },
+      {
+        type: 'Show',
+        when: {var: 'oracleEvents'},
+        children: [
+          {
+            type: 'For',
+            each: {var: 'oracleEvents'},
+            children: [
+              {
+                type: 'Show',
+                when: {helper: 'isOpenEvent', args: [{var: 'item'}]},
+                children: [
+                  {
+                    type: 'View',
+                    style: 'row',
+                    children: [
+                      {
+                        type: 'Text',
+                        value: {
+                          cat: [
+                            {var: 'item.eventId'},
+                            ' (',
+                            {var: 'item.category'},
+                            ') - ',
+                            {
+                              helper: 'joinOutcomes',
+                              args: [{var: 'item.outcomes'}]
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        type: 'Button',
+                        label: 'Use this event',
+                        onClick: {
+                          verb: 'oracle.fetchAnnouncement',
+                          args: {
+                            baseUrl: {var: 'oracleBaseUrl'},
+                            eventId: {var: 'item.eventId'}
+                          },
+                          result: 'fetchedAnnouncement'
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {var: 'fetchedAnnouncement'},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Fetched "',
+                {var: 'fetchedAnnouncement.eventId'},
+                '" - outcomes: ',
+                {
+                  helper: 'joinOutcomes',
+                  args: [{var: 'fetchedAnnouncement.outcomes'}]
+                }
+              ]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Show',
+            when: {helper: 'not', args: [{var: 'selectedNote'}]},
+            children: [
+              {type: 'Text', value: 'Pick a note to stake above first.'}
+            ]
+          },
+          {
+            type: 'Show',
+            when: {var: 'selectedNote'},
+            children: [
+              {
+                type: 'Button',
+                label: 'Prepare bet from this event',
+                onClick: {
+                  action: 'set',
+                  path: 'plan',
+                  value: {
+                    helper: 'planBet',
+                    args: [
+                      {var: 'fetchedAnnouncement.oraclePubkeyHex'},
+                      {var: 'fetchedAnnouncement.nonceHex'},
+                      {var: 'fetchedAnnouncement.outcomes'},
+                      {var: 'oracleBaseUrl'},
+                      {var: 'fetchedAnnouncement.eventId'}
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {type: 'Text', value: '...or paste an announcement manually'},
       {
         type: 'Input',
         bind: 'oraclePubkeyHex',
@@ -371,6 +546,73 @@ const redeemUi: UiNode[] = [
     ]
   },
   {
+    type: 'Show',
+    when: {helper: 'canAutoFetchAttestation', args: [{var: 'receiptInput'}]},
+    children: [
+      {
+        type: 'Button',
+        label: 'Fetch attestation from oracle',
+        onClick: {
+          verb: 'oracle.fetchAttestation',
+          args: {
+            baseUrl: {
+              helper: 'receiptOracleServiceUrl',
+              args: [{var: 'receiptInput'}]
+            },
+            eventId: {helper: 'receiptEventId', args: [{var: 'receiptInput'}]}
+          },
+          result: 'fetchedAttestation'
+        }
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'attestationResolved',
+          args: [{var: 'fetchedAttestation'}]
+        },
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                '✓ Oracle attested: ',
+                {
+                  helper: 'effectiveOutcome',
+                  args: [{var: 'fetchedAttestation'}, {var: 'attestOutcome'}]
+                }
+              ]
+            },
+            style: 'response-block'
+          }
+        ]
+      },
+      {
+        type: 'Show',
+        when: {
+          and: [
+            {var: 'fetchedAttestation'},
+            {
+              helper: 'not',
+              args: [
+                {
+                  helper: 'attestationResolved',
+                  args: [{var: 'fetchedAttestation'}]
+                }
+              ]
+            }
+          ]
+        },
+        children: [
+          {
+            type: 'Text',
+            value:
+              'Not resolved yet - check back after the event matures, or enter the attestation manually below if you have it from elsewhere.'
+          }
+        ]
+      }
+    ]
+  },
+  {
     type: 'Input',
     bind: 'attestOutcome',
     label: 'Which outcome did the oracle attest to?'
@@ -386,8 +628,14 @@ const redeemUi: UiNode[] = [
       helper: 'canRedeem',
       args: [
         {var: 'receiptInput'},
-        {var: 'attestOutcome'},
-        {var: 'attestSignatureHex'}
+        {
+          helper: 'effectiveOutcome',
+          args: [{var: 'fetchedAttestation'}, {var: 'attestOutcome'}]
+        },
+        {
+          helper: 'effectiveSignatureHex',
+          args: [{var: 'fetchedAttestation'}, {var: 'attestSignatureHex'}]
+        }
       ]
     },
     children: [
@@ -398,8 +646,14 @@ const redeemUi: UiNode[] = [
           verb: 'note.redeemBet',
           args: {
             receiptUrl: {var: 'receiptInput'},
-            outcome: {var: 'attestOutcome'},
-            signatureHex: {var: 'attestSignatureHex'}
+            outcome: {
+              helper: 'effectiveOutcome',
+              args: [{var: 'fetchedAttestation'}, {var: 'attestOutcome'}]
+            },
+            signatureHex: {
+              helper: 'effectiveSignatureHex',
+              args: [{var: 'fetchedAttestation'}, {var: 'attestSignatureHex'}]
+            }
           },
           result: 'redeemResult'
         }
@@ -472,11 +726,28 @@ const betlockerManifest: AddonManifest = {
     {
       verb: 'file.download',
       reason: 'Save a receipt file containing the bet receipt'
+    },
+    {
+      verb: 'oracle.fetchEvents',
+      reason: 'List the events a real oracle service has published'
+    },
+    {
+      verb: 'oracle.fetchAnnouncement',
+      reason:
+        'Fetch one event’s full announcement (oracle pubkey, nonce, outcomes) to prepare a bet against it'
+    },
+    {
+      verb: 'oracle.fetchAttestation',
+      reason:
+        'Check whether an oracle has published an attestation yet for a bet you’re redeeming'
     }
   ],
   nav: {position: 'right', icon: 'dice', label: 'Betlocker'},
   state: {
     selectedNote: null,
+    oracleBaseUrl: '',
+    oracleEvents: null,
+    fetchedAnnouncement: null,
     oraclePubkeyHex: '',
     nonceHex: '',
     outcomes: [],
@@ -485,6 +756,7 @@ const betlockerManifest: AddonManifest = {
     lockedNote: null,
     useBech32: false,
     receiptInput: '',
+    fetchedAttestation: null,
     attestOutcome: '',
     attestSignatureHex: '',
     redeemResult: null
@@ -502,6 +774,30 @@ const betlockerManifest: AddonManifest = {
         ]
       }
     ]
+  },
+  // one setting: the oracle service this addon reaches for by default -
+  // see settingsStore.ts/AddonRun.tsx for how this seeds the run page's
+  // own oracleBaseUrl above at mount (and stays freely editable per-run
+  // from there without writing back). No verb dispatcher exists on this
+  // page (types.ts's own AddonManifest.settings doc comment) - it's a
+  // plain text field, structurally incapable of reaching the network.
+  settings: {
+    state: {oracleBaseUrl: ''},
+    ui: {
+      type: 'View',
+      children: [
+        {
+          type: 'Text',
+          value:
+            'Default oracle service to browse events from when locking a bet, and to check for an attestation when redeeming one. Leave blank to always enter it by hand instead.'
+        },
+        {
+          type: 'Input',
+          bind: 'oracleBaseUrl',
+          label: 'Oracle URL (e.g. https://oracle.lnurlcash.com)'
+        }
+      ]
+    }
   }
 }
 
@@ -512,12 +808,20 @@ const betlockerHelpers: Record<string, AddonHelper> = {
   problemOf: problemOf as AddonHelper,
   noProblem: noProblem as AddonHelper,
   canAddOutcome: canAddOutcome as AddonHelper,
+  isOpenEvent: isOpenEvent as AddonHelper,
+  joinOutcomes: joinOutcomes as AddonHelper,
   planBet: planBet as AddonHelper,
   outcomeList: outcomeList as AddonHelper,
   receiptUrlFor: receiptUrlFor as AddonHelper,
   receiptText: receiptText as AddonHelper,
   receiptOutcomes: receiptOutcomes as AddonHelper,
   receiptProblem: receiptProblem as AddonHelper,
+  canAutoFetchAttestation: canAutoFetchAttestation as AddonHelper,
+  receiptOracleServiceUrl: receiptOracleServiceUrl as AddonHelper,
+  receiptEventId: receiptEventId as AddonHelper,
+  attestationResolved: attestationResolved as AddonHelper,
+  effectiveOutcome: effectiveOutcome as AddonHelper,
+  effectiveSignatureHex: effectiveSignatureHex as AddonHelper,
   canRedeem: canRedeem as AddonHelper
 }
 

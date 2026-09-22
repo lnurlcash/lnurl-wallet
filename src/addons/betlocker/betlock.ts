@@ -53,12 +53,23 @@ const MIN_OUTCOMES = 2
 // self-contained, like the sibling timelocker addon's own TimelockPlan -
 // echoes back the announcement it was built from, rather than making
 // betReceiptUrl's caller re-supply oracle/nonce/outcomes a second time
-// from separate state fields that could in principle have changed since
+// from separate state fields that could in principle have changed since.
+// oracleServiceUrl/eventId are pure discovery metadata, never load-bearing
+// for the crypto: buildRedeemCw1 verifies an attestation entirely against
+// oraclePubkeyHex/nonceHex/outcomes, the same way whether or not these two
+// are present. They only let a receipt built FROM a real oracle's own
+// /events/{id}/announcement (see oracleClient.ts) carry along "where to
+// automatically fetch the attestation from later", so Redeem doesn't force
+// a manual outcome/signature paste. Absent when a bet was built from a
+// hand-typed or pasted announcement instead - that receipt still redeems
+// exactly the same way, just without the auto-fetch convenience.
 export type BetPlan = {
   outputKeyHex: string
   oraclePubkeyHex: string
   nonceHex: string
   outcomes: string[]
+  oracleServiceUrl?: string
+  eventId?: string
 }
 
 const isPositiveInt = (n: unknown): n is number =>
@@ -116,10 +127,16 @@ export const betProblem = (
 // Deliberately idempotent, unlike timelocker's own planTimelock - there is
 // no secret key to draw here at all, just a deterministic tweak of public
 // data. Safe to call from a live binding, not just a one-shot Button.
+// oracleServiceUrl/eventId are optional discovery metadata (see BetPlan's
+// own doc comment) - omit both for a hand-typed/pasted announcement, pass
+// both when the announcement came from a real oracle's own
+// fetchOracleAnnouncement (oracleClient.ts).
 export const planBet = (
   oraclePubkeyHex: unknown,
   nonceHex: unknown,
-  outcomes: unknown
+  outcomes: unknown,
+  oracleServiceUrl?: unknown,
+  eventId?: unknown
 ): BetPlan => {
   const problem = betProblem(oraclePubkeyHex, nonceHex, outcomes)
   if (problem) throw new Error(problem)
@@ -141,11 +158,14 @@ export const planBet = (
       throw new Error('Internal error: a leaf proof does not verify.')
     }
   }
+  const service = String(oracleServiceUrl ?? '').trim()
+  const event = String(eventId ?? '').trim()
   return {
     outputKeyHex,
     oraclePubkeyHex: oracle,
     nonceHex: nonce,
-    outcomes: list
+    outcomes: list,
+    ...(service && event ? {oracleServiceUrl: service, eventId: event} : {})
   }
 }
 
@@ -174,6 +194,14 @@ export const betReceiptUrl = (
     url.searchParams.set('oracle', p.oraclePubkeyHex)
     url.searchParams.set('nonce', p.nonceHex)
     url.searchParams.set('outcomes', JSON.stringify(p.outcomes))
+    // discovery metadata only (see BetPlan's own doc comment) - omitted
+    // entirely for a plan that wasn't built from a real oracle's own
+    // announcement, so an old-shape receipt is indistinguishable from one
+    // built by a wallet version that predates this
+    if (p.oracleServiceUrl && p.eventId) {
+      url.searchParams.set('oracleService', p.oracleServiceUrl)
+      url.searchParams.set('event', p.eventId)
+    }
     return url.toString()
   } catch {
     return null
@@ -187,6 +215,11 @@ export type BetReceipt = {
   oraclePubkeyHex: string
   nonceHex: string
   outcomes: string[]
+  // discovery metadata only, both-or-neither (see BetPlan's own doc
+  // comment) - buildRedeemCw1 never reads these, they only let the Redeem
+  // UI auto-fetch an attestation instead of requiring a manual paste
+  oracleServiceUrl?: string
+  eventId?: string
 }
 
 // the read side of betReceiptUrl - null for anything that isn't a
@@ -212,18 +245,24 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
     if (!isPositiveInt(amountMsat)) return null
     const outcomes = normalizedOutcomes(JSON.parse(outcomesRaw))
     if (outcomes.length < MIN_OUTCOMES) return null
+    const oracleServiceUrl = url.searchParams.get('oracleService') ?? ''
+    const eventId = url.searchParams.get('event') ?? ''
     url.searchParams.delete('amount')
     url.searchParams.delete('sig')
     url.searchParams.delete('oracle')
     url.searchParams.delete('nonce')
     url.searchParams.delete('outcomes')
+    url.searchParams.delete('oracleService')
+    url.searchParams.delete('event')
     return {
       urlTemplate: url.toString(),
       amountMsat,
       signature,
       oraclePubkeyHex: oraclePubkeyHex.toLowerCase(),
       nonceHex: nonceHex.toLowerCase(),
-      outcomes
+      outcomes,
+      // both-or-neither, same convention betReceiptUrl writes them with
+      ...(oracleServiceUrl && eventId ? {oracleServiceUrl, eventId} : {})
     }
   } catch {
     return null

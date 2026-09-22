@@ -113,6 +113,32 @@ describe('bet receipt: build, parse, round-trip', () => {
     expect(receiptProblem('not a url')).not.toBe('')
     expect(receiptProblem(betReceiptUrl(lockedNote, plan))).toBe('')
   })
+
+  it('omits oracle discovery metadata when the plan was not built from a real oracle (backward compatible)', () => {
+    const url = betReceiptUrl(lockedNote, plan)!
+    expect(new URL(url).searchParams.has('oracleService')).toBe(false)
+    expect(new URL(url).searchParams.has('event')).toBe(false)
+    expect(parseBetReceipt(url)!.oracleServiceUrl).toBeUndefined()
+    expect(parseBetReceipt(url)!.eventId).toBeUndefined()
+  })
+
+  it('round-trips oracle discovery metadata when the plan carries it', () => {
+    const discoverablePlan = planBet(
+      oracle.pubkeyHex,
+      nonce.pubkeyHex,
+      ['yes', 'no'],
+      'https://oracle.example.com',
+      'game-7-2026'
+    )
+    const locked = {
+      ...lockedNote,
+      groupPubkeyHex: discoverablePlan.outputKeyHex
+    }
+    const url = betReceiptUrl(locked, discoverablePlan)!
+    const receipt = parseBetReceipt(url)!
+    expect(receipt.oracleServiceUrl).toBe('https://oracle.example.com')
+    expect(receipt.eventId).toBe('game-7-2026')
+  })
 })
 
 describe('buildRedeemCw1', () => {
@@ -170,5 +196,28 @@ describe('buildRedeemCw1', () => {
     const wrongNonce = generateOracleKeypair()
     const forged = attest(oracle.secretKeyHex, wrongNonce.secretKeyHex, 'yes')
     expect(() => buildRedeemCw1(receipt, forged)).toThrow(/does not verify/)
+  })
+
+  it('is unaffected by a receipt carrying oracle discovery metadata (UI-only, never load-bearing)', () => {
+    const withMetadata: BetReceipt = {
+      ...receipt,
+      oracleServiceUrl: 'https://oracle.example.com',
+      eventId: 'game-7-2026'
+    }
+    const attestation = attest(oracle.secretKeyHex, nonce.secretKeyHex, 'yes')
+    // BIP340 signing draws fresh auxiliary randomness per call (standard,
+    // unrelated to the DLC nonce itself), so two calls never produce
+    // byte-identical witnesses - compare what actually has to match: both
+    // redeem the exact same leaf, committing to the exact same output key.
+    const a = decodeCw1(buildRedeemCw1(withMetadata, attestation))!
+    const b = decodeCw1(buildRedeemCw1(receipt, attestation))!
+    expect(a.script).toEqual(b.script)
+    expect(a.controlBlock).toEqual(b.controlBlock)
+    expect(
+      verifyScriptPath(plan.outputKeyHex, {
+        script: a.script,
+        controlBlock: a.controlBlock
+      })
+    ).toBe(true)
   })
 })
