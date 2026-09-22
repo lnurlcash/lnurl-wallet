@@ -11,6 +11,7 @@ import {
   scriptTemplateById,
   scriptPathProofs,
   verifyScriptPath,
+  identifyLeaf,
   SCRIPT_TEMPLATES
 } from './taproot'
 
@@ -166,6 +167,73 @@ describe('script templates', () => {
         locktime: 0
       })
     ).toBeNull()
+  })
+})
+
+describe('identifyLeaf', () => {
+  const {pubkeyHex: pkA} = generateKeypair()
+  const {pubkeyHex: pkB} = generateKeypair()
+  const hashHex = 'cc'.repeat(32)
+
+  it('recognises every template by its compiled bytes alone, and recovers its own params', () => {
+    const cases: {
+      id: 'pk' | 'csv' | 'cltv' | 'hashlock' | 'multisig2'
+      params: Parameters<typeof compileLeaf>[1]
+    }[] = [
+      {
+        id: 'pk',
+        params: {pubkeyHex: pkA, pubkey2Hex: '', hashHex: '', locktime: 0}
+      },
+      {
+        id: 'csv',
+        params: {pubkeyHex: pkA, pubkey2Hex: '', hashHex: '', locktime: 600}
+      },
+      {
+        id: 'cltv',
+        params: {
+          pubkeyHex: pkA,
+          pubkey2Hex: '',
+          hashHex: '',
+          locktime: 1_800_000_000
+        }
+      },
+      {
+        id: 'hashlock',
+        params: {pubkeyHex: pkA, pubkey2Hex: '', hashHex, locktime: 0}
+      },
+      {
+        id: 'multisig2',
+        params: {pubkeyHex: pkA, pubkey2Hex: pkB, hashHex: '', locktime: 0}
+      }
+    ]
+    for (const {id, params} of cases) {
+      const compiled = compileLeaf(id, params)!
+      const identified = identifyLeaf(hexToBytes(compiled.scriptHex))
+      expect(identified).not.toBeNull()
+      expect(identified!.template.id).toBe(id)
+      expect(identified!.params).toEqual(params)
+    }
+  })
+
+  it('rejects an unrecognised script rather than guessing', () => {
+    expect(identifyLeaf(Script.encode(['DUP']))).toBeNull()
+    expect(identifyLeaf(new Uint8Array([0x51, 0x52, 0x93]))).toBeNull() // 1 2 ADD
+  })
+
+  it('never throws on malformed/truncated bytes', () => {
+    expect(identifyLeaf(new Uint8Array([0xfd]))).toBeNull() // truncated pushdata
+    expect(identifyLeaf(new Uint8Array(0))).toBeNull()
+  })
+
+  it('does not mistake a cltv leaf for a csv one (or vice versa) despite identical shape', () => {
+    const cltv = compileLeaf('cltv', {
+      pubkeyHex: pkA,
+      pubkey2Hex: '',
+      hashHex: '',
+      locktime: 1_800_000_000
+    })!
+    const identified = identifyLeaf(hexToBytes(cltv.scriptHex))!
+    expect(identified.template.id).toBe('cltv')
   })
 })
 

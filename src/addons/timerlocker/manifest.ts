@@ -1,89 +1,91 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {withNewK1} from '../../lnurlcash'
+import {withNewK1, toLud17w, toBech32Lnurl} from '../../lnurlcash'
 import {
   dateProblem,
   planTimelock,
   formatUnlock,
-  secretOfLink,
-  unlockTimeOfSecret,
   type TimelockPlan
 } from './timelock'
 
 // Timerlocker: lock one of your own notes until a date you pick. The note is
 // re-minted as a ct1 whose only way out is a CLTV leaf (see timelock.ts), so
 // even you cannot spend it early - the mint refuses until ITS clock passes
-// the date. What you get back is a "timelocked note link": an lnurlw URL whose
-// secret is a cw1. Keep it, or give it to someone - whoever holds it can
-// redeem after the date, before that it is inert.
+// the date.
+//
+// What you get back is an ordinary, complete lnurlw note - its k1 is a cw1
+// script-path secret, already signed for this exact amount, so nothing needs
+// to happen at "redeem" time beyond an ordinary withdraw once the date has
+// passed (see lnurl-mint's router.py:_note_id_from_k1, which resolves a cw1
+// the same way as any other k1). There is deliberately no separate redeem
+// step in this addon - a timelocked note is just a note.
 //
 // The link is the ONLY record of the value once the lock lands (the wallet
-// cannot hold a cw1 note itself), which is why it is shown before locking and
-// again after, with copy/download - see the docs column.
-
-const trimmed = (v: unknown): string => String(v ?? '').trim()
+// cannot hold a cw1 note itself), which is why it is shown, with copy/
+// download, right after locking - see the docs column.
 
 const problemOf = (unlockAt: unknown): string => dateProblem(unlockAt)
 
 const noProblem = (unlockAt: unknown): boolean => dateProblem(unlockAt) === ''
 
-// the shareable link: the mint's own url template (host, path, certificate
-// for Q) with the timelock secret as `tl` and NO k1 - the note's real k1 is a
-// cw1 that can only be built at redeem time, once the mint's own figure for
-// its value is known (the signature commits to it). Only ever built for the
-// very plan that was locked
-const timelockNoteUrl = (lockedNote: unknown, plan: unknown): string | null => {
-  const locked = lockedNote as {
-    urlTemplate: string
-    amountMsat: number
-    signature: string
-    groupPubkeyHex: string
-  } | null
+type LockedNote = {
+  urlTemplate: string
+  amountMsat: number
+  signature: string
+  groupPubkeyHex: string
+}
+
+// the shareable link: the mint's own url template with the plan's already-
+// signed cw1 as k1 - a complete, ordinary note, nothing left to fill in at
+// redeem time. `lnurlw://` per LUD-17 (never the bare `https://` callback
+// form), optionally the classic LUD-01 bech32 encoding on top, optionally
+// without the mint's offline-verification certificate. Only ever built for
+// the very plan that was locked.
+const timelockNoteUrl = (
+  lockedNote: unknown,
+  plan: unknown,
+  bech32: unknown,
+  offlineSig: unknown
+): string | null => {
+  const locked = lockedNote as LockedNote | null
   const p = plan as TimelockPlan | null
   if (!locked || !p || locked.groupPubkeyHex !== p.outputKeyHex) return null
   try {
-    const url = new URL(
+    const plain = toLud17w(
       withNewK1(
         locked.urlTemplate,
-        '00'.repeat(32),
+        p.cw1,
         locked.amountMsat,
-        locked.signature
+        offlineSig ? locked.signature : undefined
       )
     )
-    url.searchParams.delete('k1')
-    url.searchParams.set('tl', p.secret)
-    return url.toString()
+    return bech32 ? toBech32Lnurl(plain) : plain
   } catch {
     return null
   }
 }
 
-const receiptText = (lockedNote: unknown, plan: unknown): string => {
-  const url = timelockNoteUrl(lockedNote, plan)
-  const p = plan as TimelockPlan | null
-  if (!url || !p) return ''
-  return [
-    'Timerlocker note',
-    `Unlocks: ${formatUnlock(p.locktime)} (unix ${p.locktime})`,
-    'Redeem it after that time with the Timerlocker addon (Redeem section) - it will not work in a plain wallet.',
-    'Whoever holds this link can redeem it - treat it like cash.',
-    '',
-    url,
-    ''
-  ].join('\n')
-}
-
 const unlockOfPlan = (plan: unknown): string =>
   formatUnlock((plan as TimelockPlan | null)?.locktime)
 
-// what a pasted link says about itself, live while typing
-const unlockOfUrl = (url: unknown): string => {
-  const at = unlockTimeOfSecret(secretOfLink(url))
-  return at === null ? '' : formatUnlock(at)
-}
-
-const lockedNoteUnlocksBy = (url: unknown): boolean => {
-  const at = unlockTimeOfSecret(secretOfLink(url))
-  return at !== null && at <= Math.floor(Date.now() / 1000)
+const receiptText = (
+  lockedNote: unknown,
+  plan: unknown,
+  bech32: unknown,
+  offlineSig: unknown
+): string => {
+  const url = timelockNoteUrl(lockedNote, plan, bech32, offlineSig)
+  const locked = lockedNote as LockedNote | null
+  const p = plan as TimelockPlan | null
+  if (!url || !locked || !p) return ''
+  return [
+    'Timerlocker note',
+    `Amount: ${Math.floor(locked.amountMsat / 1000)} sats`,
+    `Unlocks: ${formatUnlock(p.locktime)} (unix ${p.locktime})`,
+    'Whoever holds this link can redeem it, once that time has passed, with',
+    'any LUD-03 withdraw-capable wallet - treat it like cash.',
+    '',
+    url
+  ].join('\n')
 }
 
 const lockUi: UiNode[] = [
@@ -129,7 +131,16 @@ const lockUi: UiNode[] = [
             onClick: {
               action: 'set',
               path: 'plan',
-              value: {helper: 'planTimelock', args: [{var: 'unlockAt'}]}
+              value: {
+                helper: 'planTimelock',
+                args: [
+                  {var: 'unlockAt'},
+                  {
+                    helper: 'satsToMsat',
+                    args: [{var: 'selectedNote.amountSat'}]
+                  }
+                ]
+              }
             }
           }
         ]
@@ -150,21 +161,9 @@ const lockUi: UiNode[] = [
           },
           {
             type: 'Text',
-            value: {cat: ['Timelock secret: ', {var: 'plan.secret'}]},
-            style: 'seed-block'
-          },
-          {
-            type: 'Button',
-            label: 'Copy timelock secret',
-            onClick: {
-              verb: 'clipboard.copy',
-              args: {text: {var: 'plan.secret'}}
-            }
-          },
-          {
-            type: 'Text',
             value:
-              'Copy that secret somewhere safe BEFORE locking - it is the note: whoever holds it can redeem after the date. Locking burns your note at the mint; there is no way to lock it back or unlock it early - not for you, not for the mint.'
+              'This already IS the note - locking cannot be undone. Copy it somewhere safe before locking; nobody, not even the mint, can unlock it early or lock it back.',
+            style: 'seed-block'
           },
           {
             type: 'Button',
@@ -192,23 +191,46 @@ const lockUi: UiNode[] = [
     type: 'Show',
     when: {var: 'lockedNote'},
     children: [
+      {type: 'Text', value: 'Timerlocker note', style: 'subheading'},
       {
         type: 'Text',
         value: {
           cat: [
-            'Locked ',
+            'Amount: ',
             {helper: 'msatToSats', args: [{var: 'lockedNote.amountMsat'}]},
-            ' sats until ',
-            {helper: 'unlockOfPlan', args: [{var: 'plan'}]},
-            '. Keep this link - it is the note:'
+            ' sats'
           ]
         }
       },
       {
         type: 'Text',
         value: {
+          cat: ['Unlocks: ', {helper: 'unlockOfPlan', args: [{var: 'plan'}]}]
+        }
+      },
+      {
+        type: 'Input',
+        bind: 'useBech32',
+        kind: 'checkbox',
+        label: 'Encode as bech32 (LNURL1…)'
+      },
+      {
+        type: 'Input',
+        bind: 'includeSignature',
+        kind: 'checkbox',
+        label: "Include the mint's offline verification signature"
+      },
+      {type: 'Text', value: 'Keep this link - it is the note:'},
+      {
+        type: 'Text',
+        value: {
           helper: 'timelockNoteUrl',
-          args: [{var: 'lockedNote'}, {var: 'plan'}]
+          args: [
+            {var: 'lockedNote'},
+            {var: 'plan'},
+            {var: 'useBech32'},
+            {var: 'includeSignature'}
+          ]
         },
         style: 'response-block'
       },
@@ -220,7 +242,12 @@ const lockUi: UiNode[] = [
           args: {
             text: {
               helper: 'timelockNoteUrl',
-              args: [{var: 'lockedNote'}, {var: 'plan'}]
+              args: [
+                {var: 'lockedNote'},
+                {var: 'plan'},
+                {var: 'useBech32'},
+                {var: 'includeSignature'}
+              ]
             }
           }
         }
@@ -234,7 +261,12 @@ const lockUi: UiNode[] = [
             filename: 'timerlocker-note.txt',
             content: {
               helper: 'receiptText',
-              args: [{var: 'lockedNote'}, {var: 'plan'}]
+              args: [
+                {var: 'lockedNote'},
+                {var: 'plan'},
+                {var: 'useBech32'},
+                {var: 'includeSignature'}
+              ]
             }
           }
         }
@@ -259,61 +291,6 @@ const lockUi: UiNode[] = [
   }
 ]
 
-const redeemUi: UiNode[] = [
-  {type: 'Text', value: 'Redeem a timelocked note', style: 'subheading'},
-  {
-    type: 'Input',
-    bind: 'redeemUrl',
-    label: 'Timelocked note link'
-  },
-  {
-    type: 'Show',
-    when: {helper: 'unlockOfUrl', args: [{var: 'redeemUrl'}]},
-    children: [
-      {
-        type: 'Text',
-        value: {
-          cat: [
-            'Unlocks: ',
-            {helper: 'unlockOfUrl', args: [{var: 'redeemUrl'}]}
-          ]
-        }
-      }
-    ]
-  },
-  {
-    type: 'Show',
-    when: {helper: 'lockedNoteUnlocksBy', args: [{var: 'redeemUrl'}]},
-    children: [
-      {
-        type: 'Button',
-        label: 'Redeem into wallet',
-        onClick: {
-          verb: 'note.redeemTimelock',
-          args: {url: {var: 'redeemUrl'}},
-          result: 'redeemResult'
-        }
-      }
-    ]
-  },
-  {
-    type: 'Show',
-    when: {var: 'redeemResult'},
-    children: [
-      {
-        type: 'Text',
-        value: {
-          cat: [
-            '✓ Redeemed ',
-            {helper: 'msatToSats', args: [{var: 'redeemResult.amountMsat'}]},
-            ' sats into your wallet.'
-          ]
-        }
-      }
-    ]
-  }
-]
-
 const docsUi: UiNode[] = [
   {type: 'Text', value: 'How it works', style: 'subheading'},
   {
@@ -321,10 +298,9 @@ const docsUi: UiNode[] = [
     ordered: true,
     each: [
       'Pick one of your own unspent notes and a date/time.',
-      "Click 'Prepare timelock', copy the timelock secret it shows, then click 'Lock this note until then'.",
-      'Your note is burned at the mint and re-issued as a taproot (ct1) note whose only way out is a script that says "not before this time". The mint enforces it with its own clock, so nobody - including you - can spend it early.',
-      'You get a timelock link. Keep it, or hand it to someone: it is a bearer note, whoever has it can redeem it once the time has passed.',
-      "After the unlock time, paste the link under 'Redeem' and click 'Redeem into wallet'."
+      "Click 'Prepare timelock' - the note's own value is already signed into the lock, so nothing further needs to happen later.",
+      'Click \'Lock this note until then\'. Your note is burned at the mint and re-issued as a taproot (ct1) note whose only way out is a script that says "not before this time". The mint enforces it with its own clock, so nobody - including you - can spend it early.',
+      'Copy the note link (or download a receipt). It is a complete, ordinary bearer note - hand it to anyone, or keep it: whoever holds it can redeem it, once the date has passed, with any LUD-03 withdraw wallet, no addon required.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
   },
@@ -350,13 +326,8 @@ const timerlockerManifest: AddonManifest = {
         'Let you pick one of your own unspent notes and irreversibly lock it until the date you choose'
     },
     {
-      verb: 'note.redeemTimelock',
-      reason:
-        'Redeem a timelocked note link you paste in, once its unlock time has passed, into a fresh note in your wallet'
-    },
-    {
       verb: 'clipboard.copy',
-      reason: 'Copy the timelock secret and note link'
+      reason: 'Copy the resulting timelocked note link'
     },
     {
       verb: 'file.download',
@@ -369,8 +340,8 @@ const timerlockerManifest: AddonManifest = {
     unlockAt: '',
     plan: null,
     lockedNote: null,
-    redeemUrl: '',
-    redeemResult: null
+    useBech32: false,
+    includeSignature: true
   },
   ui: {
     type: 'View',
@@ -380,11 +351,7 @@ const timerlockerManifest: AddonManifest = {
         type: 'View',
         style: 'columns',
         children: [
-          {
-            type: 'View',
-            style: 'col-left',
-            children: [...lockUi, ...redeemUi]
-          },
+          {type: 'View', style: 'col-left', children: lockUi},
           {type: 'View', style: 'col-right', children: docsUi}
         ]
       }
@@ -397,8 +364,6 @@ const timerlockerHelpers: Record<string, AddonHelper> = {
   noProblem: noProblem as AddonHelper,
   planTimelock: planTimelock as AddonHelper,
   unlockOfPlan: unlockOfPlan as AddonHelper,
-  unlockOfUrl: unlockOfUrl as AddonHelper,
-  lockedNoteUnlocksBy: lockedNoteUnlocksBy as AddonHelper,
   timelockNoteUrl: timelockNoteUrl as AddonHelper,
   receiptText: receiptText as AddonHelper
 }

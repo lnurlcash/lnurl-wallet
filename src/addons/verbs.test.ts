@@ -370,7 +370,7 @@ describe("VERBS['note.lockToPubkey']", () => {
   })
 
   const makeCtx = (bearer: Bearer) => {
-    const removed: string[] = []
+    const markedSpent: string[] = []
     const ctx: VerbContext = {
       bearers: () => [bearer],
       addBearer: async note => ({
@@ -379,10 +379,10 @@ describe("VERBS['note.lockToPubkey']", () => {
         createdAt: 0,
         updatedAt: 0
       }),
-      updateBearer: async () => {},
-      removeBearer: id => {
-        removed.push(id)
+      updateBearer: async (id, changes) => {
+        if (changes.spent) markedSpent.push(id)
       },
+      removeBearer: () => {},
       logActivity: () => {},
       deviceClient: () => null,
       requireDeviceClient: () => {
@@ -390,7 +390,7 @@ describe("VERBS['note.lockToPubkey']", () => {
       },
       addon: {id: 'musig2', name: 'MuSig2 Playground'}
     }
-    return {ctx, removed}
+    return {ctx, markedSpent}
   }
 
   // a mint that accepts the mutation and certifies whatever output it was
@@ -412,7 +412,7 @@ describe("VERBS['note.lockToPubkey']", () => {
 
   it('defaults to a cp1 lock: the mint receives p1=cp1<key>', async () => {
     const seen = stubMint()
-    const {ctx, removed} = makeCtx(makeBearer())
+    const {ctx, markedSpent} = makeCtx(makeBearer())
     const result = (await VERBS['note.lockToPubkey']!(
       {note: 'source', pubkeyHex: TARGET_HEX},
       ctx
@@ -423,12 +423,12 @@ describe("VERBS['note.lockToPubkey']", () => {
     expect(seen[0]!.get('h')).toBeNull()
     expect(result.kind).toBe('cp1')
     expect(result.pubkeyVerified).toBe(true)
-    expect(removed).toEqual(['source'])
+    expect(markedSpent).toEqual(['source'])
   })
 
   it("kind 'ct1' sends p1=ct1<Q> - a taproot output key, not a cp1 - and still verifies", async () => {
     const seen = stubMint()
-    const {ctx, removed} = makeCtx(makeBearer())
+    const {ctx, markedSpent} = makeCtx(makeBearer())
     const result = (await VERBS['note.lockToPubkey']!(
       {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
       ctx
@@ -446,7 +446,7 @@ describe("VERBS['note.lockToPubkey']", () => {
     // the mint certifies the raw 32-byte key identically for both kinds,
     // so the unchanged verifyNoteSignatureHash path still checks out
     expect(result.pubkeyVerified).toBe(true)
-    expect(removed).toEqual(['source'])
+    expect(markedSpent).toEqual(['source'])
   })
 
   it('treats any unrecognised kind as cp1 rather than guessing', async () => {
@@ -469,14 +469,14 @@ describe("VERBS['note.lockToPubkey']", () => {
         json: async () => ({status: 'ERROR', reason: 'unsupported output'})
       })) as unknown as typeof fetch
     )
-    const {ctx, removed} = makeCtx(makeBearer())
+    const {ctx, markedSpent} = makeCtx(makeBearer())
     await expect(
       VERBS['note.lockToPubkey']!(
         {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
         ctx
       )
     ).rejects.toThrow()
-    expect(removed).toEqual([])
+    expect(markedSpent).toEqual([])
   })
 
   it('reports pubkeyVerified=false when the certificate is not from the pinned mint key', async () => {
@@ -524,41 +524,5 @@ describe("VERBS['note.lockToPubkey']", () => {
       )
     ).rejects.toThrow(/32-byte x-only/)
     expect(fetchMock).not.toHaveBeenCalled()
-  })
-})
-
-describe("VERBS['note.redeemTimelock']", () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  const ctx = {
-    addBearer: vi.fn(),
-    updateBearer: vi.fn(),
-    removeBearer: vi.fn(),
-    logActivity: vi.fn()
-  } as unknown as VerbContext
-
-  const link = (secret: string) => `https://mock-mint.test/w?tl=${secret}`
-
-  it('rejects a link with no or malformed timelock secret, offline', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    for (const bad of ['nonsense', 'https://mock-mint.test/w', link('ab')]) {
-      await expect(
-        VERBS['note.redeemTimelock']!({url: bad}, ctx)
-      ).rejects.toThrow()
-    }
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('refuses before the unlock time, without touching the network or wallet', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    const future = Math.floor(Date.now() / 1000) + 86400
-    const secret = '11'.repeat(32) + future.toString(16).padStart(8, '0')
-    await expect(
-      VERBS['note.redeemTimelock']!({url: link(secret)}, ctx)
-    ).rejects.toThrow(/Still locked/)
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(ctx.addBearer).not.toHaveBeenCalled()
   })
 })

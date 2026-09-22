@@ -28,6 +28,7 @@ import {Script, ScriptNum} from '@scure/btc-signer/script.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {deriveScriptPathCommitment} from '../../lib/recoverableNotes'
 
 const parseHex = (
   hex: string,
@@ -150,8 +151,11 @@ export const scriptTemplateById = (id: string): ScriptTemplate | undefined =>
 // own script disassembly. A multi-byte numeric push (e.g. csv/cltv's
 // locktime, once it needs more than one byte) decodes as raw bytes instead,
 // same as any other data push - both cases hex-show data, everything else
-// keeps its OP_ mnemonic.
-const opcodesOf = (script: Uint8Array): string =>
+// keeps its OP_ mnemonic. Exported: also the generic fallback view for an
+// arbitrary/unrecognised leaf (see identifyLeaf below and
+// components/ScriptPreviewDialog.tsx), not just this addon's own live
+// per-row display.
+export const opcodesOf = (script: Uint8Array): string =>
   Script.decode(script)
     .map(op =>
       op instanceof Uint8Array
@@ -161,6 +165,110 @@ const opcodesOf = (script: Uint8Array): string =>
           : `OP_${op}`
     )
     .join(' ')
+
+export type IdentifiedLeaf = {
+  template: ScriptTemplate
+  params: ScriptTemplateParams
+}
+
+// tries to recognise an arbitrary decoded script as one of SCRIPT_TEMPLATES'
+// own fixed shapes - the read side of compileLeaf's write side. Not a
+// general disassembler (opcodesOf above already is one): this only ever
+// reports a positive match when the script is byte-for-byte what that
+// template's own build() would produce for the recovered params, so a
+// caller can trust the friendly description it hands back rather than
+// treating it as a guess. Null for anything else (including a script this
+// addon's own templates just don't cover - opcodesOf is always the
+// fallback). Never throws.
+export const identifyLeaf = (script: Uint8Array): IdentifiedLeaf | null => {
+  let decoded: unknown[]
+  try {
+    decoded = Script.decode(script)
+  } catch {
+    return null
+  }
+  const push32 = (op: unknown): string | null =>
+    op instanceof Uint8Array && op.length === 32 ? bytesToHex(op) : null
+  const num = (op: unknown): number | null => {
+    if (typeof op === 'number') return op
+    if (!(op instanceof Uint8Array)) return null
+    try {
+      return Number(ScriptNum().decode(op))
+    } catch {
+      return null
+    }
+  }
+  const params = (over: Partial<ScriptTemplateParams>): ScriptTemplateParams => ({
+    pubkeyHex: '',
+    pubkey2Hex: '',
+    hashHex: '',
+    locktime: 0,
+    ...over
+  })
+  const matches = (id: ScriptTemplateId, p: ScriptTemplateParams): IdentifiedLeaf | null => {
+    const template = scriptTemplateById(id)!
+    try {
+      return bytesToHex(template.build(p)) === bytesToHex(script)
+        ? {template, params: p}
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  if (decoded.length === 2 && decoded[1] === 'CHECKSIG') {
+    const pk = push32(decoded[0])
+    if (pk) {
+      const hit = matches('pk', params({pubkeyHex: pk}))
+      if (hit) return hit
+    }
+  }
+  if (decoded.length === 5 && decoded[2] === 'DROP' && decoded[4] === 'CHECKSIG') {
+    const locktime = num(decoded[0])
+    const pk = push32(decoded[3])
+    if (locktime !== null && pk) {
+      if (decoded[1] === 'CHECKSEQUENCEVERIFY') {
+        const hit = matches('csv', params({pubkeyHex: pk, locktime}))
+        if (hit) return hit
+      }
+      if (decoded[1] === 'CHECKLOCKTIMEVERIFY') {
+        const hit = matches('cltv', params({pubkeyHex: pk, locktime}))
+        if (hit) return hit
+      }
+    }
+  }
+  if (
+    decoded.length === 5 &&
+    decoded[0] === 'SHA256' &&
+    decoded[2] === 'EQUALVERIFY' &&
+    decoded[4] === 'CHECKSIG'
+  ) {
+    const hash = push32(decoded[1])
+    const pk = push32(decoded[3])
+    if (hash && pk) {
+      const hit = matches('hashlock', params({pubkeyHex: pk, hashHex: hash}))
+      if (hit) return hit
+    }
+  }
+  if (
+    decoded.length === 6 &&
+    decoded[1] === 'CHECKSIG' &&
+    decoded[3] === 'CHECKSIGADD' &&
+    decoded[4] === 2 &&
+    decoded[5] === 'NUMEQUAL'
+  ) {
+    const pkA = push32(decoded[0])
+    const pkB = push32(decoded[2])
+    if (pkA && pkB) {
+      const hit = matches(
+        'multisig2',
+        params({pubkeyHex: pkA, pubkey2Hex: pkB})
+      )
+      if (hit) return hit
+    }
+  }
+  return null
+}
 
 export type CompiledLeaf = {
   scriptHex: string
@@ -321,13 +429,15 @@ export const scriptPathProofs = (
 
 // BIP341 script-path verification, as a mint would run it BEFORE ever
 // evaluating the script itself: does this (script, control block) really
-// commit to the already-known output key Q? Recomputes the leaf hash, walks
-// the merkle path in the control block back up to a root, re-derives the
-// tweak from (internal key, root), and checks the result equals Q with the
-// parity the control block claims. This is pure crypto - no opcode is
-// executed and no clock is consulted - and it is the whole reason a ct1
-// needs to carry nothing but Q: nobody can satisfy it for a key they didn't
-// build forward from a real tree.
+// commit to the already-known output key Q, with the parity the control
+// block claims? The merkle-walk + tweak itself is shared, general-purpose
+// crypto (lib/recoverableNotes.ts's deriveScriptPathCommitment - also what
+// resolves a bare cw1 note back to its Q with no addon involved); this
+// just adds the "matches an already-known key" comparison a lock's own
+// self-check wants. This is pure crypto - no opcode is executed and no
+// clock is consulted - and it is the whole reason a ct1 needs to carry
+// nothing but Q: nobody can satisfy it for a key they didn't build
+// forward from a real tree.
 //
 // Never throws: a malformed proof is simply "not committed to Q".
 export const verifyScriptPath = (
@@ -336,36 +446,19 @@ export const verifyScriptPath = (
 ): boolean => {
   try {
     const outputKey = parseHex(outputKeyHex, 32, 'Output key')
-    const {script, controlBlock} = proof
-    // 1 byte (leaf version | parity) + 32-byte internal key + 32n path
-    if (controlBlock.length < 33 || (controlBlock.length - 33) % 32 !== 0) {
-      return false
-    }
-    const leafVersion = controlBlock[0]! & 0xfe
-    const parity = controlBlock[0]! & 1
-    const internalKey = controlBlock.subarray(1, 33)
-    let node = tapLeafHash(script, leafVersion)
-    for (let i = 33; i < controlBlock.length; i += 32) {
-      const sibling = controlBlock.subarray(i, i + 32)
-      // BIP341: branch hashes sort their two children lexicographically
-      const [a, b] =
-        compareBytes(node, sibling) <= 0 ? [node, sibling] : [sibling, node]
-      node = schnorr.utils.taggedHash('TapBranch', a, b)
-    }
-    const [tweaked, tweakedParity] = taprootTweakPubkey(internalKey, node)
+    const commitment = deriveScriptPathCommitment(
+      proof.script,
+      proof.controlBlock
+    )
+    if (!commitment) return false
+    const claimedParity = proof.controlBlock[0]! & 1
     return (
-      bytesToHex(tweaked) === bytesToHex(outputKey) && tweakedParity === parity
+      bytesToHex(commitment.outputKey) === bytesToHex(outputKey) &&
+      commitment.parity === claimedParity
     )
   } catch {
     return false
   }
-}
-
-const compareBytes = (a: Uint8Array, b: Uint8Array): number => {
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    if (a[i] !== b[i]) return a[i]! - b[i]!
-  }
-  return a.length - b.length
 }
 
 // pubkeyHex: 32-byte x-only hex (the BIP340/Taproot "internal key" P).

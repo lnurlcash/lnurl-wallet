@@ -423,6 +423,9 @@ textarea,
 input[type='text'],
 input[type='number'],
 input[type='password'],
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'],
 select {
   background-color: rgba(
     color.adjust($accent-base, $lightness: -30%),
@@ -443,6 +446,19 @@ select {
   &:focus {
     outline: none;
     border-color: color.adjust($font-color, $lightness: 20%);
+  }
+}
+
+// WebKit/Blink draw their own calendar/clock glyph on these, near-black by
+// default - invisible against the dark background above without this.
+// This app has no light theme to conflict with, so inverting unconditionally
+// is safe (Firefox already themes its own native picker to match the page).
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'] {
+  &::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    cursor: pointer;
   }
 }
 
@@ -1469,12 +1485,29 @@ nav {
 .bearer-device,
 .bearer-sunset,
 .bearer-legacy-ck1,
-.bearer-plain {
+.bearer-plain,
+.bearer-script {
   display: inline-flex;
   align-items: center;
   font-size: 0.8em;
   svg {
     display: block;
+  }
+}
+
+// a badge that's also a button (currently just .bearer-script, which opens
+// ScriptPreviewDialog) - strips the browser's own button chrome so it reads
+// as one of the plain-span badges above, not a form control, while staying
+// a real <button> for click/keyboard/focus semantics
+.bearer-badge-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+  &:hover {
+    text-decoration: underline;
   }
 }
 
@@ -1512,6 +1545,14 @@ nav {
 // (rotate) before something stops working
 .bearer-legacy-ck1 {
   color: #e4c567;
+}
+
+// a ct1 note redeemed by revealing a Tapscript leaf (a cw1) rather than a
+// plain ck1 signature - purely descriptive, same "not a warning" muted
+// treatment as .bearer-plain, distinguished by an underline-on-hover
+// (.bearer-badge-btn) since it's clickable
+.bearer-script {
+  opacity: 0.75;
 }
 
 .bearer-server {
