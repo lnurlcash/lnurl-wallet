@@ -19,11 +19,16 @@ import {
   noteSignature,
   settleNote,
   withNewK1,
-  AmbiguousMintError
+  AmbiguousMintError,
+  fetchNoteInfoByPubkey,
+  generateOutputSecret,
+  hashK1,
+  outputKeyOfCw1
 } from '../lnurlcash'
 import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
+import {parseBetReceipt, buildRedeemCw1} from './betlocker/betlock'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -232,6 +237,73 @@ export const VERBS: Record<string, VerbHandler> = {
       // split already rely on (see withNewK1)
       urlTemplate: bearer.url
     }
+  },
+
+  // The redeem half of the betlocker addon: `receiptUrl` is a bet receipt
+  // (host/path/certificate/announcement, no k1 - see betlock.ts's own
+  // betReceiptUrl/parseBetReceipt), `outcome`/`signatureHex` are what the
+  // oracle actually published. buildRedeemCw1 does the real work (verifies
+  // the attestation, builds and signs the script-path spend) and throws
+  // its own specific reason on anything that doesn't check out; this verb
+  // is just the network round trip around it, same shape as
+  // note.lockToPubkey/note.claim.
+  //
+  // Order matters (a rotate is irreversible): the replacement note is
+  // saved to the wallet FIRST, unverified, and only removed again on a
+  // DEFINITIVE refusal - same reasoning as every other redeem-by-rotate
+  // flow in this wallet (see receive.ts's own receiveIntoWallet). This is
+  // a genuine race (see betlock.ts's own top comment): the mint may
+  // already have paid out to whoever redeemed first, in which case this
+  // fails as an ordinary rotate refusal, not something special to bets.
+  'note.redeemBet': async (args, ctx) => {
+    const receipt = parseBetReceipt(args.receiptUrl)
+    if (!receipt) {
+      throw new Error('Not a valid bet receipt.')
+    }
+    const cw1 = buildRedeemCw1(receipt, {
+      outcome: String(args.outcome ?? '').trim(),
+      signatureHex: String(args.signatureHex ?? '').trim()
+    })
+    const outputKeyHex = outputKeyOfCw1(cw1)
+    if (!outputKeyHex) {
+      throw new Error(
+        "Internal error: could not derive this bet's own output key."
+      )
+    }
+    const info = await fetchNoteInfoByPubkey(
+      receipt.urlTemplate,
+      encodeCt1(hexToBytes(outputKeyHex))
+    )
+    const amountMsat = info.maxWithdrawable
+    const newK1 = generateOutputSecret(serverOf(info.callback), false)
+    const saved = await ctx.addBearer({
+      url: withNewK1(receipt.urlTemplate, newK1, amountMsat),
+      callback: info.callback,
+      amount: amountMsat,
+      verified: false
+    })
+    let signature: string | undefined
+    try {
+      signature = (await rotateNoteWithHash(info.callback, cw1, hashK1(newK1)))
+        .signature
+    } catch (err) {
+      if (err instanceof AmbiguousMintError) {
+        throw new Error(
+          `${(err as Error).message} The redemption may or may not have landed - a replacement note was saved to your wallet; refresh it on the Wallet page to find out. Do not retry until you have.`
+        )
+      }
+      ctx.removeBearer(saved.id)
+      throw err
+    }
+    await ctx.updateBearer(saved.id, {
+      url: withNewK1(receipt.urlTemplate, newK1, amountMsat, signature),
+      verified: true
+    })
+    ctx.logActivity(
+      'mint',
+      `Redeemed a ${amountMsat} msat DLC bet at ${serverOf(receipt.urlTemplate)} via an addon.`
+    )
+    return {id: saved.id, amountMsat}
   },
 
   // adds an already fully-known note (url/callback/amount[/mintPubkey])

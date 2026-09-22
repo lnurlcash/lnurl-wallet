@@ -24,6 +24,7 @@ import {
   taprootTweakPubkey
 } from '@scure/btc-signer/utils.js'
 import {p2tr, tapLeafHash, type P2TR_TREE} from '@scure/btc-signer/payment.js'
+import {Transaction} from '@scure/btc-signer'
 import {Script, ScriptNum} from '@scure/btc-signer/script.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
@@ -41,6 +42,13 @@ const parseHex = (
   }
   return hexToBytes(trimmed)
 }
+
+// BIP341's "nothing up my sleeve" internal key - no known discrete log, so
+// the key-path is provably unspendable by anyone. Shared by every addon
+// that locks a note to a script-path-only output (the sibling timelocker
+// and betlocker addons both use it, for the identical reason).
+export const NUMS_INTERNAL_KEY_HEX =
+  '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
 
 // ---- Script templates (real Bitcoin Script opcodes, BIP342 tapscript
 // rules) - what a holder picks from instead of typing free-text placeholder
@@ -539,4 +547,69 @@ export const signWithTweakedKey = (
     signatureHex: bytesToHex(signature),
     verified: schnorr.verify(signature, digest, tweakedPubkey)
   }
+}
+
+// Signs a script-path spend of the canonical single-input, zero-value
+// transaction lnurlcashkernel checks against (see lnurl-mint's ct1.py /
+// verify.py's own README - a fixed, versioned shape, not something this
+// function invents) - the one piece shared by every addon that needs to
+// actually PRODUCE a witness for a leaf it already holds the private key
+// for (the timelocker addon's own throwaway key, the sibling betlocker
+// addon's oracle-revealed one). `allLeafScripts` is the FULL tree - needed
+// to build the right merkle structure even when only signing for one of
+// several leaves (betlocker locks one leaf per possible outcome at once);
+// `targetScript` picks which one this call produces a witness for. Throws
+// if `targetScript` isn't part of the tree, or `secretKeyHex` isn't the
+// right key for its own CHECKSIG pubkey (in which case @scure/btc-signer's
+// own signer silently produces nothing to sign).
+export const signScriptPathSpend = (
+  secretKeyHex: string,
+  internalKeyHex: string,
+  allLeafScripts: Uint8Array[],
+  targetScript: Uint8Array,
+  amountMsat: number,
+  locktime: number,
+  sequence: number
+): Uint8Array => {
+  const tree = p2tr(
+    hexToBytes(internalKeyHex),
+    allLeafScripts.map(script => ({script})),
+    undefined,
+    true
+  )
+  const targetHex = bytesToHex(targetScript)
+  // each tapLeafScript entry's own script comes back with a trailing
+  // leaf-version byte appended (@scure/btc-signer's own TaprootControlBlock/
+  // leafScript convention) - stripped before comparing against a bare
+  // compiled script's own hex
+  const tapLeafScript = (tree.tapLeafScript ?? []).filter(
+    ([, leafScript]) =>
+      bytesToHex(leafScript.subarray(0, leafScript.length - 1)) === targetHex
+  )
+  if (tapLeafScript.length === 0) {
+    throw new Error('That leaf script is not part of this tree.')
+  }
+  const tx = new Transaction({
+    version: 2,
+    lockTime: locktime,
+    allowUnknownOutputs: true
+  })
+  tx.addInput({
+    txid: new Uint8Array(32),
+    index: 0,
+    sequence,
+    witnessUtxo: {script: tree.script, amount: BigInt(amountMsat)},
+    tapLeafScript
+  })
+  tx.addOutput({script: new Uint8Array(0), amount: 0n})
+  tx.signIdx(hexToBytes(secretKeyHex), 0)
+  const input = tx.getInput(0) as {
+    tapScriptSig?: [{pubKey: Uint8Array}, Uint8Array][]
+  }
+  const pubkeyHex = bytesToHex(schnorr.getPublicKey(hexToBytes(secretKeyHex)))
+  const sig = (input.tapScriptSig ?? []).find(
+    ([k]) => bytesToHex(k.pubKey) === pubkeyHex
+  )?.[1]
+  if (!sig) throw new Error('Could not sign the script-path spend.')
+  return sig
 }
