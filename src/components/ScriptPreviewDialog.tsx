@@ -14,7 +14,7 @@ export type ScriptPreviewDialogProps = {
 }
 
 // BIP65: below this a CLTV number is a block height, at/above it a unix
-// time - same threshold the timerlocker addon's own timelock.ts uses, kept
+// time - same threshold the timelocker addon's own timelock.ts uses, kept
 // separate here (no wallet-wide-worthy shared constant exists yet) rather
 // than importing from an addon's page-local module.
 const LOCKTIME_THRESHOLD = 500_000_000
@@ -43,7 +43,7 @@ const ScriptPreviewDialog: Component<ScriptPreviewDialogProps> = props => {
     return decoded ? Math.max(0, (decoded.controlBlock.length - 33) / 32) : 0
   })
 
-  // the one shape this wallet's own Timerlocker addon produces - called out
+  // the one shape this wallet's own Timelocker addon produces - called out
   // by name rather than left as a generic "cltv leaf" match, since it's the
   // one a holder is most likely to actually be looking at
   const timelockUnlock = createMemo(() => {

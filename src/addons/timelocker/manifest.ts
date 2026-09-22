@@ -7,7 +7,7 @@ import {
   type TimelockPlan
 } from './timelock'
 
-// Timerlocker: lock one of your own notes until a date you pick. The note is
+// Timelocker: lock one of your own notes until a date you pick. The note is
 // re-minted as a ct1 whose only way out is a CLTV leaf (see timelock.ts), so
 // even you cannot spend it early - the mint refuses until ITS clock passes
 // the date.
@@ -78,7 +78,7 @@ const receiptText = (
   const p = plan as TimelockPlan | null
   if (!url || !locked || !p) return ''
   return [
-    'Timerlocker note',
+    'Timelocker note',
     `Amount: ${Math.floor(locked.amountMsat / 1000)} sats`,
     `Unlocks: ${formatUnlock(p.locktime)} (unix ${p.locktime})`,
     'Whoever holds this link can redeem it, once that time has passed, with',
@@ -191,7 +191,7 @@ const lockUi: UiNode[] = [
     type: 'Show',
     when: {var: 'lockedNote'},
     children: [
-      {type: 'Text', value: 'Timerlocker note', style: 'subheading'},
+      {type: 'Text', value: 'Timelocker note', style: 'subheading'},
       {
         type: 'Text',
         value: {
@@ -258,7 +258,7 @@ const lockUi: UiNode[] = [
         onClick: {
           verb: 'file.download',
           args: {
-            filename: 'timerlocker-note.txt',
+            filename: 'timelocker-note.txt',
             content: {
               helper: 'receiptText',
               args: [
@@ -311,9 +311,9 @@ const docsUi: UiNode[] = [
   }
 ]
 
-const timerlockerManifest: AddonManifest = {
-  id: 'timerlocker',
-  name: 'Timerlocker',
+const timelockerManifest: AddonManifest = {
+  id: 'timelocker',
+  name: 'Timelocker',
   version: '1',
   icon: 'timer',
   description:
@@ -334,7 +334,7 @@ const timerlockerManifest: AddonManifest = {
       reason: 'Save a receipt file containing the timelocked note link'
     }
   ],
-  nav: {position: 'right', icon: 'timer', label: 'Timerlocker'},
+  nav: {position: 'right', icon: 'timer', label: 'Timelocker'},
   state: {
     selectedNote: null,
     unlockAt: '',
@@ -346,7 +346,7 @@ const timerlockerManifest: AddonManifest = {
   ui: {
     type: 'View',
     children: [
-      {type: 'Text', value: 'Timerlocker', style: 'heading'},
+      {type: 'Text', value: 'Timelocker', style: 'heading'},
       {
         type: 'View',
         style: 'columns',
@@ -359,7 +359,7 @@ const timerlockerManifest: AddonManifest = {
   }
 }
 
-const timerlockerHelpers: Record<string, AddonHelper> = {
+const timelockerHelpers: Record<string, AddonHelper> = {
   problemOf: problemOf as AddonHelper,
   noProblem: noProblem as AddonHelper,
   planTimelock: planTimelock as AddonHelper,
@@ -368,7 +368,7 @@ const timerlockerHelpers: Record<string, AddonHelper> = {
   receiptText: receiptText as AddonHelper
 }
 
-export const timerlockerAddon: Addon = {
-  manifest: timerlockerManifest,
-  helpers: timerlockerHelpers
+export const timelockerAddon: Addon = {
+  manifest: timelockerManifest,
+  helpers: timelockerHelpers
 }

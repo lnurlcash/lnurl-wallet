@@ -1,4 +1,4 @@
-// Pure math behind the timerlocker addon: a note locked to a ct1 whose ONLY
+// Pure math behind the timelocker addon: a note locked to a ct1 whose ONLY
 // spend path is one Tapscript leaf, the stock `cltv` template
 //
 //   <unix time> OP_CHECKLOCKTIMEVERIFY OP_DROP <pubkey> OP_CHECKSIG
@@ -24,22 +24,23 @@
 //
 // Everything here is synchronous (see taproot.ts's note on why a helper
 // bound to a live Text/set must not return a Promise).
-import {Transaction, p2tr} from '@scure/btc-signer'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {encodeCw1} from '../../lib/recoverableNotes'
 import {
   generateKeypair,
+  NUMS_INTERNAL_KEY_HEX,
   scriptPathProofs,
   scriptTemplateById,
+  signScriptPathSpend,
   tweakPubkey,
   verifyScriptPath
 } from '../taproot/taproot'
-
-// BIP341's "nothing up my sleeve" internal key - no known discrete log, so
-// the key-path is provably unspendable by anyone, this wallet included
-export const NUMS_INTERNAL_KEY_HEX =
-  '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
+// re-exported for existing importers of this module (e.g. this addon's
+// own tests) - the constant itself now lives in taproot.ts, shared with
+// the sibling betlocker addon, which has an identical "no key-path spend
+// should exist for anyone" reason to want it
+export {NUMS_INTERNAL_KEY_HEX}
 
 // BIP65: below this a CLTV number is a block height, at/above it a unix time
 export const LOCKTIME_THRESHOLD = 500_000_000
@@ -120,33 +121,15 @@ export const planTimelock = (
   // sign the canonical spend transaction lnurlcashkernel checks against
   // (see verify.py) - fixed shape, this leaf's Q as the spent output, this
   // exact amount/locktime/sequence
-  const tree = p2tr(
-    hexToBytes(NUMS_INTERNAL_KEY_HEX),
-    [{script}],
-    undefined,
-    true
+  const sig = signScriptPathSpend(
+    bytesToHex(secretKey),
+    NUMS_INTERNAL_KEY_HEX,
+    [script],
+    script,
+    Number(amountMsat),
+    locktime,
+    TIMELOCK_SEQUENCE
   )
-  const tx = new Transaction({
-    version: 2,
-    lockTime: locktime,
-    allowUnknownOutputs: true
-  })
-  tx.addInput({
-    txid: new Uint8Array(32),
-    index: 0,
-    sequence: TIMELOCK_SEQUENCE,
-    witnessUtxo: {script: tree.script, amount: BigInt(amountMsat)},
-    tapLeafScript: tree.tapLeafScript
-  })
-  tx.addOutput({script: new Uint8Array(0), amount: 0n})
-  tx.signIdx(secretKey, 0)
-  const input = tx.getInput(0) as {
-    tapScriptSig?: [{pubKey: Uint8Array}, Uint8Array][]
-  }
-  const sig = (input.tapScriptSig ?? []).find(
-    ([k]) => bytesToHex(k.pubKey) === pubkeyHex
-  )?.[1]
-  if (!sig) throw new Error('Internal error: could not sign the timelock.')
 
   const cw1 = encodeCw1({
     locktime,

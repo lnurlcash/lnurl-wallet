@@ -309,9 +309,9 @@ JSON can do - e.g. it needs its own pure logic like raffle's shuffle):
 5. If it needs to touch notes in a way `note.query`/`note.split` can't
    express, that's a new verb in `verbs.ts`, not a new helper.
 
-## Bundled addon: Timerlocker
+## Bundled addon: Timelocker
 
-`timerlocker/` locks one of your own notes until a date picked with the
+`timelocker/` locks one of your own notes until a date picked with the
 `Input` `kind: 'datetime'` (a native `datetime-local` control). The note is
 rotated to a `ct1` whose only spend path is the stock `cltv` leaf
 (`<t> CLTV DROP <pk> CHECKSIG`) under BIP341's NUMS internal key, so the

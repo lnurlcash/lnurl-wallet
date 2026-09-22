@@ -19,7 +19,7 @@ const at = (seconds: number): string =>
     .replace(' ', 'T')
     .slice(0, 16)
 
-describe('timerlocker date handling', () => {
+describe('timelocker date handling', () => {
   it('rejects empty, past and too-soon dates', () => {
     expect(dateProblem('', NOW)).not.toBe('')
     expect(dateProblem('garbage', NOW)).not.toBe('')
