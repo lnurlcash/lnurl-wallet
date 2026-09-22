@@ -7,7 +7,7 @@ import {hasCashRoot} from '../cashSecrets'
 import {registeredAddresses} from '../addressRegistry'
 import {runAddressScan} from '../addressRecovery'
 import {sendNotification} from '../notifications'
-import {msatToSats} from '../helpers'
+import {notify, NotifyKind, msatToSats} from '../helpers'
 import {serverOf} from '../lnurlcash'
 
 // foreground-only per-address "check notes" scheduler (TODO.md's
@@ -51,10 +51,24 @@ const AddressAutoScanner: Component = () => {
           {startIndex: addr.nextScanIndex ?? 0}
         )
         for (const note of result.recovered) {
+          const body = `${msatToSats(note.amount)} sats at ${addr.username}@${serverOf(addr.server)}.`
           sendNotification('New funds received', {
-            body: `${msatToSats(note.amount)} sats at ${addr.username}@${serverOf(addr.server)}.`,
+            body,
             tag: `address-scan-${key}`
           })
+          // an OS notification alone can go unnoticed - many browsers
+          // suppress it entirely while the tab already has focus, and
+          // sendNotification's own platform fallback (see notifications.ts)
+          // is still best-effort. A bottom toast is the in-app guarantee:
+          // bottom rather than the usual top-right stream of action
+          // confirmations (index.tsx's <Toaster>), so a background find
+          // reads as its own distinct thing, not another "you clicked
+          // something" toast
+          notify(
+            `New funds received: ${body}`,
+            NotifyKind.SUCCESS,
+            'bottom-center'
+          )
         }
       } finally {
         inFlight.delete(key)

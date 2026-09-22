@@ -134,6 +134,20 @@ export type AddressScanOptions = {
   // reserved-but-never-settled invoices inflated), and this is the check
   // that catches it even when it is.
   checkBehind?: boolean
+  // forces the forward walk to keep going through indices <= this one even
+  // after gapLimit consecutive unknowns would otherwise have stopped it -
+  // the normal gapLimit-based stop applies again as soon as index passes
+  // it. For a SERVICE-advertised next-index hint (25.md Part 2's
+  // text/xpub, see resolveScanStartIndex's own doc comment on why the hint
+  // alone is never trustworthy as a *floor*), this is the complementary
+  // guarantee at the other end: a caller doing a full, from-scratch walk
+  // wants to know it reached at least as far as SERVICE says it has handed
+  // out invoices, not stop early on some unrelated stretch of abandoned
+  // reservations sitting well short of that. Typically set to
+  // `serviceHint + gapLimit`, not `serviceHint` alone, so the scan still
+  // applies its ordinary gap-limit search past the hint too, the same as
+  // it would past any other index.
+  minIndex?: number
   // called as each note is found, so a caller can surface progress (or
   // start acting on a note) without waiting for the whole scan to finish
   onFound?: (result: AddressScanResult) => void
@@ -233,7 +247,7 @@ export const scanForAddressNotes = async (
 
   let consecutiveUnknown = 0
   let index = startIndex
-  while (consecutiveUnknown < gapLimit) {
+  while (consecutiveUnknown < gapLimit || index <= (opts.minIndex ?? -1)) {
     const outcome = await probeOnce(index)
     consecutiveUnknown = outcome === 'unknown' ? consecutiveUnknown + 1 : 0
     index++

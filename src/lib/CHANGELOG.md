@@ -2,6 +2,15 @@
 
 ## 0.14.0 - unreleased
 
+- Add `minIndex` to `scanForAddressNotes`'s options: forces the forward
+  walk to keep going through indices up to and including this one, even
+  past what `gapLimit` consecutive unknowns would otherwise have stopped
+  it at - the complementary guarantee to `checkBehind` at the other end.
+  `lnurl-wallet`'s own `addressRecovery.ts` sets this to
+  `serviceHint + gapLimit` on every scan, so a from-scratch walk is
+  guaranteed to reach at least as far as SERVICE says it has handed out
+  invoices, rather than stopping early on some unrelated dead stretch well
+  short of it.
 - Add `checkBehind` to `scanForAddressNotes`'s options: also re-checks up to
   `gapLimit` indices immediately below `startIndex` (down to 0) as a
   fixed-size safety net, before the ordinary forward walk - re-verifying

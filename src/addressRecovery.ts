@@ -149,15 +149,25 @@ export const scanRegisteredAddress = async (
 
   const recovered: NewBearer[] = []
   let highestIndex: number | null = null
+  const limit = gapLimit()
   try {
     const results = await scanForAddressNotes(withdrawUrl, branch, {
-      gapLimit: gapLimit(),
+      gapLimit: limit,
       startIndex,
       // re-verifies gapLimit indices below startIndex too, every pass - the
       // safety net that catches startIndex itself being wrong (a stale
       // local floor, or a SERVICE hint that outran actual settlement) even
       // when it is - see scanForAddressNotes' own doc comment
       checkBehind: true,
+      // the complementary guarantee at the other end: a forward walk must
+      // not give up on some unrelated stretch of abandoned reservations
+      // well short of where SERVICE says it has actually handed out
+      // invoices (next_index advances at invoice-CREATION time, not
+      // settlement - see scanForAddressNotes' own doc comment on
+      // minIndex). +limit is deliberate margin past the hint itself, not
+      // just up to it, so a genuine gapLimit search still happens beyond
+      // it too.
+      minIndex: serviceHint !== null ? serviceHint + limit : undefined,
       onFound: result => {
         highestIndex = Math.max(highestIndex ?? -1, result.index)
       }

@@ -260,4 +260,25 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     )
     expect(result.nextScanIndex).toBe(5)
   })
+
+  it('a full rescan reaches at least the metadata hint + gap limit, past an intervening dead stretch', async () => {
+    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    // default gap limit is 20 (see gapLimit.ts) - a plain forward walk from
+    // 0 would give up at index 20, long before reaching this note at 25,
+    // even though SERVICE's own hint (10) says it has handed out well past
+    // the dead stretch sitting in between
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([25], undefined, `${cx1}:10`) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 0}
+    )
+    expect(result.recovered).toHaveLength(1)
+    expect(result.highestIndex).toBe(25)
+  })
 })

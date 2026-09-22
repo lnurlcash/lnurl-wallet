@@ -51,6 +51,16 @@
 //   step was independently confirmed by the mint; a real gap, flagged
 //   rather than glossed over).
 //
+//   Encoded the same way this kit encodes every other wire value it
+//   invents (see src/lib/recoverableNotes.ts's own top comment) - a single
+//   bech32m string, not JSON stuffed into a URL's query string. The HRP is
+//   `seal`, deliberately NOT a 2-letter `c*` prefix like cp1/ct1/ck1/cw1/
+//   cs1/cx1: those are real, standardized LUD-25 wire types this wallet
+//   and the mint both implement; a seal consignment is wholly addon-local
+//   and non-standardized, and a short prefix that LOOKED like one of those
+//   would misrepresent it as protocol-level. (`cs1` in particular is
+//   already taken - a mint issuance certificate, unrelated to this.)
+//
 // Honest limitation, same one Betlocker's own receipt already carries: an
 // unredeemed transition is a PROMISE, not a guarantee, until it actually
 // lands at the mint - the underlying note can still only be redeemed
@@ -69,7 +79,7 @@ import {
   utf8ToBytes
 } from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
-import {fromBech32Lnurl} from '../../lnurlcash'
+import {bech32m} from '@scure/base'
 import {encodeCw1} from '../../lib/recoverableNotes'
 import {
   compileLeaf,
@@ -131,6 +141,76 @@ const encodeSealState = (state: SealState): Uint8Array =>
     hexToBytes(state.ownerPubkeyHex),
     state.prevStateHash ? hexToBytes(state.prevStateHash) : new Uint8Array(32)
   )
+
+// reads one lengthPrefixed(text) field back out at `offset`, returning
+// where the NEXT field starts - the read-side counterpart every
+// length-prefixed write below needs. Throws on a truncated prefix or body
+// (an offset that runs past the end of `bytes`); every caller here already
+// wraps its own top-level decode in try/catch, the same "never throws to
+// the caller, just null" posture decodeCw1 takes in recoverableNotes.ts.
+const decodeLengthPrefixed = (
+  bytes: Uint8Array,
+  offset: number
+): {text: string; next: number} => {
+  if (offset + 2 > bytes.length) throw new Error('Truncated length prefix.')
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const length = view.getUint16(offset, false)
+  const start = offset + 2
+  if (start + length > bytes.length) throw new Error('Truncated text.')
+  return {
+    text: new TextDecoder().decode(bytes.slice(start, start + length)),
+    next: start + length
+  }
+}
+
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
+  a.length === b.length && a.every((byte, i) => byte === b[i])
+
+// the true inverse of encodeSealState above - reads DataView fields
+// explicitly rather than manual bit-shifting (JS's `<<`/`>>>` treat their
+// operands as SIGNED 32-bit integers, which is the wrong tool for reading
+// an arbitrary unsigned length back out). Never throws: a malformed or
+// tampered blob (wrong domain tag, truncated field, trailing garbage past
+// the last field) is simply null - the same "don't trust a pasted value"
+// posture every other parse function in this file already takes.
+const decodeSealState = (bytes: Uint8Array): SealState | null => {
+  try {
+    if (bytes.length < DOMAIN_TAG.length) return null
+    if (!bytesEqual(bytes.slice(0, DOMAIN_TAG.length), DOMAIN_TAG)) return null
+    let offset = DOMAIN_TAG.length
+    if (offset + 32 > bytes.length) return null
+    const assetId = bytesToHex(bytes.slice(offset, offset + 32))
+    offset += 32
+    const name = decodeLengthPrefixed(bytes, offset)
+    offset = name.next
+    const description = decodeLengthPrefixed(bytes, offset)
+    offset = description.next
+    if (offset + 4 > bytes.length) return null
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const stateIndex = view.getUint32(offset, false)
+    offset += 4
+    if (offset + 32 > bytes.length) return null
+    const ownerPubkeyHex = bytesToHex(bytes.slice(offset, offset + 32))
+    offset += 32
+    if (offset + 32 > bytes.length) return null
+    const prevStateBytes = bytes.slice(offset, offset + 32)
+    offset += 32
+    if (offset !== bytes.length) return null // trailing garbage
+    const prevStateHash = prevStateBytes.every(b => b === 0)
+      ? ''
+      : bytesToHex(prevStateBytes)
+    return {
+      assetId,
+      name: name.text,
+      description: description.text,
+      stateIndex,
+      ownerPubkeyHex,
+      prevStateHash
+    }
+  } catch {
+    return null
+  }
+}
 
 // The hashlock leaf's own commitment - anyone can compute this from a
 // state alone, which is exactly what makes client-side validation work:
@@ -299,70 +379,120 @@ export type SealConsignment = {
   states: SealState[]
 }
 
+// Wire layout, all integers big-endian (mirrors recoverableNotes.ts's own
+// cw1 - a header, then a run of length-prefixed parts):
+//   u64 amountMsat
+//   || u16 len(urlTemplate) || urlTemplate (utf8)
+//   || (u16 len(state_i) || encodeSealState(state_i))*   [genesis..current]
+//
+// u64, not u32 like cw1's own locktime/sequence fields: amountMsat isn't
+// Bitcoin-consensus-bounded the way those are, and u32's ~4.29 billion
+// msat ceiling (~0.043 BTC) is a real amount a locked note could exceed.
+// Kept a JS-safe-integer in practice (encodeAmountMsat/decode below both
+// enforce Number.isSafeInteger) since nothing here needs true 64-bit
+// range, just headroom past u32.
+const encodeAmountMsat = (amountMsat: number): Uint8Array => {
+  if (!isPositiveInt(amountMsat) || !Number.isSafeInteger(amountMsat)) {
+    throw new Error('Invalid amount.')
+  }
+  const bytes = new Uint8Array(8)
+  new DataView(bytes.buffer).setBigUint64(0, BigInt(amountMsat), false)
+  return bytes
+}
+
 // The shareable consignment - the mint's own note url/amount, plus the
-// full state history. Only ever built for the very states that were
-// actually locked (see manifest.ts's own call sites, which always pass
-// the exact states array this wallet just finished locking/transitioning
-// to).
-export const sealConsignmentUrl = (
+// full state history - as a single bech32m string (HRP `seal`), the same
+// convention every other wire value in this kit already uses (see this
+// file's top comment for why `seal`, not a 2-letter `c*` prefix). Only
+// ever built for the very states that were actually locked (see
+// manifest.ts's own call sites, which always pass the exact states array
+// this wallet just finished locking/transitioning to).
+export const encodeSealConsignment = (
   lockedNote: unknown,
   states: unknown
 ): string | null => {
   const locked = lockedNote as {urlTemplate: string; amountMsat: number} | null
   if (!locked || !Array.isArray(states) || states.length === 0) return null
   try {
-    const url = new URL(locked.urlTemplate)
-    url.searchParams.delete('k1')
-    url.searchParams.delete('sig')
-    url.searchParams.set('amount', String(locked.amountMsat))
-    url.searchParams.set('states', JSON.stringify(states))
-    return url.toString()
+    // k1/sig are this ONE claim's own one-time secrets, not part of the
+    // reusable redeem-callback template a consignment should carry -
+    // stripped the same way sealConsignmentUrl always did before this
+    // encoding existed
+    let urlTemplate = locked.urlTemplate
+    try {
+      const url = new URL(urlTemplate)
+      url.searchParams.delete('k1')
+      url.searchParams.delete('sig')
+      urlTemplate = url.toString()
+    } catch {
+      // not a URL at all - pass it through untouched rather than fail the
+      // whole encode over an unrelated field
+    }
+    const amountBytes = encodeAmountMsat(locked.amountMsat)
+    const urlBytes = lengthPrefixed(urlTemplate)
+    const stateParts = (states as SealState[]).map(s => {
+      const encoded = encodeSealState(s)
+      if (encoded.length > 0xffff) {
+        throw new Error('A state is too large to encode.')
+      }
+      return encoded
+    })
+    let total = amountBytes.length + urlBytes.length
+    for (const part of stateParts) total += 2 + part.length
+    const payload = new Uint8Array(total)
+    payload.set(amountBytes, 0)
+    payload.set(urlBytes, amountBytes.length)
+    const view = new DataView(payload.buffer)
+    let offset = amountBytes.length + urlBytes.length
+    for (const part of stateParts) {
+      view.setUint16(offset, part.length, false)
+      payload.set(part, offset + 2)
+      offset += 2 + part.length
+    }
+    return bech32m.encode('seal', bech32m.toWords(payload), false)
   } catch {
     return null
   }
 }
 
-const isSealStateShaped = (v: unknown): v is SealState => {
-  if (!v || typeof v !== 'object') return false
-  const s = v as Record<string, unknown>
-  return (
-    isHex32(s.assetId) &&
-    typeof s.name === 'string' &&
-    typeof s.description === 'string' &&
-    Number.isInteger(s.stateIndex) &&
-    isHex32(s.ownerPubkeyHex) &&
-    typeof s.prevStateHash === 'string'
-  )
-}
-
-// the read side of sealConsignmentUrl - null for anything that isn't a
-// well-formed consignment (never throws). Validates the SHAPE of every
-// state entry defensively before ever trusting it as a SealState -
-// nothing here assumes a pasted value is honest.
-export const parseSealConsignment = (
+// the read side of encodeSealConsignment - null for anything that isn't a
+// well-formed consignment (never throws). Every field is read back out
+// with explicit bounds checks, and decodeSealState below independently
+// validates the SHAPE of every state entry - nothing here assumes a
+// pasted value is honest.
+export const decodeSealConsignment = (
   value: unknown
 ): SealConsignment | null => {
   try {
-    const trimmed = String(value ?? '').trim()
-    // sealConsignmentUrl's own bech32 output (LNURL1...) isn't itself a
-    // URL - decode it back to the plain https:// form first, same
-    // fromBech32Lnurl this kit already uses for every other LNURL input,
-    // so a consignment shared bech32-encoded round-trips correctly
-    // instead of silently failing to parse at all
-    const plain = /^lnurl1/i.test(trimmed) ? fromBech32Lnurl(trimmed) : trimmed
-    if (!plain) return null
-    const url = new URL(plain)
-    const amountRaw = url.searchParams.get('amount')
-    const statesRaw = url.searchParams.get('states')
-    if (!amountRaw || !statesRaw) return null
-    const amountMsat = Number(amountRaw)
-    if (!isPositiveInt(amountMsat)) return null
-    const parsed: unknown = JSON.parse(statesRaw)
-    if (!Array.isArray(parsed) || parsed.length === 0) return null
-    if (!parsed.every(isSealStateShaped)) return null
-    url.searchParams.delete('amount')
-    url.searchParams.delete('states')
-    return {urlTemplate: url.toString(), amountMsat, states: parsed}
+    const trimmed = String(value ?? '')
+      .trim()
+      .toLowerCase()
+    if (!trimmed.startsWith('seal1')) return null
+    const decoded = bech32m.decode(trimmed as `${string}1${string}`, false)
+    if (decoded.prefix !== 'seal') return null
+    const bytes = bech32m.fromWords(decoded.words)
+    if (bytes.length < 10) return null // 8-byte amount + a 2-byte length prefix, at minimum
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const amountBig = view.getBigUint64(0, false)
+    if (amountBig <= 0n || amountBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return null
+    }
+    const {text: urlTemplate, next} = decodeLengthPrefixed(bytes, 8)
+    if (!urlTemplate) return null
+    let offset = next
+    const states: SealState[] = []
+    while (offset < bytes.length) {
+      if (offset + 2 > bytes.length) return null
+      const length = view.getUint16(offset, false)
+      offset += 2
+      if (offset + length > bytes.length) return null
+      const state = decodeSealState(bytes.slice(offset, offset + length))
+      if (!state) return null
+      states.push(state)
+      offset += length
+    }
+    if (states.length === 0) return null
+    return {urlTemplate, amountMsat: Number(amountBig), states}
   } catch {
     return null
   }
@@ -373,7 +503,7 @@ export const parseSealConsignment = (
 export const consignmentProblem = (value: unknown): string => {
   const text = String(value ?? '').trim()
   if (!text) return 'Paste a consignment first.'
-  const parsed = parseSealConsignment(text)
+  const parsed = decodeSealConsignment(text)
   if (!parsed) return 'That doesn’t look like a valid seal consignment.'
   return sealChainProblem(parsed.states)
 }

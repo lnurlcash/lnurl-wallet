@@ -398,6 +398,60 @@ describe('scanForAddressNotes', () => {
     )
     expect(results).toEqual([])
   })
+
+  it('minIndex keeps the forward walk going past a gap-limit-sized stretch of unknowns', async () => {
+    // nothing live until index 30 - a plain gapLimit: 5 walk from 0 would
+    // give up at index 5, long before ever reaching it
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([30]))
+    const results = await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      {gapLimit: 5, minIndex: 30}
+    )
+    expect(results.map(r => r.index)).toEqual([30])
+  })
+
+  it('minIndex forces coverage through exactly that index and no further once nothing is found', async () => {
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
+    const probed: number[] = []
+    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
+      gapLimit: 3,
+      minIndex: 10,
+      onProgress: index => probed.push(index)
+    })
+    // consecutiveUnknown keeps accumulating past gapLimit throughout the
+    // forced stretch (it isn't reset at minIndex) - so the moment index
+    // passes 10, the ordinary stop condition is already satisfied and the
+    // scan ends right there. A caller wanting a real gapLimit's worth of
+    // searching past the hint bakes that margin into minIndex itself (e.g.
+    // `serviceHint + gapLimit`, see addressRecovery.ts), not by expecting
+    // this function to add a second one automatically.
+    expect(probed).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  })
+
+  it('minIndex resumes an ordinary fresh gapLimit search if a hit resets the counter first', async () => {
+    // live at index 8 (inside the forced stretch) - finding it resets
+    // consecutiveUnknown to 0, so the scan genuinely searches gapLimit
+    // more indices past minIndex afterward, same as any other hit would
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([8]))
+    const probed: number[] = []
+    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
+      gapLimit: 3,
+      minIndex: 10,
+      onProgress: index => probed.push(index)
+    })
+    expect(probed).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  })
+
+  it('omitting minIndex behaves exactly as before (plain gapLimit stop)', async () => {
+    vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
+    const probed: number[] = []
+    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
+      gapLimit: 4,
+      onProgress: index => probed.push(index)
+    })
+    expect(probed).toEqual([0, 1, 2, 3])
+  })
 })
 
 describe('resolveScanStartIndex', () => {
