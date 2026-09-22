@@ -198,14 +198,19 @@ export const identifyLeaf = (script: Uint8Array): IdentifiedLeaf | null => {
       return null
     }
   }
-  const params = (over: Partial<ScriptTemplateParams>): ScriptTemplateParams => ({
+  const params = (
+    over: Partial<ScriptTemplateParams>
+  ): ScriptTemplateParams => ({
     pubkeyHex: '',
     pubkey2Hex: '',
     hashHex: '',
     locktime: 0,
     ...over
   })
-  const matches = (id: ScriptTemplateId, p: ScriptTemplateParams): IdentifiedLeaf | null => {
+  const matches = (
+    id: ScriptTemplateId,
+    p: ScriptTemplateParams
+  ): IdentifiedLeaf | null => {
     const template = scriptTemplateById(id)!
     try {
       return bytesToHex(template.build(p)) === bytesToHex(script)
@@ -223,7 +228,11 @@ export const identifyLeaf = (script: Uint8Array): IdentifiedLeaf | null => {
       if (hit) return hit
     }
   }
-  if (decoded.length === 5 && decoded[2] === 'DROP' && decoded[4] === 'CHECKSIG') {
+  if (
+    decoded.length === 5 &&
+    decoded[2] === 'DROP' &&
+    decoded[4] === 'CHECKSIG'
+  ) {
     const locktime = num(decoded[0])
     const pk = push32(decoded[3])
     if (locktime !== null && pk) {
