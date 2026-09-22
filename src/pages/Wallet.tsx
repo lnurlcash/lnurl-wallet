@@ -48,6 +48,9 @@ import {
   withNewK1,
   fetchNoteInfo,
   rotateNote,
+  upgradeNote,
+  isCk1,
+  isCw1,
   mergeNotes,
   splitNote,
   settleNote,
@@ -782,6 +785,86 @@ const Wallet: Component = () => {
           `${serverOf(bearer.url)} reports ${msatToSats(bearer.amount)} sats as already spent - marked spent locally.`,
           bearer.label
         )
+      }
+      notify((err as Error).message, NotifyKind.ERROR)
+    }
+  }
+
+  // The holder-initiated "Upgrade" action for a plain-secret (LUD-25 Part 1
+  // legacy hash preimage) note, reachable from its own button on
+  // BearerCard.tsx - unlike refreshOneBearer's own rotate (which only ever
+  // PRESERVES a note's existing kind, see isUpgradedSecret), this always
+  // asks for a pub/sig replacement and surfaces a clear error if that isn't
+  // possible right now (upgradeNote itself refuses rather than silently
+  // completing an ordinary same-kind rotate). Same ambiguous-mutation
+  // reconciliation (probeBurnedNote) refreshOneBearer's own rotate step
+  // uses - the fresh secret here is just as irreplaceable if the request's
+  // outcome is unclear.
+  const upgradeOneBearer = async (bearer: Bearer) => {
+    if (bearer.deviceId) {
+      notify(
+        'A vault-backed note cannot be upgraded yet - Part 2 pub/sig notes are browser-only for now.',
+        NotifyKind.ERROR
+      )
+      return
+    }
+    if (!bearer.callback) {
+      notify(
+        "This note hasn't been verified yet - refresh it first.",
+        NotifyKind.ERROR
+      )
+      return
+    }
+    try {
+      const k1 = requireNoteK1(bearer.url)
+      const result = await upgradeNote(bearer.callback, k1)
+      await updateBearer(bearer.id, {
+        url: withNewK1(bearer.url, result.k1, bearer.amount, result.signature)
+      })
+      logActivity(
+        'refresh',
+        `Upgraded a ${msatToSats(bearer.amount)} sat note at ${serverOf(bearer.url)} to a recoverable pub/sig secret.`,
+        bearer.label
+      )
+      notify(
+        'Note upgraded to a recoverable pub/sig secret.',
+        NotifyKind.SUCCESS
+      )
+    } catch (err) {
+      if (err instanceof AmbiguousMutationError) {
+        const outcome = await probeBurnedNote(bearer.url)
+        if (outcome === 'gone') {
+          // the burn landed - adopt the fresh secret as the note
+          await updateBearer(bearer.id, {
+            url: withNewK1(bearer.url, err.newSecrets[0], bearer.amount)
+          })
+          logActivity(
+            'refresh',
+            `Upgraded a ${msatToSats(bearer.amount)} sat note at ${serverOf(bearer.url)} to a recoverable pub/sig secret (confirmed on re-check after an uncertain response).`,
+            bearer.label
+          )
+          notify(
+            'Note upgraded to a recoverable pub/sig secret.',
+            NotifyKind.SUCCESS
+          )
+          return
+        }
+        if (outcome === 'unknown') {
+          // can't tell: keep the old note AND track the possible new copy,
+          // rather than gamble either way
+          await addBearer({
+            url: withNewK1(bearer.url, err.newSecrets[0], bearer.amount),
+            callback: bearer.callback,
+            amount: bearer.amount,
+            verified: false,
+            mintPubkey: bearer.mintPubkey
+          })
+          notify(
+            `${(err as Error).message} The upgrade may still have gone through - the possible new copy is stored unverified alongside this one; refresh both to reconcile.`,
+            NotifyKind.ERROR
+          )
+          return
+        }
       }
       notify((err as Error).message, NotifyKind.ERROR)
     }
@@ -2148,6 +2231,7 @@ const Wallet: Component = () => {
                           toggleSelect(bearer.id, isSelected)
                         }
                         onRefresh={refreshOneBearer}
+                        onUpgrade={upgradeOneBearer}
                       />
                     )}
                   </For>
@@ -2168,6 +2252,7 @@ const Wallet: Component = () => {
                               toggleSelect(bearer.id, isSelected)
                             }
                             onRefresh={refreshOneBearer}
+                            onUpgrade={upgradeOneBearer}
                           />
                         )}
                       </For>
