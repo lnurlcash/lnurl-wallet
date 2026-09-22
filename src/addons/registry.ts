@@ -12,6 +12,7 @@ import {timelockerAddon} from './timelocker/manifest'
 import {dlcAddon} from './dlc/manifest'
 import {betlockerAddon} from './betlocker/manifest'
 import {sealsAddon} from './seals/manifest'
+import {frostAddon} from './frost/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
@@ -29,7 +30,8 @@ export const ADDONS: Addon[] = [
   timelockerAddon,
   dlcAddon,
   betlockerAddon,
-  sealsAddon
+  sealsAddon,
+  frostAddon
 ]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))
