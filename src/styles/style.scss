@@ -2141,13 +2141,29 @@ nav {
   opacity: 0.55;
 }
 
+// every addon-rendered Button (Renderer.tsx's own 'Button' case) - the
+// base `button` rule (line ~325) only ever adds margin-right, so a
+// standalone button sitting directly between two Text/View siblings (the
+// common case - no addon manifest actually uses a 'btns'-style View to
+// group its buttons today) had no vertical breathing room from either
+// neighbor at all
+.addon-btn {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
 .addon-row {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
+  // a button inside a row gets its spacing from the row's own gap instead
+  // - .addon-btn's margin would otherwise double up with it, most visibly
+  // as uneven space between wrapped lines
   > button {
     margin-right: 0;
+    margin-top: 0;
+    margin-bottom: 0;
   }
 }
 
