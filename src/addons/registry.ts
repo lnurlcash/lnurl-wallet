@@ -16,6 +16,7 @@ import {frostAddon} from './frost/manifest'
 import {bip85Addon} from './bip85/manifest'
 import {onchainReceiveAddon} from './onchainReceive/manifest'
 import {electrsAddon} from './electrs/manifest'
+import {htlcAddon} from './htlc/manifest'
 import {customAddonManifests} from './customAddons'
 
 // bundled addons - ship in this app's own reviewed source, not fetched
@@ -37,7 +38,8 @@ export const ADDONS: Addon[] = [
   frostAddon,
   bip85Addon,
   onchainReceiveAddon,
-  electrsAddon
+  electrsAddon,
+  htlcAddon
 ]
 
 const BUNDLED_IDS = new Set(ADDONS.map(a => a.manifest.id))

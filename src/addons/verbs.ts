@@ -29,6 +29,7 @@ import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
 import {parseBetReceipt, buildRedeemCw1} from './betlocker/betlock'
+import {parseHtlcReceipt, buildClaimCw1} from './htlc/htlc'
 import {
   fetchOraclePubkey,
   fetchOracleEvents,
@@ -324,6 +325,63 @@ export const VERBS: Record<string, VerbHandler> = {
     ctx.logActivity(
       'mint',
       `Redeemed a ${amountMsat} msat DLC bet at ${serverOf(receipt.urlTemplate)} via an addon.`
+    )
+    return {id: saved.id, amountMsat}
+  },
+
+  // The HTLC addon's own redeem step - same shape as note.redeemBet just
+  // above (build the real cw1, look up the note by its output key, save a
+  // placeholder bearer, rotate, then confirm), with buildClaimCw1's
+  // preimage+claimant-secret check standing in for buildRedeemCw1's
+  // attestation check.
+  'note.redeemHtlc': async (args, ctx) => {
+    const receipt = parseHtlcReceipt(args.receiptUrl)
+    if (!receipt) {
+      throw new Error('Not a valid HTLC receipt.')
+    }
+    const cw1 = buildClaimCw1(
+      receipt,
+      String(args.preimageHex ?? '').trim(),
+      String(args.claimSecretKeyHex ?? '').trim()
+    )
+    const outputKeyHex = outputKeyOfCw1(cw1)
+    if (!outputKeyHex) {
+      throw new Error(
+        "Internal error: could not derive this lock's own output key."
+      )
+    }
+    const info = await fetchNoteInfoByPubkey(
+      receipt.urlTemplate,
+      encodeCt1(hexToBytes(outputKeyHex))
+    )
+    const amountMsat = info.maxWithdrawable
+    const newK1 = generateOutputSecret(serverOf(info.callback), false)
+    const saved = await ctx.addBearer({
+      url: withNewK1(receipt.urlTemplate, newK1, amountMsat),
+      callback: info.callback,
+      amount: amountMsat,
+      verified: false
+    })
+    let signature: string | undefined
+    try {
+      signature = (await rotateNoteWithHash(info.callback, cw1, hashK1(newK1)))
+        .signature
+    } catch (err) {
+      if (err instanceof AmbiguousMintError) {
+        throw new Error(
+          `${(err as Error).message} The redemption may or may not have landed - a replacement note was saved to your wallet; refresh it on the Wallet page to find out. Do not retry until you have.`
+        )
+      }
+      ctx.removeBearer(saved.id)
+      throw err
+    }
+    await ctx.updateBearer(saved.id, {
+      url: withNewK1(receipt.urlTemplate, newK1, amountMsat, signature),
+      verified: true
+    })
+    ctx.logActivity(
+      'mint',
+      `Redeemed a ${amountMsat} msat HTLC note at ${serverOf(receipt.urlTemplate)} via an addon.`
     )
     return {id: saved.id, amountMsat}
   },
