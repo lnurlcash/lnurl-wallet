@@ -41,6 +41,7 @@ import {
   planSealLock,
   type SealState
 } from './seals/seals'
+import {fetchAddressSummary, fetchAddressUtxos} from './electrs/electrsClient'
 
 // the subset of WalletContext/DeviceContext a verb is allowed to touch -
 // never the raw AES key, never DeviceContext's own `client` beyond the
@@ -532,6 +533,29 @@ export const VERBS: Record<string, VerbHandler> = {
       throw new Error("Missing the oracle's URL or this bet's event id.")
     }
     return fetchOracleAttestation(baseUrl, eventId)
+  },
+
+  // Electrs addon's own "browse a real chain indexer" verbs - read-only
+  // GETs against a holder-chosen electrs/esplora-compatible REST server
+  // (electrsClient.ts), same posture as oracle.fetch*/lnurl.fetch above:
+  // no note/secret/wallet-state access, never mutates anything the server
+  // tracks, just asks it about a plain onchain address.
+  'electrs.address': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    const address = String(args.address ?? '').trim()
+    if (!baseUrl || !address) {
+      throw new Error("Enter the server's URL and an address first.")
+    }
+    return fetchAddressSummary(baseUrl, address)
+  },
+
+  'electrs.utxos': async args => {
+    const baseUrl = String(args.baseUrl ?? '').trim()
+    const address = String(args.address ?? '').trim()
+    if (!baseUrl || !address) {
+      throw new Error("Enter the server's URL and an address first.")
+    }
+    return fetchAddressUtxos(baseUrl, address)
   },
 
   // resolves a THIRD PARTY's LUD-25 pubkey from a cp1/cx1 address, a full

@@ -14,7 +14,9 @@ import {
   IoDiceSharp,
   IoFingerPrintSharp,
   IoSnowSharp,
-  IoGitBranchSharp
+  IoGitBranchSharp,
+  IoLinkSharp,
+  IoServerSharp
 } from 'solid-icons/io'
 
 // manifests reference an icon by name, never a component - keeps a
@@ -35,5 +37,7 @@ export const ADDON_ICONS: Record<string, Component> = {
   dice: IoDiceSharp,
   fingerprint: IoFingerPrintSharp,
   snow: IoSnowSharp,
-  gitbranch: IoGitBranchSharp
+  gitbranch: IoGitBranchSharp,
+  link: IoLinkSharp,
+  server: IoServerSharp
 }

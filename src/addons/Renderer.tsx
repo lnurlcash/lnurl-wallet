@@ -407,25 +407,45 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
               // __indexOf (resolveExpr's special case), never as a plain
               // snapshot - <For> reuses a persisting item's callback
               // across a reorder, so a number captured here would go
-              // stale the moment an earlier sibling is removed
-              const itemVars: Vars = {
-                ...vars,
-                item: item as object,
-                __indexOf: index,
-                __writeItem: basePath
-                  ? (field, value) => {
-                      setStore(
-                        produce(s => {
-                          const arr = (s as Record<string, unknown[]>)[
-                            basePath
-                          ] as Record<string, unknown>[]
-                          arr[index()]![field] = value
-                        })
-                      )
-                      persistSettings()
-                    }
-                  : undefined
-              }
+              // stale the moment an earlier sibling is removed.
+              //
+              // Object.create(vars), not {...vars}: a plain spread copies
+              // every OTHER field (everything but item/__indexOf/
+              // __writeItem) by value at this callback's one-time mount -
+              // the exact staleness the comment above warns about for
+              // `item`, just for every other var instead. A picker's own
+              // "which one is currently selected" checkmark (e.g. bip85's
+              // wordCountLabel/pickerLabel) reads one of those other
+              // fields from inside the loop, so a spread here left the
+              // checkmark stuck on whatever was selected when the list
+              // first rendered - never moving again even though the
+              // underlying store field (and this addon's actual output)
+              // kept updating correctly on each click; only the on-screen
+              // indicator was wrong. Prototype delegation keeps every
+              // inherited field a live read through to `vars`
+              // (ultimately the root store), while item/__indexOf/
+              // __writeItem still shadow it as this item's own
+              // properties.
+              const itemVars: Vars = Object.assign(
+                Object.create(vars as object) as Vars,
+                {
+                  item: item as object,
+                  __indexOf: index,
+                  __writeItem: basePath
+                    ? (field: string, value: unknown) => {
+                        setStore(
+                          produce(s => {
+                            const arr = (s as Record<string, unknown[]>)[
+                              basePath
+                            ] as Record<string, unknown>[]
+                            arr[index()]![field] = value
+                          })
+                        )
+                        persistSettings()
+                      }
+                    : undefined
+                }
+              )
               return renderChildren(node.children, itemVars)
             }}
           </For>
@@ -446,11 +466,12 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
         const items = (
           <For each={(resolveExpr(node.each, vars) as unknown[]) ?? []}>
             {(item, index) => {
-              const itemVars: Vars = {
-                ...vars,
-                item: item as object,
-                __indexOf: index
-              }
+              // see the 'For' case above for why this is Object.create,
+              // not a plain {...vars} spread
+              const itemVars: Vars = Object.assign(
+                Object.create(vars as object) as Vars,
+                {item: item as object, __indexOf: index}
+              )
               return <li>{renderChildren(node.children, itemVars)}</li>
             }}
           </For>
