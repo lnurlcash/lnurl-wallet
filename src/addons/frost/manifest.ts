@@ -634,6 +634,7 @@ const frostManifest: AddonManifest = {
   name: 'FROST',
   version: '1',
   icon: 'snow',
+  experimental: true,
   description:
     'Threshold Schnorr signatures (RFC 9591) - any t of a fixed n key shares can jointly sign, without the rest ever being needed. Genuinely different from MuSig2: that needs everyone, every time.',
   permissions: [

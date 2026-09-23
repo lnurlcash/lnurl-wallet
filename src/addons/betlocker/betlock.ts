@@ -59,6 +59,7 @@
 // helper bound to a live Text/set must not return a Promise).
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
+import {bech32m} from '@scure/base'
 import {encodeCw1} from '../../lib/recoverableNotes'
 import {withNewK1, withoutK1} from '../../lnurlcash'
 import {
@@ -124,6 +125,9 @@ export type BetPlan = {
 
 const isPositiveInt = (n: unknown): n is number =>
   typeof n === 'number' && Number.isInteger(n) && n > 0
+
+const isU32 = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 0xffffffff
 
 const normalizedOutcomes = (outcomes: unknown): string[] => {
   if (!Array.isArray(outcomes)) return []
@@ -344,6 +348,210 @@ export const planBet = (
   }
 }
 
+// ---- cd1: this addon's own DLC-context envelope ----
+//
+// Packs everything betReceiptUrl used to spread across 8 loose query
+// params (oracle/nonce/outcomes/oracleService/event/counterparty/
+// refundPubkey/refundLocktime) into one compact bech32m value, same
+// wire-format quality bar as src/lib/recoverableNotes.ts's own cp1/ct1/
+// cw1/cs1/cx1/ck1 family (variable-length parts use that same file's cw1
+// convention: u16 length prefix, then the bytes) - but deliberately kept
+// addon-local, not added to that shared file: cp1/ct1/cw1/cs1/cx1/ck1 are
+// all genuine LUD-25 Part 2 wire types any Part-2-aware peer needs to
+// speak, while a DLC oracle's announcement shape is this addon's own
+// application-layer construct, not a spec-level primitive - bundling it
+// into the published @lnurlcash/kit package would leak betlocker-specific
+// semantics into a library other LUD-25 wallets depend on for nothing
+// related to bets.
+//
+// Wire layout, all integers big-endian:
+//   32 bytes oraclePubkeyHex || 32 bytes nonceHex
+//   || u16 count(outcomes) || (u16 len(utf8) || utf8)*
+//   || u8 flags (bit0 discovery, bit1 counterparty, bit2 refund)
+//   || [discovery: u16 len(oracleServiceUrl utf8) || utf8
+//                  || u16 len(eventId utf8) || utf8]
+//   || [counterparty: 32 bytes counterpartyPubkeyHex]
+//   || [refund: 32 bytes refundPubkeyHex || u32 refundLocktime]
+export type Cd1 = {
+  oraclePubkeyHex: string
+  nonceHex: string
+  outcomes: string[]
+  oracleServiceUrl?: string
+  eventId?: string
+  counterpartyPubkeyHex?: string
+  refundPubkeyHex?: string
+  refundLocktime?: number
+}
+
+const CD1_MAX_PART = 0xffff
+const utf8Encode = (s: string): Uint8Array => new TextEncoder().encode(s)
+const utf8Decode = (b: Uint8Array): string => new TextDecoder().decode(b)
+
+const hex32 = (label: string, hex: string): Uint8Array => {
+  if (!/^[0-9a-f]{64}$/i.test(hex)) {
+    throw new Error(`cd1... ${label} must be 32 bytes of hex`)
+  }
+  return hexToBytes(hex.toLowerCase())
+}
+
+export const encodeCd1 = (fields: Cd1): string => {
+  const oracle = hex32('oraclePubkeyHex', fields.oraclePubkeyHex)
+  const nonce = hex32('nonceHex', fields.nonceHex)
+  const outcomeParts = fields.outcomes.map(utf8Encode)
+  const hasDiscovery = !!(fields.oracleServiceUrl && fields.eventId)
+  const hasCounterparty = !!fields.counterpartyPubkeyHex
+  const hasRefund = !!(fields.refundPubkeyHex && fields.refundLocktime)
+  const discoveryParts = hasDiscovery
+    ? [utf8Encode(fields.oracleServiceUrl!), utf8Encode(fields.eventId!)]
+    : []
+  const counterparty = hasCounterparty
+    ? hex32('counterpartyPubkeyHex', fields.counterpartyPubkeyHex!)
+    : null
+  const refundPubkey = hasRefund
+    ? hex32('refundPubkeyHex', fields.refundPubkeyHex!)
+    : null
+  if (hasRefund && !isU32(fields.refundLocktime!)) {
+    throw new Error('cd1... refundLocktime must be a u32')
+  }
+
+  for (const part of [...outcomeParts, ...discoveryParts]) {
+    if (part.length > CD1_MAX_PART) {
+      throw new Error(`cd1... part must be at most ${CD1_MAX_PART} bytes`)
+    }
+  }
+  if (outcomeParts.length > CD1_MAX_PART) {
+    throw new Error('cd1... too many outcomes')
+  }
+
+  let total =
+    32 + 32 + 2 + outcomeParts.reduce((sum, p) => sum + 2 + p.length, 0) + 1
+  if (hasDiscovery)
+    total += discoveryParts.reduce((sum, p) => sum + 2 + p.length, 0)
+  if (hasCounterparty) total += 32
+  if (hasRefund) total += 32 + 4
+
+  const payload = new Uint8Array(total)
+  const view = new DataView(payload.buffer)
+  let offset = 0
+  payload.set(oracle, offset)
+  offset += 32
+  payload.set(nonce, offset)
+  offset += 32
+  view.setUint16(offset, outcomeParts.length, false)
+  offset += 2
+  for (const part of outcomeParts) {
+    view.setUint16(offset, part.length, false)
+    offset += 2
+    payload.set(part, offset)
+    offset += part.length
+  }
+  payload[offset] =
+    (hasDiscovery ? 1 : 0) | (hasCounterparty ? 2 : 0) | (hasRefund ? 4 : 0)
+  offset += 1
+  if (hasDiscovery) {
+    for (const part of discoveryParts) {
+      view.setUint16(offset, part.length, false)
+      offset += 2
+      payload.set(part, offset)
+      offset += part.length
+    }
+  }
+  if (hasCounterparty) {
+    payload.set(counterparty!, offset)
+    offset += 32
+  }
+  if (hasRefund) {
+    payload.set(refundPubkey!, offset)
+    offset += 32
+    view.setUint32(offset, fields.refundLocktime!, false)
+    offset += 4
+  }
+  return bech32m.encode('cd', bech32m.toWords(payload), false)
+}
+
+export const decodeCd1 = (value: string): Cd1 | null => {
+  const trimmed = value.trim().toLowerCase()
+  if (!trimmed.startsWith('cd1')) return null
+  let bytes: Uint8Array
+  try {
+    const decoded = bech32m.decode(trimmed as `${string}1${string}`, false)
+    if (decoded.prefix !== 'cd') return null
+    bytes = bech32m.fromWords(decoded.words)
+  } catch {
+    return null
+  }
+  if (bytes.length < 32 + 32 + 2 + 1) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  let offset = 0
+  const oraclePubkeyHex = bytesToHex(bytes.slice(offset, offset + 32))
+  offset += 32
+  const nonceHex = bytesToHex(bytes.slice(offset, offset + 32))
+  offset += 32
+  const outcomeCount = view.getUint16(offset, false)
+  offset += 2
+  const outcomes: string[] = []
+  for (let i = 0; i < outcomeCount; i++) {
+    if (offset + 2 > bytes.length) return null
+    const len = view.getUint16(offset, false)
+    offset += 2
+    if (offset + len > bytes.length) return null
+    outcomes.push(utf8Decode(bytes.slice(offset, offset + len)))
+    offset += len
+  }
+  if (offset + 1 > bytes.length) return null
+  const flags = bytes[offset]!
+  offset += 1
+  const hasDiscovery = (flags & 1) !== 0
+  const hasCounterparty = (flags & 2) !== 0
+  const hasRefund = (flags & 4) !== 0
+
+  let oracleServiceUrl: string | undefined
+  let eventId: string | undefined
+  if (hasDiscovery) {
+    if (offset + 2 > bytes.length) return null
+    const len1 = view.getUint16(offset, false)
+    offset += 2
+    if (offset + len1 > bytes.length) return null
+    oracleServiceUrl = utf8Decode(bytes.slice(offset, offset + len1))
+    offset += len1
+    if (offset + 2 > bytes.length) return null
+    const len2 = view.getUint16(offset, false)
+    offset += 2
+    if (offset + len2 > bytes.length) return null
+    eventId = utf8Decode(bytes.slice(offset, offset + len2))
+    offset += len2
+  }
+
+  let counterpartyPubkeyHex: string | undefined
+  if (hasCounterparty) {
+    if (offset + 32 > bytes.length) return null
+    counterpartyPubkeyHex = bytesToHex(bytes.slice(offset, offset + 32))
+    offset += 32
+  }
+
+  let refundPubkeyHex: string | undefined
+  let refundLocktime: number | undefined
+  if (hasRefund) {
+    if (offset + 32 + 4 > bytes.length) return null
+    refundPubkeyHex = bytesToHex(bytes.slice(offset, offset + 32))
+    offset += 32
+    refundLocktime = view.getUint32(offset, false)
+    offset += 4
+    if (refundLocktime === 0) return null
+  }
+
+  return {
+    oraclePubkeyHex,
+    nonceHex,
+    outcomes,
+    ...(oracleServiceUrl && eventId ? {oracleServiceUrl, eventId} : {}),
+    ...(counterpartyPubkeyHex ? {counterpartyPubkeyHex} : {}),
+    ...(refundPubkeyHex && refundLocktime
+      ? {refundPubkeyHex, refundLocktime}
+      : {})
+  }
+}
+
 // The shareable "bet receipt" - the mint's own note URL (host, path,
 // certificate for Q, amount), plus the full announcement (oracle pubkey,
 // nonce, every outcome). Nothing here is secret: an announcement is
@@ -366,34 +574,45 @@ export const betReceiptUrl = (
     const url = new URL(
       withoutK1(locked.urlTemplate, locked.amountMsat, locked.signature)
     )
-    url.searchParams.set('oracle', p.oraclePubkeyHex)
-    url.searchParams.set('nonce', p.nonceHex)
-    url.searchParams.set('outcomes', JSON.stringify(p.outcomes))
-    // discovery metadata only (see BetPlan's own doc comment) - omitted
-    // entirely for a plan that wasn't built from a real oracle's own
-    // announcement, so an old-shape receipt is indistinguishable from one
-    // built by a wallet version that predates this
-    if (p.oracleServiceUrl && p.eventId) {
-      url.searchParams.set('oracleService', p.oracleServiceUrl)
-      url.searchParams.set('event', p.eventId)
-    }
-    // PUBLIC (not secret - just a pubkey), but load-bearing, unlike the
-    // discovery metadata above: a redeemer reconstructing this bet's own
-    // leaf tree (buildRedeemCw1) needs to know a counterparty leaf was
-    // used at all, and which pubkey, or its own merkle proof won't match
-    // what was actually locked
-    if (p.counterpartyPubkeyHex) {
-      url.searchParams.set('counterparty', p.counterpartyPubkeyHex)
-    }
-    // ALSO public (a pubkey and a locktime, nothing secret) and equally
-    // load-bearing for the same reason - the refund leaf is part of the
-    // SAME tree every outcome leaf's merkle proof is computed against.
-    // refundCw1 itself (the actual secret) never goes anywhere near this
-    // receipt - see BetPlan's own doc comment on why.
-    if (p.refundPubkeyHex && p.refundLocktime) {
-      url.searchParams.set('refundPubkey', p.refundPubkeyHex)
-      url.searchParams.set('refundLocktime', String(p.refundLocktime))
-    }
+    // one compact envelope instead of 8 loose params - see this file's own
+    // cd1 section for the exact wire layout and why it lives here rather
+    // than in the shared lib. Nothing in it is secret: an announcement is
+    // public information the moment the oracle publishes it, the
+    // counterparty/refund pubkeys are just pubkeys, and refundCw1 itself
+    // (the actual secret) never goes anywhere near this receipt - see
+    // BetPlan's own doc comment on why.
+    url.searchParams.set(
+      'dlc',
+      encodeCd1({
+        oraclePubkeyHex: p.oraclePubkeyHex,
+        nonceHex: p.nonceHex,
+        outcomes: p.outcomes,
+        // discovery metadata only (see BetPlan's own doc comment) - omitted
+        // entirely for a plan that wasn't built from a real oracle's own
+        // announcement, so an old-shape receipt is indistinguishable from
+        // one built by a wallet version that predates this
+        ...(p.oracleServiceUrl && p.eventId
+          ? {oracleServiceUrl: p.oracleServiceUrl, eventId: p.eventId}
+          : {}),
+        // load-bearing when present, unlike the discovery metadata above:
+        // a redeemer reconstructing this bet's own leaf tree
+        // (buildRedeemCw1) needs to know a counterparty leaf was used at
+        // all, and which pubkey, or its own merkle proof won't match what
+        // was actually locked
+        ...(p.counterpartyPubkeyHex
+          ? {counterpartyPubkeyHex: p.counterpartyPubkeyHex}
+          : {}),
+        // also load-bearing for the same reason - the refund leaf is part
+        // of the SAME tree every outcome leaf's merkle proof is computed
+        // against
+        ...(p.refundPubkeyHex && p.refundLocktime
+          ? {
+              refundPubkeyHex: p.refundPubkeyHex,
+              refundLocktime: p.refundLocktime
+            }
+          : {})
+      })
+    )
     return url.toString()
   } catch {
     return null
@@ -429,7 +648,16 @@ export const refundNoteUrl = (
 export type BetReceipt = {
   urlTemplate: string
   amountMsat: number
-  signature: string
+  // absent whenever the underlying note has no offline-verification sig to
+  // begin with (the mint never certified the lock - see the Lock UI's own
+  // "could not verify the mint's certificate" warning) OR the staker
+  // deliberately stripped it before sharing (see manifest.ts's own
+  // stripOfflineSig toggle, src/lib/urls.ts's withoutSignature). Never
+  // actually read by anything downstream (buildRedeemCw1 verifies the
+  // attestation, not this) - requiring it here used to reject an otherwise
+  // perfectly valid receipt outright, which is the bug this comment now
+  // documents the fix for.
+  signature?: string
   oraclePubkeyHex: string
   nonceHex: string
   outcomes: string[]
@@ -456,63 +684,43 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
   try {
     const url = new URL(String(value ?? '').trim())
     const amountRaw = url.searchParams.get('amount')
+    // optional - see BetReceipt.signature's own doc comment for why a
+    // receipt with no offline-verification sig is still a perfectly valid
+    // receipt, not a malformed one
     const signature = url.searchParams.get('sig')
-    const oraclePubkeyHex = url.searchParams.get('oracle')
-    const nonceHex = url.searchParams.get('nonce')
-    const outcomesRaw = url.searchParams.get('outcomes')
-    if (
-      !amountRaw ||
-      !signature ||
-      !oraclePubkeyHex ||
-      !nonceHex ||
-      !outcomesRaw
-    ) {
-      return null
-    }
+    const dlcRaw = url.searchParams.get('dlc')
+    if (!amountRaw || !dlcRaw) return null
     const amountMsat = Number(amountRaw)
     if (!isPositiveInt(amountMsat)) return null
-    const outcomes = normalizedOutcomes(JSON.parse(outcomesRaw))
+    // decodeCd1 already rejects malformed hex/truncated parts on its own -
+    // nothing left to re-validate here beyond this addon's own outcome-
+    // count floor, which is app policy, not a wire-format concern
+    const dlc = decodeCd1(dlcRaw)
+    if (!dlc) return null
+    const outcomes = normalizedOutcomes(dlc.outcomes)
     if (outcomes.length < MIN_OUTCOMES) return null
-    const oracleServiceUrl = url.searchParams.get('oracleService') ?? ''
-    const eventId = url.searchParams.get('event') ?? ''
-    const counterpartyRaw = url.searchParams.get('counterparty') ?? ''
-    // reject the whole receipt rather than silently drop a malformed
-    // counterparty value - it's load-bearing (see BetReceipt's own doc
-    // comment), so a garbled one must not be treated as "no counterparty"
-    if (counterpartyRaw && !/^[0-9a-f]{64}$/i.test(counterpartyRaw)) return null
-    const refundPubkeyRaw = url.searchParams.get('refundPubkey') ?? ''
-    const refundLocktimeRaw = url.searchParams.get('refundLocktime') ?? ''
-    // same reasoning as counterparty above - reject rather than silently
-    // drop a garbled refund pubkey/locktime, since a receipt with one
-    // present but bogus would otherwise redeem an outcome leaf against
-    // the WRONG tree
-    if (refundPubkeyRaw && !/^[0-9a-f]{64}$/i.test(refundPubkeyRaw)) return null
-    const refundLocktime = refundLocktimeRaw ? Number(refundLocktimeRaw) : 0
-    if (refundLocktimeRaw && !isPositiveInt(refundLocktime)) return null
     url.searchParams.delete('amount')
     url.searchParams.delete('sig')
-    url.searchParams.delete('oracle')
-    url.searchParams.delete('nonce')
-    url.searchParams.delete('outcomes')
-    url.searchParams.delete('oracleService')
-    url.searchParams.delete('event')
-    url.searchParams.delete('counterparty')
-    url.searchParams.delete('refundPubkey')
-    url.searchParams.delete('refundLocktime')
+    url.searchParams.delete('dlc')
     return {
       urlTemplate: url.toString(),
       amountMsat,
-      signature,
-      oraclePubkeyHex: oraclePubkeyHex.toLowerCase(),
-      nonceHex: nonceHex.toLowerCase(),
+      oraclePubkeyHex: dlc.oraclePubkeyHex,
+      nonceHex: dlc.nonceHex,
       outcomes,
+      ...(signature ? {signature} : {}),
       // both-or-neither, same convention betReceiptUrl writes them with
-      ...(oracleServiceUrl && eventId ? {oracleServiceUrl, eventId} : {}),
-      ...(counterpartyRaw
-        ? {counterpartyPubkeyHex: counterpartyRaw.toLowerCase()}
+      ...(dlc.oracleServiceUrl && dlc.eventId
+        ? {oracleServiceUrl: dlc.oracleServiceUrl, eventId: dlc.eventId}
         : {}),
-      ...(refundPubkeyRaw && refundLocktime
-        ? {refundPubkeyHex: refundPubkeyRaw.toLowerCase(), refundLocktime}
+      ...(dlc.counterpartyPubkeyHex
+        ? {counterpartyPubkeyHex: dlc.counterpartyPubkeyHex}
+        : {}),
+      ...(dlc.refundPubkeyHex && dlc.refundLocktime
+        ? {
+            refundPubkeyHex: dlc.refundPubkeyHex,
+            refundLocktime: dlc.refundLocktime
+          }
         : {})
     }
   } catch {

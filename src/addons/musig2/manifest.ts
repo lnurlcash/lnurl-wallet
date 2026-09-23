@@ -1288,6 +1288,7 @@ const musig2Manifest: AddonManifest = {
   name: 'MuSig2 Playground',
   version: '1',
   icon: 'people',
+  experimental: true,
   description:
     'Play around with BIP327 MuSig2 joint Schnorr signatures, and optionally lock one of your own notes to the resulting group pubkey. See the separate Taproot addon for BIP341 pubkey tweaking.',
   permissions: [

@@ -409,6 +409,7 @@ const dlcManifest: AddonManifest = {
   name: 'DLC Playground',
   version: '1',
   icon: 'telescope',
+  experimental: true,
   description:
     'Play around with Discreet Log Contract oracle math - compute outcome points, simulate an oracle attesting to an event, and watch a leaf go from inert to signable. A sandbox, never wired into this wallet’s own notes. See the sibling Betlocker addon for a real bet.',
   permissions: [],

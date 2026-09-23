@@ -104,6 +104,12 @@ export type AddonManifest = {
   icon: string
   description?: string
   permissions: Permission[]
+  // hidden from Settings' addon list behind its own "show experimental
+  // addons" toggle (src/addons/experimentalVisible.ts) - for a bundled
+  // addon still under active development/review, not yet meant for a
+  // holder to stumble onto by default. Never set on a custom (holder-
+  // authored) addon - that one is already opt-in by construction.
+  experimental?: boolean
   nav?: AddonNavEntry
   // page-local, in-memory, reset every time the addon's own page is opened
   state: Record<string, JsonValue>
