@@ -64,12 +64,17 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       notify('Not a valid npub.', NotifyKind.ERROR)
       return
     }
-    const branch = cashAddressBranch(props.server)
+    // cashAddressBranch/cashAddressSecretAtIndex derive under the bare
+    // host (serverOf), never props.server's own full origin directly - see
+    // src/lib/urls.ts's serverOf for why a seed-derived branch must not
+    // fragment across schemes/ports the way a signing-key pin legitimately
+    // does
+    const branch = cashAddressBranch(serverOf(props.server))
     // this branch's own index-0 note secret - required as this request's
     // ownership proof (see lib/signature.ts's signAddressProof), even for
     // a fresh claim: SERVICE only checks it against whatever's already on
     // file, so it's harmless to always send
-    const proofKey = cashAddressSecretAtIndex(props.server, 0)
+    const proofKey = cashAddressSecretAtIndex(serverOf(props.server), 0)
     if (!branch || !proofKey) {
       notify(
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
@@ -106,7 +111,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   const [confirmUnclaim, setConfirmUnclaim] = createSignal(false)
 
   const unclaim = async (addr: RegisteredAddress) => {
-    const proofKey = cashAddressSecretAtIndex(addr.server, 0)
+    const proofKey = cashAddressSecretAtIndex(serverOf(addr.server), 0)
     if (!proofKey) {
       notify(
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
