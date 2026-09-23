@@ -43,6 +43,24 @@ type Vars = Record<string, unknown> & {
   __indexOf?: () => number
 }
 
+// a child scope that reads every field it doesn't own live through to
+// `parent` (ultimately the root store) - see the 'For' case for why.
+// Defines `own` as real own properties rather than Object.assign-ing them:
+// an assignment to a property the new object doesn't have yet walks the
+// prototype chain, and with the root store proxy as prototype that hits
+// Solid's read-only `set` trap, which silently drops it - leaving `item`
+// resolving to the store's own (nonexistent) `item` instead
+const childVars = (parent: Vars, own: Record<string, unknown>): Vars =>
+  Object.create(
+    parent,
+    Object.fromEntries(
+      Object.entries(own).map(([key, value]) => [
+        key,
+        {value, writable: true, enumerable: true, configurable: true}
+      ])
+    )
+  ) as Vars
+
 // 'JsonDisplay' accepts either an already-parsed value or a raw JSON
 // string (e.g. straight from a fetch response's body) - falls back to the
 // original string on a parse failure rather than throwing, so a malformed
@@ -407,13 +425,30 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
               // __indexOf (resolveExpr's special case), never as a plain
               // snapshot - <For> reuses a persisting item's callback
               // across a reorder, so a number captured here would go
-              // stale the moment an earlier sibling is removed
-              const itemVars: Vars = {
-                ...vars,
+              // stale the moment an earlier sibling is removed.
+              //
+              // childVars(vars, ...), not {...vars}: a plain spread copies
+              // every OTHER field (everything but item/__indexOf/
+              // __writeItem) by value at this callback's one-time mount -
+              // the exact staleness the comment above warns about for
+              // `item`, just for every other var instead. A picker's own
+              // "which one is currently selected" checkmark (e.g. bip85's
+              // wordCountLabel/pickerLabel) reads one of those other
+              // fields from inside the loop, so a spread here left the
+              // checkmark stuck on whatever was selected when the list
+              // first rendered - never moving again even though the
+              // underlying store field (and this addon's actual output)
+              // kept updating correctly on each click; only the on-screen
+              // indicator was wrong. Prototype delegation keeps every
+              // inherited field a live read through to `vars`
+              // (ultimately the root store), while item/__indexOf/
+              // __writeItem still shadow it as this item's own
+              // properties.
+              const itemVars = childVars(vars, {
                 item: item as object,
                 __indexOf: index,
                 __writeItem: basePath
-                  ? (field, value) => {
+                  ? (field: string, value: unknown) => {
                       setStore(
                         produce(s => {
                           const arr = (s as Record<string, unknown[]>)[
@@ -425,7 +460,7 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
                       persistSettings()
                     }
                   : undefined
-              }
+              })
               return renderChildren(node.children, itemVars)
             }}
           </For>
@@ -446,11 +481,12 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
         const items = (
           <For each={(resolveExpr(node.each, vars) as unknown[]) ?? []}>
             {(item, index) => {
-              const itemVars: Vars = {
-                ...vars,
+              // see the 'For' case above for why this is a prototype-
+              // delegating scope, not a plain {...vars} spread
+              const itemVars = childVars(vars, {
                 item: item as object,
                 __indexOf: index
-              }
+              })
               return <li>{renderChildren(node.children, itemVars)}</li>
             }}
           </For>

@@ -1,4 +1,5 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
+import {generateSeedPhrase} from '../../keys'
 import {
   BIP39_WORD_COUNT_BITS,
   deriveBip39Mnemonic,
@@ -173,9 +174,18 @@ const bip85Manifest: AddonManifest = {
       {
         type: 'Text',
         value:
-          'This is a real cryptographic operation, not a demo like the sibling Seed Generator addon - whatever seed phrase you type here is used exactly as entered. Held only on this page (never persisted, never this wallet’s own unlocked seed) and gone the moment you reload or leave. Every application below is checked byte-for-byte against BIP85’s own published test vectors.'
+          'This is a real cryptographic operation, not a demo like the sibling Seed Generator addon - whatever seed phrase you type here is used exactly as entered. Held only on this page (never persisted, never this wallet’s own unlocked seed - this wallet never keeps its own real mnemonic in memory once unlocked, only keys already derived from it, so there is nothing to fill in automatically from it either) and gone the moment you reload or leave. Every application below is checked byte-for-byte against BIP85’s own published test vectors.'
       },
       {type: 'Input', bind: 'seedPhrase', label: 'Seed phrase (12/24 words)'},
+      {
+        type: 'Button',
+        label: 'Generate new seed',
+        onClick: {
+          action: 'set',
+          path: 'seedPhrase',
+          value: {helper: 'generateSeedPhrase', args: []}
+        }
+      },
       {type: 'Text', value: 'Application', style: 'subheading'},
       applicationRow,
       wordCountRow,
@@ -282,7 +292,8 @@ const bip85Helpers: Record<string, AddonHelper> = {
   wordCountLabel: wordCountLabel as AddonHelper,
   isApplication: isApplication as AddonHelper,
   bip85Problem: bip85Problem as AddonHelper,
-  derivedOutputFor: derivedOutputFor as AddonHelper
+  derivedOutputFor: derivedOutputFor as AddonHelper,
+  generateSeedPhrase: generateSeedPhrase as AddonHelper
 }
 
 export const bip85Addon: Addon = {
