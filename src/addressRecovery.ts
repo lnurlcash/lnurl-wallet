@@ -66,21 +66,13 @@ export const scanRegisteredAddress = async (
   opts: {startIndex?: number} = {}
 ): Promise<AddressScanOutcome> => {
   const startFloor = opts.startIndex ?? 0
-  const branch = cashAddressBranch(server)
-  if (!branch) {
-    return {
-      server,
-      username,
-      recovered: [],
-      highestIndex: null,
-      checkedFrom: startFloor,
-      serviceHint: null,
-      nextScanIndex: startFloor,
-      error:
-        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
-    }
-  }
-
+  // cashAddressBranch/cashAddressSecretAtIndex derive under the bare host
+  // (serverOf, same as this function's own `host` below) - never `server`
+  // itself, which callers pass as a full origin (TrustedMint.server/
+  // RegisteredAddress.server) for identity-tracking purposes unrelated to
+  // this branch. See src/lib/urls.ts's serverOf for why a seed-derived
+  // branch must not fragment across schemes/ports the way a signing-key
+  // pin legitimately does.
   let host: string
   try {
     host = new URL(server).host
@@ -96,6 +88,21 @@ export const scanRegisteredAddress = async (
       error: 'Not a valid mint address.'
     }
   }
+  const branch = cashAddressBranch(host)
+  if (!branch) {
+    return {
+      server,
+      username,
+      recovered: [],
+      highestIndex: null,
+      checkedFrom: startFloor,
+      serviceHint: null,
+      nextScanIndex: startFloor,
+      error:
+        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
+    }
+  }
+
   const payUrl = resolveMintInput(`${username}@${host}`)
   if (!payUrl) {
     return {
@@ -173,7 +180,7 @@ export const scanRegisteredAddress = async (
       }
     })
     for (const result of results) {
-      const secretKey = cashAddressSecretAtIndex(server, result.index)
+      const secretKey = cashAddressSecretAtIndex(host, result.index)
       // the cash root can only disappear mid-scan if the wallet locked
       // while it was running - skip rather than crash; a re-scan once
       // unlocked again picks this index right back up

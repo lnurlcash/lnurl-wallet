@@ -9,9 +9,12 @@ import {
   deriveNotePubkey,
   encodeCp1,
   encodeCx1,
+  encodeCk1,
   type Cx1
 } from './recoverableNotes'
 import {AmbiguousMutationError} from './errors'
+import {configurePubkeySecretProvider} from './secrets'
+import {signNoteOwnership} from './signature'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -129,6 +132,42 @@ describe('payInternalTransfer', () => {
       expect(result.signature).toBe('a'.repeat(130))
       expect(result.changeSignature).toBe('b'.repeat(130))
       expect(result.change).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  // the change output's own domain (for a configured pubkey provider) must
+  // be the callback's bare host, never its full scheme/port-bearing origin
+  // - see request.test.ts's identical rotateNote case and
+  // src/lib/urls.ts's serverOf for why
+  it('derives the change output’s pubkey provider domain from the callback’s bare host', async () => {
+    // preferPubkey only turns on when every input is already ck1-shaped
+    // (isCk1) - a plain placeholder string like the other tests' 'secretA'
+    // never triggers the pubkey provider at all
+    const inputCk1 = encodeCk1(
+      signNoteOwnership(schnorr.utils.randomSecretKey()).pubkeyXOnly,
+      signNoteOwnership(schnorr.utils.randomSecretKey()).signature
+    )
+    const seenDomains: string[] = []
+    configurePubkeySecretProvider(domain => {
+      seenDomains.push(domain)
+      return null // falls back to the legacy provider - only the domain matters here
+    })
+    try {
+      const hint: InternalTransferHint = {cx1: branch, startIndex: 0}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => okSplitResponse())
+      )
+      await payInternalTransfer(
+        'https://mint.example.com:8443/w/cb',
+        [inputCk1],
+        5000,
+        10000,
+        hint
+      )
+      expect(seenDomains).toEqual(['mint.example.com:8443'])
+    } finally {
+      configurePubkeySecretProvider(() => null)
     }
   })
 

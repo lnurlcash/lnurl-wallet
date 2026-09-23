@@ -150,7 +150,7 @@ export const scanMintForNotes = async (
           result.info.sig
         )
         const alreadyHeld = existing.some(
-          b => serverOf(b.url) === server && noteK1(b.url) === ck1
+          b => serverOf(b.url) === serverOf(url) && noteK1(b.url) === ck1
         )
         if (!alreadyHeld) {
           recovered.push({

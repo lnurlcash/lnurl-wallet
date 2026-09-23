@@ -587,6 +587,28 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
     expect(result.k1).toBe(ck1)
   })
 
+  // the domain a seed-derived branch is keyed under MUST be the callback's
+  // bare host (serverOf), deliberately never the scheme/port-bearing
+  // origin - a holder's own branch at a mint is meant to stay the SAME
+  // branch regardless of which scheme/port that mint happens to be reached
+  // through at any given moment (see src/lib/urls.ts's serverOf). Every
+  // one of rotateNote/upgradeNote/splitNote/mergeNotes threads its own
+  // domain through to the configured pubkey provider the same way - this
+  // exercises rotateNote as the representative case.
+  it('rotateNote derives the pubkey provider domain from the callback’s bare host, not its full origin', async () => {
+    const seenDomains: string[] = []
+    configurePubkeySecretProvider(domain => {
+      seenDomains.push(domain)
+      return ck1
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => okResponse())
+    )
+    await rotateNote('https://mint.example.com:8443/w/cb', otherCk1)
+    expect(seenDomains).toEqual(['mint.example.com:8443'])
+  })
+
   it('rotateNote falls back to the legacy provider when no pubkey provider is configured', async () => {
     configureSecretProvider(() => 'f'.repeat(64))
     const fetchMock = vi.fn(async (input: string | URL) => {

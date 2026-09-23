@@ -394,6 +394,16 @@ export const withoutSignature = (url: string): string => {
   return newUrl.toString()
 }
 
+// This MUST be what every LUD-25 Part 2 seed-derived branch (cx1/cp1/ck1 -
+// cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex, and this
+// package's own generatePubkeySecret/generateOutputSecret) derives its
+// domain from - the bare host, deliberately never the scheme/port-bearing
+// origin serviceOriginOf returns for trust-pinning purposes. A holder's
+// seed-derived branch at a mint is meant to be the SAME branch regardless
+// of which scheme/port that mint happens to be reached through at any
+// given moment (e.g. plain http during local/regtest development vs https
+// in production) - unlike a signing-key pin, which genuinely must
+// distinguish those, recovering "my own notes at this mint" should not.
 export const serverOf = (url: string): string => {
   try {
     return new URL(url).host

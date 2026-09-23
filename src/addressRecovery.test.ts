@@ -25,6 +25,11 @@ vi.stubGlobal('localStorage', {
 const SEED =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const SERVER = 'https://mock-mint.test'
+// scanRegisteredAddress derives its branch from the bare host (serverOf),
+// never SERVER's own full origin directly (see src/lib/urls.ts's serverOf)
+// - so the fake mint below must build its live/spent pubkeys off the SAME
+// host, or nothing it advertises would ever match what a scan derives
+const HOST = 'mock-mint.test'
 const USERNAME = 'alice'
 const MINT_PUBKEY = `02${'cd'.repeat(32)}`
 
@@ -45,11 +50,11 @@ const jsonResponse = (body: unknown) =>
   Promise.resolve({json: async () => body} as unknown as Response)
 
 // a fake mint whose /w answers cp1-pubkey lookups for a fixed set of "live"
-// indices on the address branch cashAddressBranch(SERVER) actually derives -
+// indices on the address branch cashAddressBranch(HOST) actually derives -
 // mirrors recovery.test.ts's own fakeMint shape, adapted for p=cp1<pk>
 // instead of h=sha256(k1)
 const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
-  const branch = cashSecrets.cashAddressBranch(SERVER)!
+  const branch = cashSecrets.cashAddressBranch(HOST)!
   const liveCp1 = new Set(
     liveIndices.map(i =>
       encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, i))
@@ -95,7 +100,7 @@ describe('scanRegisteredAddress', () => {
     expect(result.highestIndex).toBe(0)
     // the recovered bearer's own k1 is a well-formed ck1 that actually
     // recovers to the same index's derived pubkey
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const branch = cashSecrets.cashAddressBranch(HOST)!
     const expectedPk = bytesToHex(
       deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, 0)
     )
@@ -208,7 +213,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it("never lets SERVICE's own text/xpub metadata hint skip a fresh device's unscanned floor", async () => {
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(
       'fetch',
@@ -227,7 +232,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it('the metadata hint only ever raises an already-nonzero local floor, never lowers it', async () => {
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(
       'fetch',
@@ -243,7 +248,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it('the metadata hint DOES raise an already-nonzero local floor forward', async () => {
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(
       'fetch',
@@ -262,7 +267,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it('a full rescan reaches at least the metadata hint + gap limit, past an intervening dead stretch', async () => {
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
+    const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     // default gap limit is 20 (see gapLimit.ts) - a plain forward walk from
     // 0 would give up at index 20, long before reaching this note at 25,
