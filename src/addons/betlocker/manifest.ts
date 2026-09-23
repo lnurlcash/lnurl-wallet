@@ -1,5 +1,5 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {toLud17w, toBech32Lnurl} from '../../lnurlcash'
+import {toLud17w, toBech32Lnurl, withoutSignature} from '../../lnurlcash'
 import {
   betProblem,
   betReceiptUrl,
@@ -99,23 +99,36 @@ type LockedNote = {
 }
 
 // lnurlw:// (LUD-17), optionally the classic LUD-01 bech32 encoding - same
-// pair of toggles the sibling timelocker addon offers, same reasoning
+// pair of toggles the sibling timelocker addon offers, same reasoning.
+// stripSig, when set, strips the underlying note's own offline-verification
+// sig first (src/lib/urls.ts's withoutSignature - same toggle/reasoning as
+// BearerCard.tsx's own "Offline verified" checkbox): the receipt's own
+// oracle/nonce/outcomes fields are never touched by this either way - they
+// carry no mint-identifying signature themselves, only the underlying note
+// URL's sig does.
 const receiptUrlFor = (
   lockedNote: unknown,
   plan: unknown,
-  bech32: unknown
+  bech32: unknown,
+  stripSig: unknown
 ): string | null => {
   const url = betReceiptUrl(lockedNote, plan)
   if (!url) return null
-  const plain = toLud17w(url)
+  const stripped = stripSig ? withoutSignature(url) : url
+  const plain = toLud17w(stripped)
   return bech32 ? toBech32Lnurl(plain) : plain
 }
 
-const receiptText = (lockedNote: unknown, plan: unknown): string => {
+const receiptText = (
+  lockedNote: unknown,
+  plan: unknown,
+  stripSig: unknown
+): string => {
   const locked = lockedNote as LockedNote | null
   const p = plan as BetPlan | null
   const url = betReceiptUrl(lockedNote, plan)
   if (!url || !locked || !p) return ''
+  const stripped = stripSig ? withoutSignature(url) : url
   return [
     'Betlocker receipt',
     `Amount: ${Math.floor(locked.amountMsat / 1000)} sats`,
@@ -125,7 +138,7 @@ const receiptText = (lockedNote: unknown, plan: unknown): string => {
     'Once the oracle attests, whoever redeems first gets the note - keep',
     'this receipt only if you’re the one who should be able to claim it.',
     '',
-    toLud17w(url)
+    toLud17w(stripped)
   ].join('\n')
 }
 
@@ -164,6 +177,33 @@ const receiptOracleServiceUrl = (receiptInput: unknown): string =>
 
 const receiptEventId = (receiptInput: unknown): string =>
   parseBetReceipt(receiptInput)?.eventId ?? ''
+
+// ---- checking the event's own status (Redeem side) - the "has this even
+// matured yet, what does the oracle itself say the outcomes are" question,
+// answerable straight from the same oracle.fetchAnnouncement verb the Lock
+// side's "Browse a live oracle" flow already uses (verbs.ts), reusing the
+// SAME discovery metadata (oracleServiceUrl/eventId) canAutoFetchAttestation
+// above gates on - a holder shouldn't have to guess whether "not resolved
+// yet" from Fetch attestation means "still days away" or "any minute now"
+// without a separate, deliberate lookup. ----
+
+// unix SECONDS (lnurlcash-oracle's own maturity_time column, per
+// oracle_service.py's own `time.time()` comparison) - never milliseconds
+const formatMaturity = (maturityTime: unknown): string => {
+  const seconds = Number(maturityTime)
+  if (!Number.isFinite(seconds)) return 'unknown'
+  return new Date(seconds * 1000).toLocaleString()
+}
+
+// whether the event's own maturity time has passed - even once it has, the
+// oracle may not have attested yet (resolution isn't instant - see
+// lnurl-mint's own scheduled poll), so this is "could resolve any time
+// now", not "has resolved"; attestationResolved (via Fetch attestation) is
+// the only real answer to that
+const eventMatured = (maturityTime: unknown): boolean => {
+  const seconds = Number(maturityTime)
+  return Number.isFinite(seconds) && Date.now() >= seconds * 1000
+}
 
 // whether THIS receipt is locked to a specific redeemer (see betlock.ts's
 // own top comment) - only then does the Redeem UI need to ask for a
@@ -722,6 +762,13 @@ const lockUi: UiNode[] = [
         label: 'Encode receipt as bech32 (LNURL1…)'
       },
       {
+        type: 'Input',
+        bind: 'stripOfflineSig',
+        kind: 'checkbox',
+        label:
+          'Strip offline-verification sig (recipient can no longer check the note against the mint’s pinned key without asking it directly)'
+      },
+      {
         type: 'Text',
         value:
           'Keep this receipt - it’s the only record of this bet. It cannot redeem anything by itself; you’ll also need the oracle’s own published attestation once the event resolves.'
@@ -730,7 +777,12 @@ const lockUi: UiNode[] = [
         type: 'Text',
         value: {
           helper: 'receiptUrlFor',
-          args: [{var: 'lockedNote'}, {var: 'plan'}, {var: 'useBech32'}]
+          args: [
+            {var: 'lockedNote'},
+            {var: 'plan'},
+            {var: 'useBech32'},
+            {var: 'stripOfflineSig'}
+          ]
         },
         style: 'response-block'
       },
@@ -742,7 +794,12 @@ const lockUi: UiNode[] = [
           args: {
             text: {
               helper: 'receiptUrlFor',
-              args: [{var: 'lockedNote'}, {var: 'plan'}, {var: 'useBech32'}]
+              args: [
+                {var: 'lockedNote'},
+                {var: 'plan'},
+                {var: 'useBech32'},
+                {var: 'stripOfflineSig'}
+              ]
             }
           }
         }
@@ -756,7 +813,11 @@ const lockUi: UiNode[] = [
             filename: 'betlocker-receipt.txt',
             content: {
               helper: 'receiptText',
-              args: [{var: 'lockedNote'}, {var: 'plan'}]
+              args: [
+                {var: 'lockedNote'},
+                {var: 'plan'},
+                {var: 'stripOfflineSig'}
+              ]
             }
           }
         }
@@ -841,6 +902,80 @@ const redeemUi: UiNode[] = [
     type: 'Show',
     when: {helper: 'canAutoFetchAttestation', args: [{var: 'receiptInput'}]},
     children: [
+      {
+        type: 'Button',
+        label: 'Check event status',
+        onClick: {
+          verb: 'oracle.fetchAnnouncement',
+          args: {
+            baseUrl: {
+              helper: 'receiptOracleServiceUrl',
+              args: [{var: 'receiptInput'}]
+            },
+            eventId: {helper: 'receiptEventId', args: [{var: 'receiptInput'}]}
+          },
+          result: 'fetchedEventStatus'
+        }
+      },
+      {
+        type: 'Show',
+        when: {var: 'fetchedEventStatus'},
+        children: [
+          {
+            type: 'Text',
+            value: {
+              cat: [
+                'Event "',
+                {var: 'fetchedEventStatus.eventId'},
+                '" - outcomes: ',
+                {
+                  helper: 'joinOutcomes',
+                  args: [{var: 'fetchedEventStatus.outcomes'}]
+                },
+                ' - matures ',
+                {
+                  helper: 'formatMaturity',
+                  args: [{var: 'fetchedEventStatus.maturityTime'}]
+                }
+              ]
+            },
+            style: 'response-block'
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'eventMatured',
+              args: [{var: 'fetchedEventStatus.maturityTime'}]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  'Past maturity - the oracle may not have attested yet (resolution is never instant or a guess ahead of time). Try Fetch attestation below.'
+              }
+            ]
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [
+                {
+                  helper: 'eventMatured',
+                  args: [{var: 'fetchedEventStatus.maturityTime'}]
+                }
+              ]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  'Not matured yet - the oracle will not attest before this time.'
+              }
+            ]
+          }
+        ]
+      },
       {
         type: 'Button',
         label: 'Fetch attestation from oracle',
@@ -1027,6 +1162,7 @@ const betlockerManifest: AddonManifest = {
   name: 'Betlocker',
   version: '1',
   icon: 'dice',
+  experimental: true,
   description:
     'Lock one of your notes on the outcome of a real-world event via a Discreet Log Contract oracle - a race-to-claim bearer bet (or, optionally, bound to one named redeemer), with a built-in refund deadline so it’s never locked forever.',
   permissions: [
@@ -1092,7 +1228,9 @@ const betlockerManifest: AddonManifest = {
     lockedNote: null,
     refundClaimResult: null,
     useBech32: false,
+    stripOfflineSig: false,
     receiptInput: '',
+    fetchedEventStatus: null,
     fetchedAttestation: null,
     attestOutcome: '',
     attestSignatureHex: '',
@@ -1164,6 +1302,8 @@ const betlockerHelpers: Record<string, AddonHelper> = {
   canAutoFetchAttestation: canAutoFetchAttestation as AddonHelper,
   receiptOracleServiceUrl: receiptOracleServiceUrl as AddonHelper,
   receiptEventId: receiptEventId as AddonHelper,
+  formatMaturity: formatMaturity as AddonHelper,
+  eventMatured: eventMatured as AddonHelper,
   receiptNeedsRedeemerSecret: receiptNeedsRedeemerSecret as AddonHelper,
   hasRedeemerSecretIfNeeded: hasRedeemerSecretIfNeeded as AddonHelper,
   attestationResolved: attestationResolved as AddonHelper,

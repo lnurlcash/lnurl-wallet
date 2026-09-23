@@ -8,10 +8,36 @@ export type ScannerProps = {
   accept?: (value: string) => boolean
 }
 
-// whether this device/browser can even attempt a camera scan - used to hide
-// the scan toggle entirely rather than show it and fail on first tap
+// whether this browser even exposes the camera API at all - a cheap,
+// synchronous prerequisite check (no permission prompt, no device probe)
+// for hasCameraDevice below, and the one ScanToggle falls back to showing
+// while that async probe is still pending, so a browser that DOES have a
+// camera doesn't flash the scan button away and back.
 export const canScan = (): boolean =>
   typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+
+// whether this device actually has a camera to scan with, not just the
+// browser API for one - canScan() alone stays true on a desktop/laptop
+// with zero webcams (the API exists, there's simply nothing to open), which
+// used to mean tapping the scan button always "worked" right up until
+// getUserMedia rejected and Scanner showed a wrong "Camera access was
+// denied" error for what was actually "no camera exists". enumerateDevices
+// lists every input device - including its `kind` - without requesting
+// permission first (labels are blank until permission is granted, but
+// `kind` itself is always populated), so this needs no user prompt to
+// answer honestly. Never throws: an environment that can't enumerate at
+// all (permissions-policy denial, an unusual embedded webview) is treated
+// the same as "no camera" - the button stays hidden rather than risk
+// showing one that can't work.
+export const hasCameraDevice = async (): Promise<boolean> => {
+  if (!canScan()) return false
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    return devices.some(d => d.kind === 'videoinput')
+  } catch {
+    return false
+  }
+}
 
 // Camera QR scanning: the native BarcodeDetector API when available (fast,
 // no extra decode work on the main thread), falling back to jsQR (~30kB)
@@ -85,8 +111,16 @@ const Scanner: Component<ScannerProps> = props => {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {facingMode: 'environment'}
       })
-    } catch {
-      setError('Camera access was denied.')
+    } catch (err) {
+      // NotFoundError: hasCameraDevice's own probe (ScanToggle) missed a
+      // race - the camera was unplugged/reclaimed between probing and
+      // opening. Distinct message from an actual permission denial, which
+      // is the far more common real-world case.
+      setError(
+        err instanceof DOMException && err.name === 'NotFoundError'
+          ? 'No camera was found.'
+          : 'Camera access was denied.'
+      )
       return
     }
     if (!videoRef) return

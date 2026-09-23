@@ -604,6 +604,7 @@ const sealsManifest: AddonManifest = {
   name: 'Seals',
   version: '1',
   icon: 'fingerprint',
+  experimental: true,
   description:
     'Prove and transfer ownership of an off-chain asset, RGB/Taproot-Assets-style - a taproot commitment anchors it to an LNURLcash note, and every holder client-side validates the whole history rather than trusting whoever handed it to them.',
   permissions: [

@@ -13,7 +13,10 @@ import {
   IoSearchSharp,
   IoInformationCircleSharp,
   IoCogSharp,
-  IoHardwareChipSharp
+  IoHardwareChipSharp,
+  IoPowerSharp,
+  IoOpenSharp,
+  IoFlaskSharp
 } from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
@@ -44,6 +47,10 @@ import {MIN_PASSWORD_LENGTH} from './Setup'
 import {allAddons, isBundledAddon} from '../addons/registry'
 import {enabledAddonIds, setAddonEnabled} from '../addons/enabled'
 import {effectiveNavPosition, setAddonNavPosition} from '../addons/navPosition'
+import {
+  experimentalAddonsVisible,
+  setExperimentalAddonsVisible
+} from '../addons/experimentalVisible'
 import {vaultEnabled, setVaultEnabled} from '../vaultFeature'
 import {addonSettingsStore} from '../addons/settingsStore'
 import {
@@ -699,96 +706,114 @@ const Settings: Component = () => {
             manifest JSON can and can't do.
           </p>
 
+          <button
+            type="button"
+            class="icon-btn"
+            classList={{active: experimentalAddonsVisible()}}
+            title={
+              experimentalAddonsVisible()
+                ? 'Hide experimental addons (still under active development/review) again'
+                : 'Show experimental addons (still under active development/review) too'
+            }
+            onClick={() =>
+              setExperimentalAddonsVisible(!experimentalAddonsVisible())
+            }
+          >
+            <IoFlaskSharp />
+            &nbsp;Experimental addons
+          </button>
+
           <div class="addon-list">
             <For each={allAddons()}>
               {addon => {
                 const enabled = () => enabledAddonIds().has(addon.manifest.id)
                 const custom = () => isCustomAddon(addon.manifest.id)
                 const Icon = ADDON_ICONS[addon.manifest.icon]
+                // an experimental addon this holder already turned on stays
+                // visible even with the toggle above off - hiding it would
+                // leave no way back to turn it off again
+                const visible = () =>
+                  !addon.manifest.experimental ||
+                  experimentalAddonsVisible() ||
+                  enabled()
                 return (
-                  <span class="mint-picker-entry">
-                    <button
-                      type="button"
-                      title={addon.manifest.description || addon.manifest.name}
-                      onClick={() => setInfoAddonId(addon.manifest.id)}
-                    >
-                      {Icon && <Icon />}
-                      &nbsp;{addon.manifest.name}
-                      <Show when={custom()}>&nbsp;(custom)</Show>
-                    </button>
-                    <button
-                      type="button"
-                      class="icon-btn"
-                      classList={{active: enabled()}}
-                      title={enabled() ? 'Turn off' : 'Turn on'}
-                      onClick={() =>
-                        setAddonEnabled(addon.manifest.id, !enabled())
-                      }
-                    >
-                      <Show when={enabled()} fallback="Turn on">
-                        Turn off
-                      </Show>
-                    </button>
-                    <Show when={enabled()}>
-                      <A
-                        href={
-                          addon.manifest.nav?.route ??
-                          `/addons/${addon.manifest.id}`
-                        }
-                        class="icon-btn"
-                        title="Open this addon"
-                      >
-                        Open
-                      </A>
-                    </Show>
-                    <Show when={enabled() && addon.manifest.nav}>
+                  <Show when={visible()}>
+                    <span class="mint-picker-entry">
                       <button
                         type="button"
                         class="icon-btn"
-                        title={`Nav position: ${effectiveNavPosition(addon) === 'left' ? 'left, alongside Wallet/Mint/Vault' : 'right, alongside Docs/Settings'} - click to switch sides`}
+                        classList={{active: enabled()}}
+                        title={enabled() ? 'Turn off' : 'Turn on'}
                         onClick={() =>
-                          setAddonNavPosition(
-                            addon.manifest.id,
-                            effectiveNavPosition(addon) === 'left'
-                              ? 'right'
-                              : 'left'
-                          )
+                          setAddonEnabled(addon.manifest.id, !enabled())
                         }
                       >
-                        {effectiveNavPosition(addon) === 'left'
-                          ? 'Left'
-                          : 'Right'}
-                      </button>
-                    </Show>
-                    <Show when={enabled() && addon.manifest.settings}>
-                      <button
-                        type="button"
-                        class="icon-btn"
-                        title="Addon settings"
-                        onClick={() => setSettingsAddonId(addon.manifest.id)}
-                      >
-                        <IoCogSharp />
-                      </button>
-                    </Show>
-                    <Show when={custom()}>
-                      <button
-                        type="button"
-                        class="icon-btn"
-                        title="Edit this addon's manifest"
-                        onClick={() => startEditAddon(addon.manifest)}
-                      >
-                        Edit
+                        <IoPowerSharp />
                       </button>
                       <button
                         type="button"
-                        class="icon-btn"
-                        title="Delete this addon"
-                        onClick={() => setConfirmDeleteAddon(addon.manifest.id)}
+                        title={
+                          addon.manifest.description || addon.manifest.name
+                        }
+                        onClick={() => setInfoAddonId(addon.manifest.id)}
                       >
-                        <IoTrashSharp />
+                        {Icon && <Icon />}
+                        &nbsp;{addon.manifest.name}
+                        <Show when={addon.manifest.experimental}>
+                          &nbsp;
+                          <IoFlaskSharp title="Experimental" />
+                        </Show>
+                        <Show when={custom()}>&nbsp;(custom)</Show>
                       </button>
-                    </Show>
-                  </span>
+                      <Show when={enabled()}>
+                        <A
+                          href={
+                            addon.manifest.nav?.route ??
+                            `/addons/${addon.manifest.id}`
+                          }
+                          class="icon-btn"
+                          title="Open this addon"
+                        >
+                          <IoOpenSharp />
+                        </A>
+                      </Show>
+                      <Show
+                        when={
+                          enabled() &&
+                          (addon.manifest.settings || addon.manifest.nav)
+                        }
+                      >
+                        <button
+                          type="button"
+                          class="icon-btn"
+                          title="Addon settings"
+                          onClick={() => setSettingsAddonId(addon.manifest.id)}
+                        >
+                          <IoCogSharp />
+                        </button>
+                      </Show>
+                      <Show when={custom()}>
+                        <button
+                          type="button"
+                          class="icon-btn"
+                          title="Edit this addon's manifest"
+                          onClick={() => startEditAddon(addon.manifest)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          class="icon-btn"
+                          title="Delete this addon"
+                          onClick={() =>
+                            setConfirmDeleteAddon(addon.manifest.id)
+                          }
+                        >
+                          <IoTrashSharp />
+                        </button>
+                      </Show>
+                    </span>
+                  </Show>
                 )
               }}
             </For>
@@ -879,21 +904,56 @@ const Settings: Component = () => {
 
           {/* this addon's own settings.ui - see addons/Renderer.tsx's
           'settings' mode, which never wires up a verb dispatcher at all, so
-          nothing rendered here can touch a note */}
+          nothing rendered here can touch a note. Also where the nav
+          position toggle (Left/Right in the wallet's own nav bar) lives now
+          - moved in from the addon-list row above, since it's wallet-level
+          placement, not something the addon's own manifest.settings.ui
+          renders - this dialog opens for that alone even when an addon
+          declares no settings.ui of its own (see the row's own Show gate:
+          `addon.manifest.settings || addon.manifest.nav`) */}
           <Show when={settingsAddonId()} keyed>
             {id => (
               <Show when={allAddons().find(a => a.manifest.id === id)} keyed>
                 {found => (
                   <Dialog onClose={() => setSettingsAddonId(null)}>
                     <h4>{found.manifest.name} settings</h4>
-                    <AddonRenderer
-                      addon={found}
-                      mode="settings"
-                      settingsStore={addonSettingsStore(
-                        found.manifest.id,
-                        found.manifest.settings!.state
-                      )}
-                    />
+                    <Show when={found.manifest.nav}>
+                      <p class="bearer-label">Nav position</p>
+                      <div class="btns">
+                        <button
+                          type="button"
+                          classList={{
+                            active: effectiveNavPosition(found) === 'left'
+                          }}
+                          onClick={() =>
+                            setAddonNavPosition(found.manifest.id, 'left')
+                          }
+                        >
+                          Left (alongside Wallet/Mint/Vault)
+                        </button>
+                        <button
+                          type="button"
+                          classList={{
+                            active: effectiveNavPosition(found) === 'right'
+                          }}
+                          onClick={() =>
+                            setAddonNavPosition(found.manifest.id, 'right')
+                          }
+                        >
+                          Right (alongside Docs/Settings)
+                        </button>
+                      </div>
+                    </Show>
+                    <Show when={found.manifest.settings}>
+                      <AddonRenderer
+                        addon={found}
+                        mode="settings"
+                        settingsStore={addonSettingsStore(
+                          found.manifest.id,
+                          found.manifest.settings!.state
+                        )}
+                      />
+                    </Show>
                   </Dialog>
                 )}
               </Show>

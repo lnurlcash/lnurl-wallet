@@ -11,6 +11,8 @@ import {
   betReceiptUrl,
   buildRedeemCw1,
   counterpartyProblem,
+  decodeCd1,
+  encodeCd1,
   parseBetReceipt,
   planBet,
   receiptProblem,
@@ -123,6 +125,113 @@ describe('betProblem / planBet', () => {
   })
 })
 
+describe('cd1 envelope', () => {
+  const oracle = generateOracleKeypair()
+  const nonce = generateOracleKeypair()
+  const counterparty = generateOracleKeypair()
+  const refund = generateOracleKeypair()
+
+  it('round-trips the minimal shape (oracle/nonce/outcomes only)', () => {
+    const encoded = encodeCd1({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['yes', 'no']
+    })
+    expect(encoded.startsWith('cd1')).toBe(true)
+    const decoded = decodeCd1(encoded)
+    expect(decoded).toEqual({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['yes', 'no']
+    })
+  })
+
+  it('round-trips every optional field at once', () => {
+    const encoded = encodeCd1({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['home', 'away', 'draw'],
+      oracleServiceUrl: 'https://oracle.example.com',
+      eventId: 'game-42',
+      counterpartyPubkeyHex: counterparty.pubkeyHex,
+      refundPubkeyHex: refund.pubkeyHex,
+      refundLocktime: 900_000
+    })
+    expect(decodeCd1(encoded)).toEqual({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['home', 'away', 'draw'],
+      oracleServiceUrl: 'https://oracle.example.com',
+      eventId: 'game-42',
+      counterpartyPubkeyHex: counterparty.pubkeyHex,
+      refundPubkeyHex: refund.pubkeyHex,
+      refundLocktime: 900_000
+    })
+  })
+
+  it('is case-insensitive and trims whitespace on decode, same as the shared lib codecs', () => {
+    const encoded = encodeCd1({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['yes', 'no']
+    })
+    expect(decodeCd1(`  ${encoded.toUpperCase()}  `)).not.toBeNull()
+  })
+
+  it('rejects malformed hex fields on encode rather than silently truncating', () => {
+    expect(() =>
+      encodeCd1({
+        oraclePubkeyHex: 'not-hex',
+        nonceHex: nonce.pubkeyHex,
+        outcomes: ['yes', 'no']
+      })
+    ).toThrow(/oraclePubkeyHex/)
+    expect(() =>
+      encodeCd1({
+        oraclePubkeyHex: oracle.pubkeyHex,
+        nonceHex: nonce.pubkeyHex,
+        outcomes: ['yes', 'no'],
+        refundPubkeyHex: refund.pubkeyHex,
+        refundLocktime: -1
+      })
+    ).toThrow(/refundLocktime/)
+  })
+
+  it('decode rejects garbage, a foreign hrp, and a truncated payload', () => {
+    expect(decodeCd1('not a cd1 value')).toBeNull()
+    expect(decodeCd1('cp1' + 'a'.repeat(50))).toBeNull()
+    const encoded = encodeCd1({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['yes', 'no']
+    })
+    expect(decodeCd1(encoded.slice(0, encoded.length - 10))).toBeNull()
+  })
+
+  it('a refund locktime of 0 is rejected as malformed, not silently dropped', () => {
+    // encodeCd1 itself already refuses to build one (hasRefund requires a
+    // truthy refundLocktime) - this exercises decodeCd1's own defense in
+    // depth against a hand-crafted or corrupted value that got this far
+    expect(() =>
+      encodeCd1({
+        oraclePubkeyHex: oracle.pubkeyHex,
+        nonceHex: nonce.pubkeyHex,
+        outcomes: ['yes', 'no'],
+        refundPubkeyHex: refund.pubkeyHex,
+        refundLocktime: 0
+      })
+    ).not.toThrow() // refund fields are simply omitted (falsy locktime)
+    const withoutRefund = encodeCd1({
+      oraclePubkeyHex: oracle.pubkeyHex,
+      nonceHex: nonce.pubkeyHex,
+      outcomes: ['yes', 'no'],
+      refundPubkeyHex: refund.pubkeyHex,
+      refundLocktime: 0
+    })
+    expect(decodeCd1(withoutRefund)?.refundPubkeyHex).toBeUndefined()
+  })
+})
+
 describe('bet receipt: build, parse, round-trip', () => {
   const oracle = generateOracleKeypair()
   const nonce = generateOracleKeypair()
@@ -162,6 +271,22 @@ describe('bet receipt: build, parse, round-trip', () => {
     expect(receipt.outcomes).toEqual(['yes', 'no'])
     expect(receipt.refundPubkeyHex).toBe(plan.refundPubkeyHex)
     expect(receipt.refundLocktime).toBe(plan.refundLocktime)
+  })
+
+  it('is still recognized with no offline-verification sig - the mint never certified the lock, or the staker stripped it deliberately', () => {
+    // an empty signature is exactly what a real lock gets when the mint
+    // doesn't return a cs1 certificate (see the Lock UI's own "could not
+    // verify the mint's certificate" warning) - withoutK1 then omits `sig`
+    // from the built URL entirely, same as manifest.ts's own
+    // stripOfflineSig toggle (withoutSignature) does deliberately
+    const uncertifiedLock = {...lockedNote, signature: ''}
+    const url = betReceiptUrl(uncertifiedLock, plan)!
+    expect(new URL(url).searchParams.has('sig')).toBe(false)
+    const receipt = parseBetReceipt(url)
+    expect(receipt).not.toBeNull()
+    expect(receipt!.signature).toBeUndefined()
+    expect(receipt!.oraclePubkeyHex).toBe(oracle.pubkeyHex)
+    expect(receiptProblem(url)).toBe('')
   })
 
   it('carries no k1 - it is not a spendable note on its own', () => {
