@@ -201,8 +201,7 @@ const issueUi: UiNode[] = [
               verb: 'note.lockToPubkey',
               args: {
                 note: {var: 'selectedNote.id'},
-                pubkeyHex: {var: 'genesisPlan.outputKeyHex'},
-                kind: 'ct1'
+                pubkeyHex: {var: 'genesisPlan.outputKeyHex'}
               },
               result: 'issuedNote'
             }

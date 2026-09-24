@@ -16,6 +16,7 @@ import {
 } from './htlc'
 
 const NOW = 1_800_000_000
+const MINT = 'mint.example.com'
 const AMOUNT_MSAT = 20_000_000
 const at = (seconds: number): string =>
   new Date(seconds * 1000)
@@ -69,6 +70,7 @@ describe('planHtlc', () => {
     claimant.pubkeyHex,
     AMOUNT_MSAT,
     refundDate,
+    MINT,
     NOW
   )
 
@@ -89,6 +91,7 @@ describe('planHtlc', () => {
       claimant.pubkeyHex,
       AMOUNT_MSAT,
       refundDate,
+      MINT,
       NOW
     )
     expect(other.refundCw1).not.toBe(plan.refundCw1)
@@ -105,14 +108,16 @@ describe('planHtlc', () => {
 
   it('refuses to plan without a hash, a claimant, an amount, or a valid date', () => {
     expect(() =>
-      planHtlc('', claimant.pubkeyHex, AMOUNT_MSAT, refundDate, NOW)
-    ).toThrow()
-    expect(() => planHtlc(hashHex, '', AMOUNT_MSAT, refundDate, NOW)).toThrow()
-    expect(() =>
-      planHtlc(hashHex, claimant.pubkeyHex, 0, refundDate, NOW)
+      planHtlc('', claimant.pubkeyHex, AMOUNT_MSAT, refundDate, MINT, NOW)
     ).toThrow()
     expect(() =>
-      planHtlc(hashHex, claimant.pubkeyHex, AMOUNT_MSAT, '', NOW)
+      planHtlc(hashHex, '', AMOUNT_MSAT, refundDate, MINT, NOW)
+    ).toThrow()
+    expect(() =>
+      planHtlc(hashHex, claimant.pubkeyHex, 0, refundDate, MINT, NOW)
+    ).toThrow()
+    expect(() =>
+      planHtlc(hashHex, claimant.pubkeyHex, AMOUNT_MSAT, '', MINT, NOW)
     ).toThrow()
   })
 })
@@ -124,6 +129,7 @@ describe('htlcReceiptUrl / parseHtlcReceipt / refundNoteUrl', () => {
     claimant.pubkeyHex,
     AMOUNT_MSAT,
     refundDate,
+    MINT,
     NOW
   )
   const lockedNote = lockedNoteFor(plan.outputKeyHex)
@@ -169,6 +175,7 @@ describe('buildClaimCw1', () => {
     claimant.pubkeyHex,
     AMOUNT_MSAT,
     refundDate,
+    MINT,
     NOW
   )
   const lockedNote = lockedNoteFor(plan.outputKeyHex)

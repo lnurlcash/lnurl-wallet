@@ -1,6 +1,5 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {sha256} from '@noble/hashes/sha2.js'
-import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {
   dkgRound1,
   dkgRound2,
@@ -16,6 +15,7 @@ import {
 import {
   encodeCk1,
   encodeCp1,
+  keyPathSighash,
   recoverNoteOwnershipPubkey,
   withNewK1
 } from '../../lnurlcash'
@@ -50,7 +50,7 @@ import {
 // up as its own paste-a-blob UI is a clearly scoped follow-up, not done
 // here.
 //
-// NOT YET: locking a note to a taproot-tweaked FROST output (ct1 with a
+// NOT YET: locking a note to a taproot-tweaked FROST output (a cp1 with a
 // script leaf). @noble/curves does ship the tweak functions this would
 // need (frostTweakPublic/frostTweakSecret), but only via an export
 // literally named __TEST in the installed version - not a stable public
@@ -200,13 +200,17 @@ const runMessageSign = (
 
 // ---- locking a real note to this group, and proving ownership back ----
 //
-// cp1<groupPubkeyHex> only (see this file's own top comment on why not
-// ct1 yet) - the group's own plain pubkey, an ordinary LUD-25 Part 2
-// pubkey commitment, redeemed by an ordinary ck1 (a BIP340 signature over
-// the fixed "LNURLcash" digest - src/lib/signature.ts's own
-// NOTE_OWNERSHIP_DIGEST), same as the sibling musig2 addon's own default
-// (untweaked) mode.
-const CK1_OWNERSHIP_DIGEST_HEX = bytesToHex(sha256(utf8ToBytes('LNURLcash')))
+// cp1<groupPubkeyHex> - the group's own plain pubkey as the note's Q,
+// redeemed by an ordinary ck1: a BIP340 signature by Q over the LUD-25
+// key-path sighash for the locked note's mint (src/lib/spend.ts's
+// keyPathSighash), same as the sibling musig2 addon's own untweaked mode.
+// Only computable once a note is locked - the mint is part of what's signed.
+const ownershipDigestHex = (group: unknown, lockedNote: unknown): string => {
+  const g = group as LocalGroup | null
+  const locked = lockedNote as LockedNote | null
+  if (!g || !locked?.mint) throw new Error('Lock a note to this group first.')
+  return bytesToHex(keyPathSighash(hexToBytes(g.groupPubkeyHex), locked.mint))
+}
 
 const groupCp1Preview = (group: unknown): string => {
   const g = group as LocalGroup | null
@@ -224,6 +228,7 @@ type LockedNote = {
   signature: string
   callback: string
   groupPubkeyHex: string
+  mint: string
 }
 
 const ck1FromResult = (result: unknown): string | null => {
@@ -236,9 +241,14 @@ const ck1FromResult = (result: unknown): string | null => {
   }
 }
 
-const ck1Accepted = (result: unknown): boolean => {
+const ck1Accepted = (result: unknown, lockedNote: unknown): boolean => {
   const ck1 = ck1FromResult(result)
-  return ck1 !== null && recoverNoteOwnershipPubkey(ck1) !== null
+  const mint = (lockedNote as LockedNote | null)?.mint
+  return (
+    ck1 !== null &&
+    Boolean(mint) &&
+    recoverNoteOwnershipPubkey(ck1, mint!) !== null
+  )
 }
 
 const lockedNoteUrl = (
@@ -251,7 +261,7 @@ const lockedNoteUrl = (
     return null
   }
   const ck1 = ck1FromResult(result)
-  if (!ck1) return null
+  if (!ck1 || !ck1Accepted(result, locked)) return null
   try {
     return withNewK1(
       locked.urlTemplate,
@@ -525,7 +535,7 @@ const lockUi: UiNode[] = [
       {
         type: 'Text',
         value:
-          'Any t of n participants can now jointly prove ownership and redeem it - sign the fixed ownership message below with the SAME group, using the same "which participants sign" idea as step 2.'
+          'Any t of n participants can now jointly prove ownership and redeem it - sign the ownership proof below - the LUD-25 key-path sighash for the group key at the locked note’s mint - with the SAME group, using the same "which participants sign" idea as step 2.'
       },
       {
         type: 'Input',
@@ -555,7 +565,10 @@ const lockUi: UiNode[] = [
                 args: [
                   {var: 'group'},
                   {var: 'ownershipSignerList'},
-                  CK1_OWNERSHIP_DIGEST_HEX
+                  {
+                    helper: 'ownershipDigestHex',
+                    args: [{var: 'group'}, {var: 'lockedNote'}]
+                  }
                 ]
               }
             }
@@ -564,7 +577,10 @@ const lockUi: UiNode[] = [
       },
       {
         type: 'Show',
-        when: {helper: 'ck1Accepted', args: [{var: 'ownershipResult'}]},
+        when: {
+          helper: 'ck1Accepted',
+          args: [{var: 'ownershipResult'}, {var: 'lockedNote'}]
+        },
         children: [
           {
             type: 'Text',
@@ -625,7 +641,7 @@ const docsUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      'Also not yet: locking to a taproot-tweaked output (ct1 with a script leaf, like MuSig2 supports). The library function this needs exists but only via an internal test-only export in the installed version - not something to build a real feature on without it being a stable, verified API first.'
+      'Also not yet: locking to a taproot-tweaked output (a cp1 with a script leaf, like MuSig2 supports). The library function this needs exists but only via an internal test-only export in the installed version - not something to build a real feature on without it being a stable, verified API first.'
   }
 ]
 
@@ -693,6 +709,7 @@ const frostHelpers: Record<string, AddonHelper> = {
   runMessageSign: runMessageSign as AddonHelper,
   runThresholdSign: runThresholdSign as AddonHelper,
   ck1Accepted: ck1Accepted as AddonHelper,
+  ownershipDigestHex: ownershipDigestHex as AddonHelper,
   lockedNoteUrl: lockedNoteUrl as AddonHelper
 }
 

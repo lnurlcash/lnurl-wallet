@@ -20,14 +20,19 @@ import {
   encodeCp1,
   encodeCk1,
   encodeCx1,
-  encodeCs1WithAmount
+  encodeCs1WithAmount,
+  encodeCw1,
+  outputKeyOfCw1
 } from './recoverableNotes'
 import {
   signNoteOwnership,
   signAddressProof,
   recoverNoteOwnershipPubkey,
+  verifyNoteSignature,
+  verifyNoteSignatureForKey,
   verifyNoteSignatureHash
 } from './signature'
+import {bearerNote, keyPathSighash} from './spend'
 
 // Independent reimplementation of Seed & derivation's own tweak + point-add
 // - NOT a call into recoverableNotes.ts's private tweakScalar/deriveNotePubkey
@@ -312,36 +317,82 @@ describe('LUD-25 Test Vectors - vector 2 (Seed & derivation, even-y P) + registr
   })
 })
 
-// ---- Test vector 3: Wallet-side ownership proof (ck1) ----
-describe('LUD-25 Test Vectors - vector 3 (ck1 wallet-side ownership proof)', () => {
-  // sk_0/pk_0 from vector 1 above
+// ---- Test vector 3: Key-path spend (ck1) ----
+describe('LUD-25 Test Vectors - vector 3 (ck1 key-path spend)', () => {
+  // sk_0/pk_0 from vector 1 above, spending Q = pk_0 at mint.example
   const SK = hexToBytes(
     '944a9631dbda27cf989e27df8be7317a5a9dfb517a6b71358d175f58dd2dc99f'
   )
   const PK = 'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
+  const DOMAIN = 'mint.example'
 
-  it('signs sha256("LNURLcash") - a 32-byte digest, not the raw 9-byte string - with a deterministic (all-zero aux_rand) BIP-340 signature', () => {
-    const digest = sha256(utf8ToBytes('LNURLcash'))
-    expect(bytesToHex(digest)).toBe(
-      '49a9bb7cae28a0c1f77bc7fac7693456b1cc149f83c413acfd938dc95ea21cf5'
+  it('signs the canonical spend transaction sighash for its domain, deterministically (all-zero aux_rand)', () => {
+    const sighash = keyPathSighash(hexToBytes(PK), DOMAIN)
+    expect(bytesToHex(sighash)).toBe(
+      'b8933a42090297a1f80d7f1fc0023ec1aa2ab36a7df332520f0dacf07f617943'
     )
-    const {pubkeyXOnly, signature} = signNoteOwnership(SK)
+    const {pubkeyXOnly, signature} = signNoteOwnership(SK, DOMAIN)
     expect(bytesToHex(pubkeyXOnly)).toBe(PK)
     expect(bytesToHex(signature)).toBe(
-      'a83def8861b558c6f04ed877e5e8dcdf675c871f5c4b3383c1723b2329658a40451002bda2a824be84284147eff3f572968504c2f44a6629d6de8cfbd4e3960a'
+      '83bbe1fe044d3d15cd1c18b484168c37f921864a9f85e9251f8457b576abd66b211b70b97fb3d63856ae271e4b3e3cf95da8e8b7769fefc309d8dc4989120e8e'
     )
-    expect(schnorr.verify(signature, digest, pubkeyXOnly)).toBe(true)
+    expect(schnorr.verify(signature, sighash, pubkeyXOnly)).toBe(true)
   })
 
-  it('encodes as ck1<pk><sig> and verifies directly against the embedded pk, no recovery', () => {
-    const {pubkeyXOnly, signature} = signNoteOwnership(SK)
+  it('encodes as ck1<Q><sig> and verifies directly against the embedded Q - at its own domain only', () => {
+    const {pubkeyXOnly, signature} = signNoteOwnership(SK, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     expect(ck1).toBe(
-      'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc62s0003psm2kxx7p8dsal9arwd7e6usu04cjens0qhywer99jc5sz9zqptmg4gyjlgg2zpglhl8atjj6zsfsh5ffnzn4k73naafcukpgdezzqx'
+      'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6g8wlplczy60g4e5wp3dyyz6xr07fpse9flp0fy50cg4a4w64av6eprdctjlan6cu9dt38re9nu08etk5w3dmknlhuxzwcm3ycjysw3c9dpmpy'
     )
-    const owner = recoverNoteOwnershipPubkey(ck1)
+    const owner = recoverNoteOwnershipPubkey(ck1, DOMAIN)
     expect(owner?.legacy).toBe(false)
     expect(owner && bytesToHex(owner.pubkeyXOnly)).toBe(PK)
+    expect(recoverNoteOwnershipPubkey(ck1, 'cash.example.com')).toBeNull()
+  })
+})
+
+// ---- Test vector 5: Bearer note ----
+describe('LUD-25 Test Vectors - vector 5 (bearer note)', () => {
+  const PREIMAGE =
+    '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'
+  const Q = 'd18b619687343df2fc7a47e1daf25260b909bb563fb4b4b11e59e2bd64880982'
+  const CW1 =
+    'cw1qqqqqq8lllll7qpr4qsxxrwd99nvgvmxjyf9gj9mkfd5laqj5jw8xtdjez4urwzcr0t3phv8qqsuq5yjnd6vrgzf2jmckjmqxh5h5hs83fdq728vjm2500lwnt8gqwkqqqsqqqgzqvzq2ps8pqys5zcvp58q7yq3zgf3g9gkzuvpjxsmrsw3u8c6x6a4c'
+  const CS1 =
+    'cs10n1caxh3wxfa0g2zxj6lt90rlksv8dgemtavcj7dqymvfxa7683d268mawdsvygd0maru024z9ehtdv5fptumsr3t0v0vuv2x3e953557qq5c70z5'
+  const MINT_PUBKEY =
+    '035acdbd57663f858be6d61ec4bfcbc99492699010f1451e30a6550f26295e813d'
+
+  it('the full cw1 is the spend its preimage short form stands for', () => {
+    const {outputKey, controlBlock, leaf} = bearerNote(
+      sha256(hexToBytes(PREIMAGE))
+    )
+    expect(bytesToHex(outputKey)).toBe(Q)
+    expect(
+      encodeCw1({
+        locktime: 0,
+        sequence: 0xffffffff,
+        script: leaf,
+        controlBlock,
+        witness: [hexToBytes(PREIMAGE)]
+      })
+    ).toBe(CW1)
+    expect(outputKeyOfCw1(CW1)).toBe(Q)
+  })
+
+  it("the mint's cs1 over Q verifies from either form of the spend", () => {
+    expect(verifyNoteSignature(PREIMAGE, 1000, CS1, MINT_PUBKEY)).toBe(true)
+    expect(verifyNoteSignature(CW1, 1000, CS1, MINT_PUBKEY)).toBe(true)
+    expect(
+      verifyNoteSignatureHash(
+        bytesToHex(sha256(hexToBytes(PREIMAGE))),
+        1000,
+        CS1,
+        MINT_PUBKEY
+      )
+    ).toBe(true)
+    expect(verifyNoteSignature(PREIMAGE, 1001, CS1, MINT_PUBKEY)).toBe(false)
   })
 })
 
@@ -402,9 +453,9 @@ describe('LUD-25 Test Vectors - vector 4 (cs1 mint offline certificate)', () => 
     // the kit's own real verifier, checked against this vector's own
     // mintPubkey - not a re-implementation, the actual shipped code
     expect(
-      verifyNoteSignatureHash(PK, 1000, bytesToHex(sig65), MINT_PUBKEY)
+      verifyNoteSignatureForKey(PK, 1000, bytesToHex(sig65), MINT_PUBKEY)
     ).toBe(true)
-    expect(verifyNoteSignatureHash(PK, 1000, cs1, MINT_PUBKEY)).toBe(true)
+    expect(verifyNoteSignatureForKey(PK, 1000, cs1, MINT_PUBKEY)).toBe(true)
   })
 
   it('amount_msat = 21000000: message, digest, signature and cs1<...>', () => {
@@ -419,15 +470,15 @@ describe('LUD-25 Test Vectors - vector 4 (cs1 mint offline certificate)', () => 
       'cs210u1khrv8hg4zuy9qx7gsg9wqrhn6epeehx23wkqp7exwhlwdwy6wans083h7ckz2qkxw399v22ugkw49sz8tcn6p6e5w3tepdzv2junscsqwvvr03'
     )
     expect(
-      verifyNoteSignatureHash(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
+      verifyNoteSignatureForKey(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
     ).toBe(true)
-    expect(verifyNoteSignatureHash(PK, 21000000, cs1, MINT_PUBKEY)).toBe(true)
+    expect(verifyNoteSignatureForKey(PK, 21000000, cs1, MINT_PUBKEY)).toBe(true)
   })
 
   it('a certificate for one amount does not verify against a different amount (message binds amount_msat)', () => {
     const {sig65} = buildCs1(1000)
     expect(
-      verifyNoteSignatureHash(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
+      verifyNoteSignatureForKey(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
     ).toBe(false)
   })
 
@@ -436,7 +487,7 @@ describe('LUD-25 Test Vectors - vector 4 (cs1 mint offline certificate)', () => 
     const otherPk =
       'f0c1ea9aede945b9cf84f3bf8df27ac65154a937e4d10cb8a5865df0583b1083' // pk_1 from vector 1
     expect(
-      verifyNoteSignatureHash(otherPk, 1000, bytesToHex(sig65), MINT_PUBKEY)
+      verifyNoteSignatureForKey(otherPk, 1000, bytesToHex(sig65), MINT_PUBKEY)
     ).toBe(false)
   })
 })

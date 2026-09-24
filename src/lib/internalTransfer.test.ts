@@ -144,8 +144,10 @@ describe('payInternalTransfer', () => {
     // (isCk1) - a plain placeholder string like the other tests' 'secretA'
     // never triggers the pubkey provider at all
     const inputCk1 = encodeCk1(
-      signNoteOwnership(schnorr.utils.randomSecretKey()).pubkeyXOnly,
-      signNoteOwnership(schnorr.utils.randomSecretKey()).signature
+      signNoteOwnership(schnorr.utils.randomSecretKey(), 'mint.example')
+        .pubkeyXOnly,
+      signNoteOwnership(schnorr.utils.randomSecretKey(), 'mint.example')
+        .signature
     )
     const seenDomains: string[] = []
     configurePubkeySecretProvider(domain => {

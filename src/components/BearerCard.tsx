@@ -110,7 +110,7 @@ const BearerCard: Component<BearerCardProps> = props => {
 
   const k1 = () => noteK1(props.bearer.url) || ''
   const isSpent = () => !!props.bearer.spent
-  // a ct1 note whose own k1 is a cw1 script-path spend, rather than a ck1
+  // a script-path note whose own k1 is a cw1 script-path spend, rather than a ck1
   // key-path one or a legacy hash preimage - see isValidK1/lib/
   // recoverableNotes.ts. k1() is '' for a device-backed bearer (no raw k1
   // kept in browser storage), which isCw1('') correctly reads as false.
@@ -351,7 +351,7 @@ const BearerCard: Component<BearerCardProps> = props => {
                 plain secret
               </span>
             </Show>
-            {/* A ct1 note redeemed by revealing a Tapscript leaf (a cw1),
+            {/* A script-path note redeemed by revealing a Tapscript leaf (a cw1),
             not by a ck1 signature - clicking it decodes and shows exactly
             what that leaf says (ScriptPreviewDialog), rather than asking a
             holder to trust a one-word label. */}
@@ -378,7 +378,11 @@ const BearerCard: Component<BearerCardProps> = props => {
             equivalent note under the current scheme, closing whatever
             exposure the deprecated signature format carries. */}
             <Show
-              when={k1() && recoverNoteOwnershipPubkey(k1())?.legacy === true}
+              when={
+                k1() &&
+                recoverNoteOwnershipPubkey(k1(), props.bearer.url)?.legacy ===
+                  true
+              }
             >
               <span
                 class="bearer-legacy-ck1"

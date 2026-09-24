@@ -126,7 +126,7 @@ describe('input resolution', () => {
     expect(isValidNoteInput('you@example.com')).toBe(false)
   })
 
-  it('accepts a ct1 note whose k1 is a cw1 script-path spend - the wallet can hold one', () => {
+  it('accepts a script-path note whose k1 is a cw1 script-path spend - the wallet can hold one', () => {
     const cw1 = encodeCw1({
       locktime: 1_800_000_000,
       sequence: 0xfffffffe,

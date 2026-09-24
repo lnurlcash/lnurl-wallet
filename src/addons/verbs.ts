@@ -8,14 +8,13 @@ import {
   isLightningAddress,
   lnurlFetch,
   encodeCp1,
-  encodeCt1,
   decodeCp1,
   decodeCx1,
   deriveNotePubkey,
   parseInternalTransferHint,
   requireNoteK1,
   rotateNoteWithHash,
-  verifyNoteSignatureHash,
+  verifyNoteSignatureForKey,
   noteSignature,
   settleNote,
   withNewK1,
@@ -23,7 +22,8 @@ import {
   fetchNoteInfoByPubkey,
   generateOutputSecret,
   hashK1,
-  outputKeyOfCw1
+  outputKeyOfCw1,
+  noteMintOf
 } from '../lnurlcash'
 import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
@@ -112,7 +112,11 @@ export const VERBS: Record<string, VerbHandler> = {
     return ctx
       .bearers()
       .filter(b => matchesScope(b, scope))
-      .map(b => ({id: b.id, amountSat: Math.floor(b.amount / 1000)}))
+      .map(b => ({
+        id: b.id,
+        amountSat: Math.floor(b.amount / 1000),
+        mint: noteMintOf(b.url)
+      }))
   },
 
   // splits one note into many, tagging each part atomically - see
@@ -153,20 +157,15 @@ export const VERBS: Record<string, VerbHandler> = {
     }))
   },
 
-  // LUD-25 Part 2: burns the chosen note and re-mints it owned by a pubkey
-  // commitment instead of a hash this wallet itself controls - e.g. the
-  // musig2 addon's own MuSig2 aggregate group pubkey. `kind` picks which
-  // commitment type names the output: a plain `cp1<pubkeyHex>` (redeemable
-  // only by a ck1 signature for that key), or a taproot `ct1<Q>` (ALSO
-  // redeemable by revealing a script leaf committed under Q - see
-  // recoverableNotes.ts). Both travel in the same p1 field and are
-  // certified by the mint identically; they only diverge at redemption.
-  // NOTE: no mint implements ct1 redemption yet, so a ct1 lock is expected
-  // to be refused today - safely, before anything burns.
+  // LUD-25: burns the chosen note and re-mints it as `cp1<pubkeyHex>` - a
+  // taproot output key Q this wallet does not itself control, e.g. the
+  // musig2 addon's own MuSig2 aggregate group pubkey, or a Q committing to
+  // script leaves (timelocker, betlocker, htlc, seals). Redeemable by a ck1
+  // (a BIP-340 signature by Q over the spend sighash, see
+  // src/lib/signature.ts), or a cw1 revealing any leaf committed under Q -
+  // the mint accepts both for every note, so no kind needs choosing.
   // Once this returns, this wallet no longer holds a spendable secret for
-  // that value on its own: only whoever can produce a valid ck1 (a
-  // BIP-340 signature over "LNURLcash" from the pubkey's own private key -
-  // see src/lib/signature.ts) can ever redeem it again. request.ts's own
+  // that value on its own. request.ts's own
   // mutationSignature already requires SOME well-shaped signature for a
   // cp1 output or throws; this additionally checks that signature actually
   // recovers to the note's own PINNED mint key, not just that it parses,
@@ -192,11 +191,7 @@ export const VERBS: Record<string, VerbHandler> = {
     if (!/^[0-9a-f]{64}$/.test(pubkeyHex)) {
       throw new Error('Not a valid 32-byte x-only pubkey.')
     }
-    const kind = args.kind === 'ct1' ? 'ct1' : 'cp1'
-    const target =
-      kind === 'ct1'
-        ? encodeCt1(hexToBytes(pubkeyHex))
-        : encodeCp1(hexToBytes(pubkeyHex))
+    const target = encodeCp1(hexToBytes(pubkeyHex))
     const k1 = requireNoteK1(bearer.url)
     let signature: string | undefined
     try {
@@ -214,7 +209,7 @@ export const VERBS: Record<string, VerbHandler> = {
       throw new Error('The mint did not certify the locked pubkey.')
     }
     const pubkeyVerified = bearer.mintPubkey
-      ? verifyNoteSignatureHash(
+      ? verifyNoteSignatureForKey(
           pubkeyHex,
           bearer.amount,
           signature,
@@ -231,7 +226,7 @@ export const VERBS: Record<string, VerbHandler> = {
     await ctx.updateBearer(bearer.id, {spent: true})
     ctx.logActivity(
       'spent',
-      `Locked a ${bearer.amount} msat note at ${serverOf(bearer.url)} to a ${kind} pubkey via an addon.`,
+      `Locked a ${bearer.amount} msat note at ${serverOf(bearer.url)} to a pubkey via an addon.`,
       bearer.label
     )
     return {
@@ -239,10 +234,9 @@ export const VERBS: Record<string, VerbHandler> = {
       mintPubkey: bearer.mintPubkey ?? null,
       callback: bearer.callback,
       groupPubkeyHex: pubkeyHex,
-      // which commitment type named this output - a later redemption needs
-      // it to know whether a ck1 alone suffices (cp1) or a script path is
-      // also available (ct1)
-      kind,
+      // the domain every signature spending this note is bound to (see
+      // src/lib/spend.ts) - its mint's host, never secret
+      mint: noteMintOf(bearer.url),
       signature,
       pubkeyVerified,
       // bearer.url's OWN k1 is already burned/worthless by this point -
@@ -295,7 +289,7 @@ export const VERBS: Record<string, VerbHandler> = {
     }
     const info = await fetchNoteInfoByPubkey(
       receipt.urlTemplate,
-      encodeCt1(hexToBytes(outputKeyHex))
+      encodeCp1(hexToBytes(outputKeyHex))
     )
     const amountMsat = info.maxWithdrawable
     const newK1 = generateOutputSecret(serverOf(info.callback), false)
@@ -352,7 +346,7 @@ export const VERBS: Record<string, VerbHandler> = {
     }
     const info = await fetchNoteInfoByPubkey(
       receipt.urlTemplate,
-      encodeCt1(hexToBytes(outputKeyHex))
+      encodeCp1(hexToBytes(outputKeyHex))
     )
     const amountMsat = info.maxWithdrawable
     const newK1 = generateOutputSecret(serverOf(info.callback), false)
@@ -389,7 +383,7 @@ export const VERBS: Record<string, VerbHandler> = {
   // The Seals addon's own transition step: reveals the CURRENT state (the
   // hashlock's own preimage, via redeemCurrentStateCw1) and signs with
   // the current owner's key to redeem the current leaf, in the SAME mint
-  // call rotating directly into the NEXT state's own ct1 output - never a
+  // call rotating directly into the NEXT state's own cp1 output - never a
   // plain secret, unlike note.redeemBet above. Deliberately its own verb
   // rather than reusing note.redeemBet (always rotates to a plain bearer
   // secret) or note.lockToPubkey (only ever rotates a note THIS wallet
@@ -412,7 +406,7 @@ export const VERBS: Record<string, VerbHandler> = {
     const cw1 = redeemCurrentStateCw1(
       currentState,
       ownerSecretKeyHex,
-      amountMsat
+      urlTemplate
     )
     const currentOutputKeyHex = outputKeyOfCw1(cw1)
     if (!currentOutputKeyHex) {
@@ -422,7 +416,7 @@ export const VERBS: Record<string, VerbHandler> = {
     }
     const info = await fetchNoteInfoByPubkey(
       urlTemplate,
-      encodeCt1(hexToBytes(currentOutputKeyHex))
+      encodeCp1(hexToBytes(currentOutputKeyHex))
     )
     const next = nextState(currentState, nextOwnerPubkeyHex)
     const nextOutputKeyHex = planSealLock(next).outputKeyHex
@@ -430,7 +424,7 @@ export const VERBS: Record<string, VerbHandler> = {
       await rotateNoteWithHash(
         info.callback,
         cw1,
-        encodeCt1(hexToBytes(nextOutputKeyHex))
+        encodeCp1(hexToBytes(nextOutputKeyHex))
       )
     } catch (err) {
       if (err instanceof AmbiguousMintError) {

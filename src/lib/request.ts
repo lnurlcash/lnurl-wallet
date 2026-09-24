@@ -6,7 +6,7 @@ import {
   hashK1,
   parseMintKey,
   requireMutationSignature,
-  recoverNoteOwnershipPubkey,
+  ck1Pubkey,
   cp1FromCk1
 } from './signature'
 import {
@@ -26,7 +26,6 @@ import {
   isPubkeyCommitment,
   isAnyCs1,
   encodeCp1,
-  encodeCt1,
   outputKeyOfCw1
 } from './recoverableNotes'
 
@@ -125,11 +124,11 @@ const requestNoteInfoByPubkey = async (
   url: string,
   pubkeyValue: string
 ): Promise<HashWithdrawRequestInfo> => {
-  // cp1 (key-path only) or ct1 (also script-path capable) - see
+  // cp1 (any taproot output key) - see
   // isPubkeyCommitment's own doc comment. Both are looked up identically;
   // they only diverge at redemption.
   if (!isPubkeyCommitment(pubkeyValue)) {
-    throw new Error('A note pubkey must be a valid cp1 or ct1 value.')
+    throw new Error('A note pubkey must be a valid cp1 value.')
   }
   return requestNoteInfoByField(url, 'p', pubkeyValue)
 }
@@ -148,8 +147,8 @@ export const fetchNoteInfoByHash = async (
   }
 }
 
-// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a cp1 or ct1 note
-// up by its public commitment, never a secret (ck1, or a ct1's cw1). One of
+// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a note
+// up by its public commitment, never a secret (its ck1 or cw1). One of
 // the two things a recovery scan (deriving pk_0, pk_1, ... off a registered
 // cx1 branch) needs, and also how fetchNoteInfo resolves a bare cw1 (whose
 // commitment is derived locally, see recoverableNotes.ts's
@@ -192,18 +191,18 @@ export const fetchNoteInfo = async (
   // that doesn't understand cp1/p at all doesn't support this note kind
   // regardless of field name.
   if (isCk1(queried)) {
-    const owner = recoverNoteOwnershipPubkey(queried)
-    if (!owner) {
+    const pubkey = ck1Pubkey(queried)
+    if (!pubkey) {
       throw new Error("This note's ck1 secret is malformed.")
     }
     const info = await fetchNoteInfoByPubkey(
       rawUrl.toString(),
-      encodeCp1(owner.pubkeyXOnly)
+      encodeCp1(pubkey)
     )
     return {...info, k1: queried}
   }
 
-  // A ct1 note's own cw1 script-path spend - same "looked up by its PUBLIC
+  // A script-path note's own cw1 spend - same "looked up by its PUBLIC
   // commitment, never the secret itself" shape as ck1 above, except the
   // commitment (Q) is derived locally from the cw1's own script + control
   // block (deriveScriptPathCommitment - pure BIP341 math, no mint round
@@ -221,7 +220,7 @@ export const fetchNoteInfo = async (
     }
     const info = await fetchNoteInfoByPubkey(
       rawUrl.toString(),
-      encodeCt1(hexToBytes(outputKeyHex))
+      encodeCp1(hexToBytes(outputKeyHex))
     )
     return {...info, k1: queried}
   }
@@ -470,8 +469,8 @@ export type HashedMutationResult = {signature?: string}
 
 // LUD-25 Part 2 renamed /w/cb's h/h2 to p1/p2 - h/h2 are still accepted
 // forever as the old names (SERVICE aliases them), so a plain hash keeps
-// being sent that way unchanged; a pubkey commitment (cp1, or a taproot
-// ct1 - both name a 32-byte key, see recoverableNotes.ts) is sent as
+// being sent that way unchanged; a note's output key (cp1, see
+// recoverableNotes.ts) is sent as
 // p1/p2 instead, the current canonical name and the only one a Part-2
 // mint is guaranteed to recognize anyway. Dispatched per-field by the
 // value's own shape, same as every other dual-mode field in this module -
@@ -560,7 +559,7 @@ export const mergeNotesWithHash = async (
 export type RotateResult = {k1: string; signature?: string}
 
 // LUD-25 Part 2: an output whose OWN k1 already proves key ownership - ck1
-// directly, or a ct1's cw1 script-path spend (its leaf's own signature, or
+// directly, or a script-path note's cw1 script-path spend (its leaf's own signature, or
 // for a keyless leaf the mere ability to satisfy it, already establishes
 // the redeemer controls the note) - reissuing it as a legacy preimage on
 // every rotate/split/merge would silently downgrade it back to Part 1

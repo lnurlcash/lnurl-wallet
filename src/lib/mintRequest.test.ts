@@ -9,7 +9,7 @@ import {
   fetchPayRequest
 } from './mintRequest'
 import {hashK1} from './signature'
-import {encodeCp1, encodeCt1, encodeCx1} from './recoverableNotes'
+import {encodeCp1, encodeCx1} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -216,20 +216,6 @@ describe('requestInvoice - LUD-25 Part 2 cp1 comment', () => {
   it('rejects an output hash that is neither hex32 nor a pubkey commitment', async () => {
     await expect(
       requestInvoice('https://mint.example.com/p/cb', 1000, 'not-valid')
-    ).rejects.toThrow(/cp1\/ct1 pubkey/)
-  })
-
-  it('accepts a ct1 taproot output key as the comment, same as a cp1', async () => {
-    const ct1 = encodeCt1(hexToBytes('ab'.repeat(32)))
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const request = new URL(input.toString())
-      expect(request.searchParams.get('comment')).toBe(ct1)
-      // a pubkey commitment never gets the legacy `h` belt-and-braces
-      expect(request.searchParams.get('h')).toBeNull()
-      return {json: async () => ({pr: 'lnbc1p0examplebech32data'})} as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    await requestInvoice('https://mint.example.com/p/cb', 1000, ct1)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    ).rejects.toThrow(/cp1 output key/)
   })
 })

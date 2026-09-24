@@ -77,7 +77,7 @@ export const newParticipant = (): Musig2Participant => {
 // Session built from it) so a round's signature verifies under the TWEAKED
 // output key Q = P + t·G rather than the untweaked aggregate P. This is
 // what makes a MuSig2 group usable as a taproot INTERNAL key: lock a note
-// to ct1<Q>, and the group can still key-path spend it, but only if every
+// to cp1<Q>, and the group can still key-path spend it, but only if every
 // step of the round applies the same tweak - applying it afterwards is not
 // possible, which is exactly why it has to be a parameter here rather than
 // something a caller can bolt on later.
@@ -164,9 +164,9 @@ const summarizeRound = (
 // Takes the message as raw bytes, not text: aggregateAndSign below is the
 // UTF-8-string convenience wrapper the UI's free-text "message to sign"
 // field uses, but the ck1 worked example (manifest.ts) needs to sign a
-// pre-hashed 32-byte digest instead (src/lib/signature.ts's
-// NOTE_OWNERSHIP_DIGEST - ck1 signs sha256("LNURLcash"), not the raw
-// string), which UTF-8-encoding a string could never produce.
+// 32-byte digest instead - the LUD-25 key-path sighash a ck1 signs
+// (src/lib/spend.ts's keyPathSighash) - which UTF-8-encoding a string could
+// never produce.
 export const aggregateAndSignBytes = (
   participants: Musig2Participant[],
   message: Uint8Array,

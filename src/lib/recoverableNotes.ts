@@ -9,11 +9,11 @@
 //
 //   1. bech32m (BIP-350, NOT the classic bech32/BIP-173 this repo's own
 //      LUD-01 lnurl encoding in urls.ts uses) codecs for the 5 new fixed-
-//      or variable-length value types: cp1 (a note's pubkey commitment),
-//      ct1 (a taproot output key, ALSO script-path redeemable), ck1 (a
-//      BIP-340 Schnorr ownership signature, pubkey attached - the note's
+//      or variable-length value types: cp1 (a note's taproot output key Q),
+//      ck1 (a key-path spend: a BIP-340 signature by Q over the canonical
+//      spend transaction's sighash, Q attached - the note's
 //      actual bearer secret; TODO(deprecated) still decodes the OLD bare
-//      recoverable-ECDSA shape too, see isLegacyCk1), cw1 (a ct1's own
+//      recoverable-ECDSA shape too, see isLegacyCk1), cw1 (a script-path note's own
 //      script-path spend: leaf, control block, witness), cs1 (a SERVICE
 //      issuance certificate, still recoverable ECDSA - unchanged), cx1 (a
 //      watch-only branch export: pubkey + chain code).
@@ -76,35 +76,12 @@ export const decodeCp1 = (value: string): Uint8Array | null =>
   decodeFixed('cp', value, 32)
 export const isCp1 = (value: string): boolean => decodeCp1(value) !== null
 
-// A BIP341 taproot OUTPUT key (Q = P + t·G), not a plain signing key -
-// byte-identical in shape to cp1 above (same 32-byte x-only payload) and
-// deliberately so: everything that already handles "a 32-byte value keyed
-// by its own certifying signature" keeps working unchanged. The separate
-// HRP is a capability flag, not extra data - it tells SERVICE this note
-// may ALSO be redeemed by revealing one of the script leaves committed
-// under Q (a cw1 below), where a cp1 only ever accepts a ck1 key-path
-// signature. A SERVICE that doesn't implement script-path redemption must
-// reject a ct1 output outright rather than silently treat it as a cp1.
-//
-// Nothing about the script tree is disclosed here, by design: given an
-// already-published Q, only whoever built it forward (choosing P and the
-// leaves, then tweaking) can ever produce a valid leaf+control-block pair
-// for it, so a revealed script path is self-certifying against Q alone -
-// see BIP341's own security argument. Unused leaves therefore stay private
-// forever, exactly as they do on-chain.
-export const encodeCt1 = (outputKeyXOnly: Uint8Array): string =>
-  encodeFixed('ct', outputKeyXOnly, 32)
-export const decodeCt1 = (value: string): Uint8Array | null =>
-  decodeFixed('ct', value, 32)
-export const isCt1 = (value: string): boolean => decodeCt1(value) !== null
-
-// "this output names a pubkey commitment, not a legacy hash" - the check
-// every dispatch site wants, since cp1 and ct1 are treated identically
-// everywhere a note is CREATED (canonical p1/p2 field names, a mandatory
-// certifying signature). They only diverge at redemption, which is the one
-// place the distinction has to be read back out explicitly.
-export const isPubkeyCommitment = (value: string): boolean =>
-  isCp1(value) || isCt1(value)
+// "this output names a note's output key, not a hash" - the check every
+// dispatch site wants where a cp1 or a bearer note's hex short form may go.
+// A cp1 is any taproot output key: a bare key, or one committing to script
+// leaves - the mint accepts a key-path ck1 and any leaf's cw1 for every note,
+// so there is no separate kind to tell apart.
+export const isPubkeyCommitment = (value: string): boolean => isCp1(value)
 
 // CURRENT form (2026-09-16, luds#ck1): a 32-byte BIP-340 x-only pubkey
 // concatenated with a 64-byte Schnorr signature over it - pk travels
@@ -172,8 +149,8 @@ export const isLegacyCk1 = (value: string): boolean =>
 export const isCk1 = (value: string): boolean => decodeCk1(value) !== null
 
 // The script-path counterpart to ck1 above. Where a ck1 proves ownership
-// of a cp1/ct1's own key (one BIP-340 signature over the fixed message), a
-// cw1 proves that one of the script leaves committed under a ct1's output
+// of a cp1's own key (one BIP-340 signature over the fixed message), a
+// cw1 proves that one of the script leaves committed under a script-path note's output
 // key is satisfied: the leaf script itself, BIP341's control block (leaf
 // version + output-key parity, the internal pubkey P, and the merkle path
 // proving this leaf sits under Q's committed root), and whatever witness
@@ -448,7 +425,7 @@ export const deriveNoteSecretKey = (
 // ---- BIP341 script-path commitment (what a bare cw1 names) ----
 //
 // Which taproot output key Q a revealed (script, control block) commits to
-// - the same algorithm lnurl-mint's own ct1.py:derive_output_key runs, and
+// - the same algorithm lnurl-mint's own spend.py (lnurlcashkernel's taproot.output_key) runs, and
 // the verification half of the addons/taproot playground's own tree-
 // building (addons/taproot/taproot.ts's verifyScriptPath calls this
 // directly rather than duplicating it). Self-certifying: whoever presents
@@ -483,7 +460,10 @@ const compactSize = (n: number): Uint8Array => {
 }
 
 // BIP341: tagged_hash("TapLeaf", leaf_version || compact_size(len(script)) || script)
-const tapLeafHash = (script: Uint8Array, leafVersion: number): Uint8Array =>
+export const tapLeafHash = (
+  script: Uint8Array,
+  leafVersion: number
+): Uint8Array =>
   schnorr.utils.taggedHash(
     'TapLeaf',
     new Uint8Array([leafVersion]),
@@ -496,7 +476,7 @@ const tapLeafHash = (script: Uint8Array, leafVersion: number): Uint8Array =>
 // verifier needs both: the control block is required to carry that same
 // parity bit, and a mismatch means the control block doesn't actually
 // describe how Q was built (see verifyScriptPath's own extra check).
-const taprootTweakPubkey = (
+export const taprootTweakPubkey = (
   internalKeyXOnly: Uint8Array,
   merkleRoot: Uint8Array
 ): {outputKey: Uint8Array; parity: 0 | 1} => {
@@ -549,14 +529,14 @@ export const deriveScriptPathCommitment = (
 }
 
 // convenience for callers that just want Q, e.g. resolving a held cw1 note
-// against a mint (encodeCt1(outputKeyOfScriptPath(cw1.script, cw1.controlBlock)))
+// against a mint (encodeCp1(outputKeyOfScriptPath(cw1.script, cw1.controlBlock)))
 export const outputKeyOfScriptPath = (
   script: Uint8Array,
   controlBlock: Uint8Array
 ): Uint8Array | null =>
   deriveScriptPathCommitment(script, controlBlock)?.outputKey ?? null
 
-// the ct1 output key hex a bare cw1 value commits to, or null if it isn't a
+// the output key hex a bare cw1 value commits to, or null if it isn't a
 // well-formed cw1 or its control block is malformed
 export const outputKeyOfCw1 = (value: string): string | null => {
   const cw1 = decodeCw1(value)

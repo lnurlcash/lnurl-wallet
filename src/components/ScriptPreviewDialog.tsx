@@ -19,7 +19,7 @@ export type ScriptPreviewDialogProps = {
 // than importing from an addon's page-local module.
 const LOCKTIME_THRESHOLD = 500_000_000
 
-// A note whose own k1 is a cw1 (a ct1's script-path spend, see
+// A note whose own k1 is a cw1 (a script-path note's script-path spend, see
 // isValidK1/BearerCard.tsx's own "script" pill) carries a real, revealed
 // Tapscript leaf - this shows exactly what it says, decoded from the SAME
 // bytes the mint itself would check (identifyLeaf/opcodesOf, shared with

@@ -140,7 +140,7 @@ export type InvoiceResult = {
 // extension - `/p/cb` itself only ever reads `comment`; `h` is this
 // wallet's own long-standing redundant belt-and-braces, harmless either
 // way) or, per Part 2's Wallet-side ownership proofs, a pubkey commitment
-// (`cp1<pk>`, or a taproot `ct1<Q>`) sent as `comment` alone (the mint's
+// (`cp1<pk>`, or a taproot `cp1<Q>`) sent as `comment` alone (the mint's
 // `/p/cb` has no separate `p` param - unlike the informational GET/mutation
 // callback, minting never had a second field to alias). The parameter is
 // omitted entirely for an
@@ -163,7 +163,7 @@ export const requestInvoice = async (
       cbUrl.searchParams.set('h', value)
     } else {
       throw new Error(
-        'An output hash must be 32 bytes of hex, or a cp1/ct1 pubkey - no invoice was requested.'
+        'An output hash must be 32 bytes of hex, or a cp1 output key - no invoice was requested.'
       )
     }
   }

@@ -138,10 +138,10 @@ describe('aggregateAndSign', () => {
   })
 })
 
-describe('taproot-tweaked rounds (ct1 key-path spends)', () => {
-  // the property the whole ct1 lock flow rests on: with a BIP341 tweak
+describe('taproot-tweaked rounds (tweaked key-path spends)', () => {
+  // the property the whole tweaked-lock flow rests on: with a BIP341 tweak
   // threaded through key aggregation, the round's signature verifies under
-  // the TWEAKED output key Q - which is what a note locked to ct1<Q> is
+  // the TWEAKED output key Q - which is what a note locked to cp1<Q> is
   // keyed by - rather than under the bare aggregate P
   it('produces a signature valid under the tweaked output key, not the untweaked one', () => {
     const participants = [newParticipant(), newParticipant()]

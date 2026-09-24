@@ -337,7 +337,7 @@ export const frostAggregate = (
 export const utf8MessageHex = (text: unknown): string =>
   bytesToHex(utf8ToBytes(String(text ?? '')))
 
-// ---- NOT YET: taproot script-tree tweaking (ct1 with a backup leaf) ----
+// ---- NOT YET: taproot script-tree tweaking (a cp1 with a backup leaf) ----
 //
 // @noble/curves does ship frostTweakPublic/frostTweakSecret (BIP341
 // tweaking for a FROST group), but ONLY via an export literally named

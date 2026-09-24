@@ -32,7 +32,7 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 // dlcspecs/Oracle.md's own tag for the message an attestation actually
 // signs - NOT the raw outcome string. Cross-checked against the published
 // spec text; not yet cross-checked against a real external oracle
-// implementation's own test vectors (unlike ct1/cw1's own
+// implementation's own test vectors (unlike cp1/cw1's own
 // ct1Interop.test.ts, which has real Bitcoin Core on the other end) - if a
 // real-world oracle's attestation ever fails to verify here, this constant
 // is the first thing to re-check.

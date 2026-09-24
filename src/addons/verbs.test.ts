@@ -6,7 +6,7 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 
 import {buildTicketLabel, VERBS, type VerbContext} from './verbs'
 import {parseLabelTags} from '../noteTags'
-import {encodeCp1, encodeCt1} from '../lnurlcash'
+import {encodeCp1} from '../lnurlcash'
 import type {Bearer} from '../storage'
 
 const RAFFLE = {id: 'raffle', name: 'Raffle Tickets'}
@@ -410,59 +410,38 @@ describe("VERBS['note.lockToPubkey']", () => {
     return seen
   }
 
-  it('defaults to a cp1 lock: the mint receives p1=cp1<key>', async () => {
+  it('locks to p1=cp1<key>, and hands back the mint every spend of it is bound to', async () => {
     const seen = stubMint()
     const {ctx, markedSpent} = makeCtx(makeBearer())
     const result = (await VERBS['note.lockToPubkey']!(
       {note: 'source', pubkeyHex: TARGET_HEX},
       ctx
-    )) as {kind: string; pubkeyVerified: boolean}
+    )) as {mint: string; pubkeyVerified: boolean; groupPubkeyHex: string}
 
     expect(seen).toHaveLength(1)
     expect(seen[0]!.get('p1')).toBe(encodeCp1(hexToBytes(TARGET_HEX)))
     expect(seen[0]!.get('h')).toBeNull()
-    expect(result.kind).toBe('cp1')
-    expect(result.pubkeyVerified).toBe(true)
-    expect(markedSpent).toEqual(['source'])
-  })
-
-  it("kind 'ct1' sends p1=ct1<Q> - a taproot output key, not a cp1 - and still verifies", async () => {
-    const seen = stubMint()
-    const {ctx, markedSpent} = makeCtx(makeBearer())
-    const result = (await VERBS['note.lockToPubkey']!(
-      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
-      ctx
-    )) as {kind: string; pubkeyVerified: boolean; groupPubkeyHex: string}
-
-    expect(seen).toHaveLength(1)
-    // same canonical p1 field as a cp1 (both are pubkey commitments), but
-    // the value's own HRP is what tells the mint script-path redemption
-    // is on the table
-    expect(seen[0]!.get('p1')).toBe(encodeCt1(hexToBytes(TARGET_HEX)))
-    expect(seen[0]!.get('p1')!.startsWith('ct1')).toBe(true)
-    expect(seen[0]!.get('h')).toBeNull()
-    expect(result.kind).toBe('ct1')
+    expect(result.mint).toBe(new URL(BASE).hostname)
     expect(result.groupPubkeyHex).toBe(TARGET_HEX)
-    // the mint certifies the raw 32-byte key identically for both kinds,
-    // so the unchanged verifyNoteSignatureHash path still checks out
     expect(result.pubkeyVerified).toBe(true)
     expect(markedSpent).toEqual(['source'])
   })
 
-  it('treats any unrecognised kind as cp1 rather than guessing', async () => {
+  it("an old kind: 'ct1' argument still locks to cp1<Q> - every note is one kind", async () => {
+    // a taproot output key with script leaves is an ordinary cp1 note: the
+    // mint accepts its key path and every leaf alike, so there is nothing
+    // left to choose
     const seen = stubMint()
     const {ctx} = makeCtx(makeBearer())
-    const result = (await VERBS['note.lockToPubkey']!(
-      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct2'},
+    await VERBS['note.lockToPubkey']!(
+      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
       ctx
-    )) as {kind: string}
-    expect(result.kind).toBe('cp1')
-    expect(seen[0]!.get('p1')!.startsWith('cp1')).toBe(true)
+    )
+    expect(seen[0]!.get('p1')).toBe(encodeCp1(hexToBytes(TARGET_HEX)))
   })
 
-  it('a mint that refuses a ct1 burns nothing and keeps the note', async () => {
-    // exactly what every mint does TODAY: none implements ct1, so the
-    // lock must fail cleanly and leave the wallet's note untouched
+  it('a mint that refuses the lock burns nothing and keeps the note', async () => {
+    // the lock must fail cleanly and leave the wallet's note untouched
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -471,10 +450,7 @@ describe("VERBS['note.lockToPubkey']", () => {
     )
     const {ctx, markedSpent} = makeCtx(makeBearer())
     await expect(
-      VERBS['note.lockToPubkey']!(
-        {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
-        ctx
-      )
+      VERBS['note.lockToPubkey']!({note: 'source', pubkeyHex: TARGET_HEX}, ctx)
     ).rejects.toThrow()
     expect(markedSpent).toEqual([])
   })
@@ -506,7 +482,7 @@ describe("VERBS['note.lockToPubkey']", () => {
     )
     const {ctx} = makeCtx(makeBearer())
     const result = (await VERBS['note.lockToPubkey']!(
-      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
+      {note: 'source', pubkeyHex: TARGET_HEX},
       ctx
     )) as {pubkeyVerified: boolean}
     // well-shaped, so accepted - but NOT certified by this note's mint
@@ -518,10 +494,7 @@ describe("VERBS['note.lockToPubkey']", () => {
     vi.stubGlobal('fetch', fetchMock)
     const {ctx} = makeCtx(makeBearer())
     await expect(
-      VERBS['note.lockToPubkey']!(
-        {note: 'source', pubkeyHex: 'not-hex', kind: 'ct1'},
-        ctx
-      )
+      VERBS['note.lockToPubkey']!({note: 'source', pubkeyHex: 'not-hex'}, ctx)
     ).rejects.toThrow(/32-byte x-only/)
     expect(fetchMock).not.toHaveBeenCalled()
   })

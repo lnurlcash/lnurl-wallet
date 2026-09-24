@@ -1,13 +1,17 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
-import {bytesToHex} from '@noble/hashes/utils.js'
+import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
+import {sha256} from '@noble/hashes/sha2.js'
+import {schnorr} from '@noble/curves/secp256k1.js'
 import type {Bearer} from './storage'
 import {
   deriveNotePubkey,
+  encodeCk1,
   encodeCp1,
   encodeCx1,
   noteK1,
   noteSignature,
-  recoverNoteOwnershipPubkey
+  recoverNoteOwnershipPubkey,
+  withNewK1
 } from './lnurlcash'
 
 const store = new Map<string, string>()
@@ -106,7 +110,7 @@ describe('scanRegisteredAddress', () => {
     )
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
-    const owner = recoverNoteOwnershipPubkey(k1)
+    const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
     expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
   })
@@ -140,6 +144,40 @@ describe('scanRegisteredAddress', () => {
     )
     expect(second.recovered).toHaveLength(0)
     expect(second.highestIndex).toBe(0)
+  })
+
+  it('recognises a note held under its old-format ck1 - by its Q, not the string', async () => {
+    // a note held from before ck1s signed the spend sighash still carries
+    // its old ck1 (Q || sig over sha256("LNURLcash")): a rescan re-derives
+    // today's ck1 for the same Q, which must not be recovered a second time
+    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    const secretKey = cashSecrets.cashAddressSecretAtIndex(HOST, 0)!
+    const oldCk1 = encodeCk1(
+      schnorr.getPublicKey(secretKey),
+      schnorr.sign(
+        sha256(utf8ToBytes('LNURLcash')),
+        secretKey,
+        new Uint8Array(32)
+      )
+    )
+    const held: Bearer[] = [
+      {
+        id: 'x',
+        url: withNewK1(`${SERVER}/w`, oldCk1, 21000),
+        callback: `${SERVER}/w/cb`,
+        amount: 21000,
+        verified: true,
+        createdAt: 0,
+        updatedAt: 0
+      }
+    ]
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      held
+    )
+    expect(result.recovered).toHaveLength(0)
+    expect(result.highestIndex).toBe(0)
   })
 
   it('reports an error and no crash when no cash root is loaded', async () => {

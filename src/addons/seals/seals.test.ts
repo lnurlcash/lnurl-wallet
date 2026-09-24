@@ -17,6 +17,7 @@ import {
   type SealState
 } from './seals'
 
+const MINT = 'mint.example.com'
 const AMOUNT_MSAT = 20_000_000
 const URL_TEMPLATE = 'https://mint.example.com/w'
 
@@ -118,28 +119,26 @@ describe('redeemCurrentStateCw1', () => {
   const state = genesisState('Art #1', 'desc', owner.pubkeyHex)
 
   it('refuses a malformed or missing secret key', () => {
-    expect(() => redeemCurrentStateCw1(state, '', AMOUNT_MSAT)).toThrow(
-      /secret key/
-    )
-    expect(() => redeemCurrentStateCw1(state, 'not-hex', AMOUNT_MSAT)).toThrow(
+    expect(() => redeemCurrentStateCw1(state, '', MINT)).toThrow(/secret key/)
+    expect(() => redeemCurrentStateCw1(state, 'not-hex', MINT)).toThrow(
       /secret key/
     )
   })
 
   it("refuses a secret key that isn't this state's own owner", () => {
     expect(() =>
-      redeemCurrentStateCw1(state, impostor.secretKeyHex, AMOUNT_MSAT)
+      redeemCurrentStateCw1(state, impostor.secretKeyHex, MINT)
     ).toThrow(/does not match/)
   })
 
-  it('refuses a missing/non-positive amount', () => {
-    expect(() => redeemCurrentStateCw1(state, owner.secretKeyHex, 0)).toThrow(
-      /amount/
+  it("refuses a missing mint - every signature is bound to the note's own", () => {
+    expect(() => redeemCurrentStateCw1(state, owner.secretKeyHex, '')).toThrow(
+      /mint/
     )
   })
 
   it('produces a real, verifiable cw1 for the correct owner', () => {
-    const cw1 = redeemCurrentStateCw1(state, owner.secretKeyHex, AMOUNT_MSAT)
+    const cw1 = redeemCurrentStateCw1(state, owner.secretKeyHex, MINT)
     expect(cw1.startsWith('cw1')).toBe(true)
     const decoded = decodeCw1(cw1)!
     expect(decoded.witness).toHaveLength(2) // [signature, revealed state preimage]

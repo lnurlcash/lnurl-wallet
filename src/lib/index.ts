@@ -21,6 +21,7 @@ export * from './mintRequest'
 export * from './addresses'
 export * from './internalTransfer'
 export * from './recoverableNotes'
+export * from './spend'
 export * from './branchDerivation'
 export {
   configureSecretProvider,

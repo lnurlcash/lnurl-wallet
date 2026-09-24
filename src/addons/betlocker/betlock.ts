@@ -1,7 +1,7 @@
 // Pure math behind the betlocker addon: lock one of your notes to the
 // outcome of a real-world event via a Discreet Log Contract oracle (see
 // the sibling `dlc` addon for the oracle cryptography itself, and
-// timelock.ts's own top comment for the general "ct1/cw1 note lock" shape
+// timelock.ts's own top comment for the general "cp1/cw1 note lock" shape
 // this reuses byte-for-byte).
 //
 // Genuinely different from the sibling timelocker addon in one structural
@@ -263,6 +263,7 @@ export const planBet = (
   outcomes: unknown,
   amountMsat: unknown,
   refundDate: unknown,
+  mint: unknown,
   oracleServiceUrl?: unknown,
   eventId?: unknown,
   counterpartyPubkeyHex?: unknown
@@ -271,7 +272,7 @@ export const planBet = (
   if (problem) throw new Error(problem)
   const cpProblem = counterpartyProblem(counterpartyPubkeyHex)
   if (cpProblem) throw new Error(cpProblem)
-  if (!isPositiveInt(amountMsat)) {
+  if (!isPositiveInt(amountMsat) || typeof mint !== 'string' || !mint) {
     throw new Error('Pick a note to stake first.')
   }
   const refundProblem = dateProblem(refundDate)
@@ -321,7 +322,7 @@ export const planBet = (
     NUMS_INTERNAL_KEY_HEX,
     leaves,
     refundScript,
-    Number(amountMsat),
+    mint,
     refundLocktime,
     TIMELOCK_SEQUENCE
   )
@@ -353,10 +354,10 @@ export const planBet = (
 // Packs everything betReceiptUrl used to spread across 8 loose query
 // params (oracle/nonce/outcomes/oracleService/event/counterparty/
 // refundPubkey/refundLocktime) into one compact bech32m value, same
-// wire-format quality bar as src/lib/recoverableNotes.ts's own cp1/ct1/
+// wire-format quality bar as src/lib/recoverableNotes.ts's own cp1/
 // cw1/cs1/cx1/ck1 family (variable-length parts use that same file's cw1
 // convention: u16 length prefix, then the bytes) - but deliberately kept
-// addon-local, not added to that shared file: cp1/ct1/cw1/cs1/cx1/ck1 are
+// addon-local, not added to that shared file: cp1/ck1/cw1/cs1/cx1 are
 // all genuine LUD-25 Part 2 wire types any Part-2-aware peer needs to
 // speak, while a DLC oracle's announcement shape is this addon's own
 // application-layer construct, not a spec-level primitive - bundling it
@@ -813,7 +814,7 @@ export const buildRedeemCw1 = (
     NUMS_INTERNAL_KEY_HEX,
     leaves,
     targetScript,
-    receipt.amountMsat,
+    receipt.urlTemplate,
     0,
     0xfffffffe
   )
@@ -824,7 +825,7 @@ export const buildRedeemCw1 = (
           NUMS_INTERNAL_KEY_HEX,
           leaves,
           targetScript,
-          receipt.amountMsat,
+          receipt.urlTemplate,
           0,
           0xfffffffe
         ),

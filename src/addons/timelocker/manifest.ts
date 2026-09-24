@@ -8,7 +8,7 @@ import {
 } from './timelock'
 
 // Timelocker: lock one of your own notes until a date you pick. The note is
-// re-minted as a ct1 whose only way out is a CLTV leaf (see timelock.ts), so
+// re-minted as a note whose only way out is a CLTV leaf (see timelock.ts), so
 // even you cannot spend it early - the mint refuses until ITS clock passes
 // the date.
 //
@@ -138,7 +138,8 @@ const lockUi: UiNode[] = [
                   {
                     helper: 'satsToMsat',
                     args: [{var: 'selectedNote.amountSat'}]
-                  }
+                  },
+                  {var: 'selectedNote.mint'}
                 ]
               }
             }
@@ -172,8 +173,7 @@ const lockUi: UiNode[] = [
               verb: 'note.lockToPubkey',
               args: {
                 note: {var: 'selectedNote.id'},
-                pubkeyHex: {var: 'plan.outputKeyHex'},
-                kind: 'ct1'
+                pubkeyHex: {var: 'plan.outputKeyHex'}
               },
               result: 'lockedNote'
             }
@@ -299,7 +299,7 @@ const docsUi: UiNode[] = [
     each: [
       'Pick one of your own unspent notes and a date/time.',
       "Click 'Prepare timelock' - the note's own value is already signed into the lock, so nothing further needs to happen later.",
-      'Click \'Lock this note until then\'. Your note is burned at the mint and re-issued as a taproot (ct1) note whose only way out is a script that says "not before this time". The mint enforces it with its own clock, so nobody - including you - can spend it early.',
+      'Click \'Lock this note until then\'. Your note is burned at the mint and re-issued as a taproot (cp1) note whose only way out is a script that says "not before this time". The mint enforces it with its own clock, so nobody - including you - can spend it early.',
       'Copy the note link (or download a receipt). It is a complete, ordinary bearer note - hand it to anyone, or keep it: whoever holds it can redeem it, once the date has passed, with any LUD-03 withdraw wallet, no addon required.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
@@ -307,7 +307,7 @@ const docsUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      "The lock cannot be undone. The link is the only record of the note once the lock lands - this wallet cannot hold a timelocked note itself, so lose the link and the value is gone. Needs a mint with ct1 support (lnurl-mint's ct1 extra); one without it refuses the lock before anything is burned."
+      'The lock cannot be undone. The link is the only record of the note once the lock lands - this wallet cannot hold a timelocked note itself, so lose the link and the value is gone. Any LUD-25 mint redeems the script path - it accepts every leaf, the same way it accepts a signature.'
   }
 ]
 
@@ -317,7 +317,7 @@ const timelockerManifest: AddonManifest = {
   version: '1',
   icon: 'timer',
   description:
-    'Lock one of your notes until a date you pick - a timelocked bearer note (ct1 with a CLTV leaf) that nobody can redeem early, not even you.',
+    'Lock one of your notes until a date you pick - a timelocked bearer note (a cp1 with a CLTV leaf) that nobody can redeem early, not even you.',
   permissions: [
     {
       verb: 'note.lockToPubkey',
