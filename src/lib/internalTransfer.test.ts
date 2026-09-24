@@ -10,11 +10,15 @@ import {
   encodeCp1,
   encodeCx1,
   encodeCk1,
+  encodeCs1WithAmount,
   type Cx1
 } from './recoverableNotes'
 import {AmbiguousMutationError} from './errors'
 import {configurePubkeySecretProvider} from './secrets'
 import {signNoteOwnership} from './signature'
+
+const SIG = encodeCs1WithAmount(1000, new Uint8Array(65).fill(0xaa))
+const SIG2 = encodeCs1WithAmount(1000, new Uint8Array(65).fill(0xbb))
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -69,13 +73,13 @@ describe('payInternalTransfer', () => {
     encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
 
   const okResponse = () =>
-    ({json: async () => ({status: 'OK', sig: 'a'.repeat(130)})}) as Response
+    ({json: async () => ({status: 'OK', sig: SIG})}) as Response
   const okSplitResponse = () =>
     ({
       json: async () => ({
         status: 'OK',
-        sig: 'a'.repeat(130),
-        sig2: 'b'.repeat(130)
+        sig: SIG,
+        sig2: SIG2
       })
     }) as Response
   const errorResponse = (reason: string) =>
@@ -101,7 +105,7 @@ describe('payInternalTransfer', () => {
     expect(result).toEqual({
       kind: 'merge',
       index: 3,
-      signature: 'a'.repeat(130)
+      signature: SIG
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -112,10 +116,9 @@ describe('payInternalTransfer', () => {
       const request = new URL(input.toString())
       expect(request.searchParams.get('amount')).toBe('5000')
       expect(request.searchParams.get('p1')).toBe(cp1At(0))
-      expect(request.searchParams.get('p2')).toBeNull()
-      // change is a legacy secret by default (no pubkey provider configured
-      // in tests) - disclosed as h2, its sha256 hash
-      expect(request.searchParams.get('h2')).toMatch(/^[0-9a-f]{64}$/)
+      // change is a bearer secret by default (no pubkey provider configured
+      // in tests) - disclosed as p2, its hashlock note's cp1
+      expect(request.searchParams.get('p2')).toMatch(/^cp1/)
       return okSplitResponse()
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -129,8 +132,8 @@ describe('payInternalTransfer', () => {
     expect(result.kind).toBe('split')
     if (result.kind === 'split') {
       expect(result.index).toBe(0)
-      expect(result.signature).toBe('a'.repeat(130))
-      expect(result.changeSignature).toBe('b'.repeat(130))
+      expect(result.signature).toBe(SIG)
+      expect(result.changeSignature).toBe(SIG2)
       expect(result.change).toMatch(/^[0-9a-f]{64}$/)
     }
   })
@@ -195,7 +198,7 @@ describe('payInternalTransfer', () => {
     expect(result).toEqual({
       kind: 'merge',
       index: 1,
-      signature: 'a'.repeat(130)
+      signature: SIG
     })
     expect(calls).toBe(2)
   })

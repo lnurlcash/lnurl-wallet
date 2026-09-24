@@ -2,6 +2,15 @@
 
 ## 0.14.0 - unreleased
 
+- **Breaking:** the old `h`/`h2` field names are gone, and a bearer note's
+  hex `h` goes on the wire as its hashlock note's `cp1<Q>` by default - as
+  `comment` (`requestInvoice`), `p` (`fetchNoteInfoByHash`) and `p1`/`p2`
+  (`rotateNoteWithHash`/`splitNoteWithHash`/`mergeNotesWithHash`). Each has a
+  `…Short` variant sending LUD-25's 64-hex short form instead
+  (`requestInvoiceShort`, `fetchNoteInfoByHashShort`,
+  `rotateNoteWithHashShort`, `splitNoteWithHashShort`,
+  `mergeNotesWithHashShort`). New `noteRef`/`shortNoteRef` convert a
+  reference to either form.
 - **Breaking:** LUD-25's unified note model - every note is a taproot
   output key `Q` (`cp1`), spent by a `ck1` (key path) or a `cw1` (script
   path), each checked as input 0 of the canonical spend transaction (see
@@ -14,16 +23,27 @@ OP_EQUAL` leaf, whose 64-hex short forms are the preimage as `k1` and `h`
 - **Breaking:** `signNoteOwnership(secretKey, domain)` now signs the
   key-path sighash for the note's mint (its URL or host) instead of
   `sha256("LNURLcash")`, so a `ck1` is bound to one mint.
-  `recoverNoteOwnershipPubkey(ck1, domain)` verifies against that sighash,
-  and still reads a `ck1` over either old fixed message as `legacy: true`.
+  `recoverNoteOwnershipPubkey(ck1, domain)` verifies against that sighash.
   New `ck1Pubkey(ck1)` decodes a `ck1`'s `Q` without verifying, for lookups
   and output disclosure (`cp1FromCk1` uses it).
 - **Breaking:** removed `encodeCt1`/`decodeCt1`/`isCt1` - a note committing
   to script leaves is an ordinary `cp1`; `isPubkeyCommitment` is `isCp1`.
 - `verifyNoteSignature`/`verifyNoteSignatureHash` check a bearer note's
-  `cs1` against its `Q`, which is what a current mint certifies, and still
-  against `h` for a mint that predates it. New `verifyNoteSignatureForKey`
-  for a note known by its `Q`.
+  `cs1` against its `Q`. New `verifyNoteSignatureForKey` for a note known by
+  its `Q`.
+- **Breaking:** removed every deprecated compatibility path:
+  - the pre-schnorr 65-byte `ck1` and a `ck1` signed over the old fixed
+    `"LNURLcash"` message - `isLegacyCk1`, `CK1_LEGACY_LENGTH` and
+    `NoteOwnershipPubkey.legacy` are gone; `decodeCk1` accepts 96 bytes only;
+  - the fixed-HRP `cs1` without an amount (`encodeCs1`/`decodeCs1`/`isCs1`,
+    `decodeAnyCs1`/`isAnyCs1`) and plain-hex signatures
+    (`NOTE_SIGNATURE_PATTERN`) - a certificate is a `cs1<amount>` only, with
+    its recovery id last;
+  - certificates over a bearer note's `h` instead of its `Q`;
+  - `fetchNoteInfo`'s retry with the raw `k1` for a mint that rejects `?p=`:
+    every note is looked up by its `cp1<Q>`, derived from its spend.
+  - The bound-mint receipt's `h` is normalized to the note's `Q` and its
+    `sig` kept as a `cs1`.
 - Add `minIndex` to `scanForAddressNotes`'s options: forces the forward
   walk to keep going through indices up to and including this one, even
   past what `gapLimit` consecutive unknowns would otherwise have stopped

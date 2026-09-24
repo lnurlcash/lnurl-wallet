@@ -4,7 +4,8 @@ import {
   deriveNotePubkey,
   encodeCp1,
   noteK1,
-  recoverNoteOwnershipPubkey
+  recoverNoteOwnershipPubkey,
+  encodeCs1WithAmount
 } from './lnurlcash'
 import type {Bearer} from './storage'
 
@@ -117,12 +118,12 @@ describe('scanMintForNotes', () => {
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
     const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
-    expect(owner?.legacy).toBe(false)
+    expect(owner).not.toBeNull()
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
   })
 
   it('attaches an already-disclosed offline-verification sig immediately, no separate rotate needed', async () => {
-    const sig = 'ab'.repeat(65)
+    const sig = encodeCs1WithAmount(5000, new Uint8Array(65).fill(0xab))
     vi.stubGlobal('fetch', fakeMint([0], null, sig) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)

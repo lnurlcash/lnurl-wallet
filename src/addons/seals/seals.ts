@@ -20,7 +20,7 @@
 // the state before it) changes on every transfer. State is committed into
 // the note's own leaf via the taproot addon's EXISTING `hashlock`
 // template - SHA256 <state hash> EQUALVERIFY <owner pubkey> CHECKSIG - the
-// exact shape ct1Interop.test.ts already verifies against the real
+// exact shape spendInterop.test.ts already verifies against the real
 // lnurlcashkernel. No new script template; this is a new use of an
 // already-proven one.
 //

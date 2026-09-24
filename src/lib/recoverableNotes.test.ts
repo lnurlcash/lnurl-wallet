@@ -16,15 +16,9 @@ import {
   encodeCk1,
   decodeCk1,
   isCk1,
-  isLegacyCk1,
-  encodeCs1,
-  decodeCs1,
-  isCs1,
   encodeCs1WithAmount,
   decodeCs1WithAmount,
   isCs1WithAmount,
-  decodeAnyCs1,
-  isAnyCs1,
   encodeCx1,
   decodeCx1,
   isCx1,
@@ -150,10 +144,10 @@ describe('bech32m codec', () => {
 
   it("round-trips a cs1 (65 bytes) - past bech32/BIP-173's 90-char limit", () => {
     const bytes = hexToBytes('cd'.repeat(65))
-    const cs1 = encodeCs1(bytes)
+    const cs1 = encodeCs1WithAmount(1000, bytes)
     expect(cs1.length).toBeGreaterThan(90)
-    expect(decodeCs1(cs1)).toEqual(bytes)
-    expect(isCs1(cs1)).toBe(true)
+    expect(decodeCs1WithAmount(cs1)?.signature).toEqual(bytes)
+    expect(isCs1WithAmount(cs1)).toBe(true)
   })
 
   it('round-trips a ck1 (96 bytes: 32-byte pk || 64-byte Schnorr sig)', () => {
@@ -161,28 +155,18 @@ describe('bech32m codec', () => {
     const signature = hexToBytes('cd'.repeat(64))
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     expect(ck1.length).toBeGreaterThan(90)
-    expect(decodeCk1(ck1)).toEqual({legacy: false, pubkeyXOnly, signature})
+    expect(decodeCk1(ck1)).toEqual({pubkeyXOnly, signature})
     expect(isCk1(ck1)).toBe(true)
   })
 
-  it('TODO(deprecated): still decodes the OLD bare 65-byte recoverable-ECDSA ck1 shape', () => {
-    const legacySignature = hexToBytes('ef'.repeat(65))
-    const encoded = bech32m.encode(
+  it('rejects a ck1 payload of any length but 96 bytes', () => {
+    const short = bech32m.encode(
       'ck',
-      bech32m.toWords(legacySignature),
+      bech32m.toWords(hexToBytes('ef'.repeat(65))),
       false
     )
-    expect(decodeCk1(encoded)).toEqual({
-      legacy: true,
-      signature: legacySignature
-    })
-    expect(isCk1(encoded)).toBe(true)
-    expect(isLegacyCk1(encoded)).toBe(true)
-    const current = encodeCk1(
-      hexToBytes('ab'.repeat(32)),
-      hexToBytes('cd'.repeat(64))
-    )
-    expect(isLegacyCk1(current)).toBe(false)
+    expect(decodeCk1(short)).toBeNull()
+    expect(isCk1(short)).toBe(false)
   })
 
   it('round-trips a cx1 (64 bytes: pubkey || chain code)', () => {
@@ -198,7 +182,7 @@ describe('bech32m codec', () => {
   it('rejects the wrong prefix for a given decoder', () => {
     const cp1 = encodeCp1(hexToBytes('ab'.repeat(32)))
     expect(decodeCk1(cp1)).toBeNull()
-    expect(decodeCs1(cp1)).toBeNull()
+    expect(decodeCs1WithAmount(cp1)).toBeNull()
     expect(decodeCx1(cp1)).toBeNull()
     expect(isCk1(cp1)).toBe(false)
   })
@@ -376,40 +360,12 @@ describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
     }
   })
 
-  it('is a distinct wire value from the legacy fixed-HRP cs1 for the same signature', () => {
-    const legacy = encodeCs1(bytes)
-    const current = encodeCs1WithAmount(1000, bytes)
-    expect(current).not.toBe(legacy)
-    expect(isCs1(current)).toBe(false)
-    expect(isCs1WithAmount(legacy)).toBe(false)
-  })
-
   it('rejects the wrong prefix, garbage, or a truncated amount suffix', () => {
     expect(
       decodeCs1WithAmount(encodeCp1(hexToBytes('ab'.repeat(32))))
     ).toBeNull()
     expect(decodeCs1WithAmount('not bech32m at all')).toBeNull()
     expect(decodeCs1WithAmount('cs1garbage')).toBeNull()
-  })
-
-  describe('decodeAnyCs1 / isAnyCs1', () => {
-    it('accepts both the current and the legacy wire shape', () => {
-      const legacy = encodeCs1(bytes)
-      const current = encodeCs1WithAmount(21_000, bytes)
-      expect(decodeAnyCs1(legacy)).toEqual(bytes)
-      expect(decodeAnyCs1(current)).toEqual(bytes)
-      expect(isAnyCs1(legacy)).toBe(true)
-      expect(isAnyCs1(current)).toBe(true)
-    })
-
-    it('rejects anything that is neither', () => {
-      const ck1 = encodeCk1(
-        hexToBytes('ab'.repeat(32)),
-        hexToBytes('cd'.repeat(64))
-      )
-      expect(decodeAnyCs1(ck1)).toBeNull()
-      expect(isAnyCs1(ck1)).toBe(false)
-    })
   })
 })
 

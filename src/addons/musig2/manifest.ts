@@ -483,10 +483,7 @@ const lockedNoteUrl = (
   // a round signed before this note was locked is bound to the placeholder
   // domain, not this note's mint - it would open nothing, so it builds no
   // note: sign again now that the note is locked
-  if (
-    !ck1 ||
-    recoverNoteOwnershipPubkey(ck1, signingDomain(locked))?.legacy !== false
-  ) {
+  if (!ck1 || recoverNoteOwnershipPubkey(ck1, signingDomain(locked)) === null) {
     return null
   }
   try {

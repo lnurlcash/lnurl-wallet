@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import {bytesToHex} from '@noble/hashes/utils.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 
 import {
   fetchPayRequest,
@@ -27,6 +27,8 @@ import {
   AmbiguousMutationError
 } from './lnurlcash'
 import {receiveNote} from './receive'
+import {bearerNoteIdOfHash, bearerNoteIdOfPreimage} from './lib/spend'
+import {decodeCp1, encodeCp1, encodeCs1WithAmount} from './lib/recoverableNotes'
 
 // Exercises the stateful multi-step flows Mint.tsx/MeltDialog.tsx/Wallet.tsx
 // drive (mint -> rotate -> split -> merge -> melt, pending-note recovery,
@@ -51,7 +53,7 @@ const MINT_ADDRESS_BAD_URL = `${BASE}/mintaddress-bad`
 const MINT_ADDRESS_UNKNOWN_URL = `${BASE}/mintaddress-unknown`
 const MINT_KEY = `02${'11'.repeat(32)}`
 const NODE_KEY = `02${'33'.repeat(32)}`
-const NOTE_SIGNATURE = '00'.repeat(65)
+const NOTE_SIGNATURE = encodeCs1WithAmount(1000, new Uint8Array(65))
 
 const randomHex = (bytes: number): string =>
   bytesToHex(crypto.getRandomValues(new Uint8Array(bytes)))
@@ -68,11 +70,20 @@ type Invoice = {
 }
 type Melt = {noteHash: string; settled: boolean}
 
+// Notes are keyed by hex(Q), their taproot output key, as a real mint
+// keys them: a bearer k1's Q is its hashlock note's, and a disclosed
+// reference is a cp1 or a bearer note's 64-hex `h` (its short form).
+const noteIdOfK1 = (k1: string): string => bearerNoteIdOfPreimage(k1)
+const noteIdOfRef = (value: string): string | null => {
+  const q = decodeCp1(value)
+  if (q) return bytesToHex(q)
+  return /^[0-9a-f]{64}$/i.test(value) ? bearerNoteIdOfHash(value) : null
+}
+
 // A minimal in-memory LUD-25 SERVICE: just enough of LUD-03/06/17/21/25 to
-// drive this wallet's own protocol orchestration. Notes are keyed by
-// sha256(k1) throughout, exactly as a real SERVICE must - it never learns
-// the raw secret of a rotated/split/merged note, only the hash the wallet
-// discloses as h/h2.
+// drive this wallet's own protocol orchestration. It never learns the raw
+// secret of a rotated/split/merged note, only the reference the wallet
+// discloses as p1/p2.
 class MockMint {
   private notes = new Map<string, Note>()
   // hashes of notes once outstanding but since burned (rotate/split/merge
@@ -96,11 +107,11 @@ class MockMint {
   rotateFails = false
 
   seed(k1: string, amountMsat: number): void {
-    this.notes.set(hashK1(k1), {amountMsat, pending: false})
+    this.notes.set(noteIdOfK1(k1), {amountMsat, pending: false})
   }
 
   isOutstanding(k1: string): boolean {
-    return this.notes.has(hashK1(k1))
+    return this.notes.has(noteIdOfK1(k1))
   }
 
   // Simulates paying an invoice. Current mint invoices are always keyed by
@@ -111,9 +122,8 @@ class MockMint {
     if (!invoice) throw new Error('no such invoice')
     invoice.settled = true
     const noteHash =
-      invoice.comment && /^[0-9a-f]{64}$/i.test(invoice.comment)
-        ? invoice.comment.toLowerCase()
-        : hashK1(invoice.preimage)
+      (invoice.comment && noteIdOfRef(invoice.comment)) ??
+      noteIdOfK1(invoice.preimage)
     this.notes.set(noteHash, {
       amountMsat: invoice.amountMsat,
       pending: false
@@ -190,9 +200,9 @@ class MockMint {
       const comment = params.get('comment') ?? undefined
       if (
         url.pathname === '/pay-comment/cb' &&
-        (!comment || !/^[0-9a-f]{64}$/i.test(comment))
+        (!comment || noteIdOfRef(comment) === null)
       ) {
-        return this.error('comment must be 64 hex characters')
+        return this.error('comment must be a cp1 or 64 hex characters')
       }
       const id = String(this.invoiceCounter++)
       this.invoices.set(id, {
@@ -260,9 +270,9 @@ class MockMint {
 
     if (url.pathname === '/w') {
       const k1 = params.get('k1')
-      const requestedHash = params.get('h')
+      const requestedHash = params.get('p')
       if (!k1 && !requestedHash) return this.error('missing k1')
-      const hash = requestedHash ?? hashK1(k1!)
+      const hash = requestedHash ? noteIdOfRef(requestedHash) : noteIdOfK1(k1!)
       const note = this.notes.get(hash)
       if (!note) {
         return this.error(
@@ -287,11 +297,13 @@ class MockMint {
       const k1s = params.getAll('k1')
       const pr = params.get('pr')
       const amount = params.get('amount')
-      const h = params.get('h')
-      const h2 = params.get('h2')
+      const p1 = params.get('p1')
+      const p2 = params.get('p2')
+      const h = p1 ? noteIdOfRef(p1) : null
+      const h2 = p2 ? noteIdOfRef(p2) : null
 
       if (k1s.length === 0) return this.error('missing k1')
-      const hashes = k1s.map(hashK1)
+      const hashes = k1s.map(noteIdOfK1)
       const notes = hashes.map(hash => this.notes.get(hash))
       if (notes.some(n => !n)) return this.error('not found')
       if (notes.some(n => n!.pending)) return this.error('pending')
@@ -735,7 +747,7 @@ describe('receiveNote surfaces a definitive spent/unknown report', () => {
 })
 
 describe('service-response sanity checks', () => {
-  it('sends the same mint output as mandatory comment and additive h, and parses receipt fields', async () => {
+  it('sends a bearer mint output as its cp1 comment, and parses receipt fields', async () => {
     const h = 'ab'.repeat(32)
     let requested: URL | null = null
     vi.stubGlobal('fetch', (async (input: string | URL) => {
@@ -751,10 +763,12 @@ describe('service-response sanity checks', () => {
     }) as typeof fetch)
 
     const result = await requestInvoice(PAY_CALLBACK, 100_000, h)
-    expect(requested!.searchParams.get('comment')).toBe(h)
-    expect(requested!.searchParams.get('h')).toBe(h)
+    expect(requested!.searchParams.get('comment')).toBe(
+      encodeCp1(hexToBytes(bearerNoteIdOfHash(h)))
+    )
+    expect(requested!.searchParams.get('h')).toBeNull()
     expect(result.mintToHash).toBe(true)
-    expect(result.mint).toEqual({h, amountMsat: 99000})
+    expect(result.mint).toEqual({h: bearerNoteIdOfHash(h), amountMsat: 99000})
   })
 
   it('requestInvoice rejects an invoice for a different amount than requested', async () => {

@@ -1,9 +1,14 @@
 import {lnurlFetch} from './net'
 import type {MintFee} from './fees'
 import {parseMintFee, withinMintFeeBand} from './fees'
-import {verifyNoteSignatureHash} from './signature'
+import {verifyNoteSignatureForKey} from './signature'
 import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
-import {isPubkeyCommitment, decodeCp1, decodeAnyCs1} from './recoverableNotes'
+import {
+  isPubkeyCommitment,
+  decodeCp1,
+  isCs1WithAmount
+} from './recoverableNotes'
+import {noteRef, shortNoteRef} from './spend'
 import type {InternalTransferHint} from './internalTransfer'
 import {parseInternalTransferHint} from './internalTransfer'
 import {bytesToHex} from '@noble/hashes/utils.js'
@@ -65,31 +70,25 @@ export const fetchPayRequest = async (url: string): Promise<PayRequestInfo> => {
 }
 
 export type BoundMintCommitment = {
+  // hex(Q) of the note the receipt credits
   h: string
   amountMsat: number
+  // the mint's cs1 certificate for that note
   signature?: string
 }
 
 // This bound-mint-receipt extension's own `h`/`sig` fields name the same
-// kind of thing LUD-25 Part 2's p1/p2/sig do elsewhere - either a legacy
-// hex32 value or a bech32m one (cp1/cs1 respectively) - normalized to
-// plain hex here, at the boundary, so everything downstream (equality
-// checks, verifyNoteSignatureHash) works uniformly regardless of which
-// the mint actually sent.
+// kind of thing p1/p2/sig do elsewhere - a note reference (a cp1, or a
+// bearer note's hex h short form) and a cs1. The reference is normalized to
+// the note's hex(Q) here, at the boundary, so equality checks and
+// certificate verification work on the note itself whichever form was sent.
 const normalizeNoteId = (value: string): string | null => {
-  const trimmed = value.trim().toLowerCase()
-  if (/^[0-9a-f]{64}$/.test(trimmed)) return trimmed
-  const decoded = decodeCp1(trimmed)
+  const decoded = decodeCp1(noteRef(value.trim().toLowerCase()))
   return decoded ? bytesToHex(decoded) : null
 }
 
-const normalizeSignature = (value: string): string | null => {
-  if (/^[0-9a-f]{130}$/i.test(value)) return value.toLowerCase()
-  // either cs1 wire shape, current or legacy - see recoverableNotes.ts's
-  // decodeAnyCs1
-  const decoded = decodeAnyCs1(value)
-  return decoded ? bytesToHex(decoded) : null
-}
+const normalizeSignature = (value: string): string | null =>
+  isCs1WithAmount(value) ? value.trim() : null
 
 const parseBoundMintCommitment = (
   value: unknown
@@ -135,32 +134,28 @@ export type InvoiceResult = {
   mint?: BoundMintCommitment
 }
 
-// `outputHash` names a current LUD-25 mint output - either a legacy hash
-// (sent as the mandatory LUD-12 comment, and repeated as the additive `h`
-// extension - `/p/cb` itself only ever reads `comment`; `h` is this
-// wallet's own long-standing redundant belt-and-braces, harmless either
-// way) or, per Part 2's Wallet-side ownership proofs, a pubkey commitment
-// (`cp1<pk>`, or a taproot `cp1<Q>`) sent as `comment` alone (the mint's
-// `/p/cb` has no separate `p` param - unlike the informational GET/mutation
-// callback, minting never had a second field to alias). The parameter is
-// omitted entirely for an
+// `outputHash` names a current LUD-25 mint output - a `cp1<Q>`, or a bearer
+// note's hex `h` - sent as the mandatory LUD-12 `comment`: a bearer note as
+// its hashlock note's `cp1<Q>` (see noteRef), or with requestInvoiceShort
+// as its 64-hex short form. The parameter is omitted entirely for an
 // ordinary Lightning payment, or for minting to a cx1-registered address
 // via its own callback (which already carries `?username=`) and letting
 // the mint auto-derive the next key itself.
 export const requestInvoice = async (
   payCallback: string,
   amountMsat: number,
-  outputHash?: string
+  outputHash?: string,
+  short = false
 ): Promise<InvoiceResult> => {
   const cbUrl = new URL(payCallback)
   cbUrl.searchParams.set('amount', String(amountMsat))
   if (outputHash !== undefined) {
     const value = outputHash.trim().toLowerCase()
-    if (isPubkeyCommitment(value)) {
-      cbUrl.searchParams.set('comment', value)
-    } else if (isPreimage(value)) {
-      cbUrl.searchParams.set('comment', value)
-      cbUrl.searchParams.set('h', value)
+    if (isPubkeyCommitment(value) || isPreimage(value)) {
+      cbUrl.searchParams.set(
+        'comment',
+        short ? shortNoteRef(value) : noteRef(value)
+      )
     } else {
       throw new Error(
         'An output hash must be 32 bytes of hex, or a cp1 output key - no invoice was requested.'
@@ -189,6 +184,15 @@ export const requestInvoice = async (
     mint: parseBoundMintCommitment(body.mint)
   }
 }
+
+// requestInvoice, sending a bearer note's h as its 64-hex short form
+// instead of its cp1
+export const requestInvoiceShort = (
+  payCallback: string,
+  amountMsat: number,
+  outputHash: string
+): Promise<InvoiceResult> =>
+  requestInvoice(payCallback, amountMsat, outputHash, true)
 
 export type VerifyResult = {
   settled: boolean
@@ -277,7 +281,7 @@ export const validateBoundMintReceipt = (
   }
   if (
     !receipt.signature ||
-    !verifyNoteSignatureHash(
+    !verifyNoteSignatureForKey(
       receipt.h,
       receipt.amountMsat,
       receipt.signature,

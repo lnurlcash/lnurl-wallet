@@ -33,7 +33,7 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 // signs - NOT the raw outcome string. Cross-checked against the published
 // spec text; not yet cross-checked against a real external oracle
 // implementation's own test vectors (unlike cp1/cw1's own
-// ct1Interop.test.ts, which has real Bitcoin Core on the other end) - if a
+// spendInterop.test.ts, which has real Bitcoin Core on the other end) - if a
 // real-world oracle's attestation ever fails to verify here, this constant
 // is the first thing to re-check.
 const ATTESTATION_TAG = 'DLC/oracle/attestation/v0'

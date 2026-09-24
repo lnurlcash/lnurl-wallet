@@ -24,7 +24,7 @@ import {
 const MINT = 'mint.example.com'
 const AMOUNT_MSAT = 20_000_000
 const URL_TEMPLATE = 'https://mint.example.com/w'
-// same trick as ct1Interop.test.ts's own betlocker vector: a fixed,
+// same trick as spendInterop.test.ts's own betlocker vector: a fixed,
 // UTC-suffixed, far-future date string - dateToLocktime just needs
 // anything Date-parseable, and 'Z' keeps this reproducible regardless of
 // the test runner's own local timezone

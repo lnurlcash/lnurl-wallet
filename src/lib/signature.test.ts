@@ -13,126 +13,94 @@ import {
   verifyNoteSignature,
   verifyNoteSignatureHash
 } from './signature'
-import {keyPathSighash} from './spend'
+import {bearerNoteIdOfPreimage, keyPathSighash} from './spend'
 
 const DOMAIN = 'mint.example'
 import {
   encodeCk1,
   encodeCp1,
-  encodeCs1,
-  encodeCs1WithAmount
+  encodeCs1WithAmount,
+  decodeCs1WithAmount
 } from './recoverableNotes'
 
 const K1 = 'a'.repeat(64)
 
-// signed the same way LUD-13 signs its auth seed phrase - the standard
-// Lightning `signmessage` double-sha256 wrapping, over a message that
-// embeds the amount as decimal ASCII (not binary) and sha256(k1) as hex
-// (not raw bytes)
+// a mint's cs1 certificate for the bearer note K1 spends: the standard
+// Lightning `signmessage` double-sha256 wrapping over
+// "LNURLcash:<amount_msat>:<hex(Q)>", encoded r || s || recovery-id
 const signAsMint = (
   priv: Uint8Array,
   k1: string,
   amountMsat: number
 ): string => {
-  const k1Hash = bytesToHex(sha256(hexToBytes(k1)))
-  const message = utf8ToBytes(`LNURLcash:${amountMsat}:${k1Hash}`)
+  const message = utf8ToBytes(
+    `LNURLcash:${amountMsat}:${bearerNoteIdOfPreimage(k1)}`
+  )
   const digest = sha256(
     sha256(
       new Uint8Array([...utf8ToBytes('Lightning Signed Message:'), ...message])
     )
   )
-  // library's 'recovered' format is empirically recovery-id-first (rec ||
-  // r || s) - the spec's wire format is r || s || recovery-id, so reorder.
-  // prehash:false: `digest` is already the final hash a real signer
-  // (lnd/cln's signmessage) signs directly - the default prehash:true
-  // would hash it again, producing a signature nothing downstream (this
-  // wallet's own verifyNoteSignature, or a real mint) could ever recover
-  // against a real signer's key
+  // prehash:false: `digest` is already the final hash a real signer signs;
+  // the library's 'recovered' format is recovery-id first, so reorder
   const libSig = secp256k1.sign(digest, priv, {
     format: 'recovered',
     prehash: false
   })
-  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
+  return encodeCs1WithAmount(
+    amountMsat,
+    new Uint8Array([...libSig.subarray(1), libSig[0]!])
+  )
 }
 
 describe('offline signature verification', () => {
-  it('verifies a signature made per the LUD-25 Lightning-signmessage scheme', () => {
+  it('verifies a cs1 certificate over the note Q', () => {
     const priv = secp256k1.utils.randomSecretKey()
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
     const amountMsat = 21000
-    const sigHex = signAsMint(priv, K1, amountMsat)
+    const cs1 = signAsMint(priv, K1, amountMsat)
 
-    expect(verifyNoteSignature(K1, amountMsat, sigHex, pubHex)).toBe(true)
-    expect(
-      verifyNoteSignatureHash(hashK1(K1), amountMsat, sigHex, pubHex)
-    ).toBe(true)
-    expect(verifyNoteSignature(K1, amountMsat + 1, sigHex, pubHex)).toBe(false)
-    expect(
-      verifyNoteSignature('b'.repeat(64), amountMsat, sigHex, pubHex)
-    ).toBe(false)
+    expect(verifyNoteSignature(K1, amountMsat, cs1, pubHex)).toBe(true)
+    expect(verifyNoteSignatureHash(hashK1(K1), amountMsat, cs1, pubHex)).toBe(
+      true
+    )
+    expect(verifyNoteSignature(K1, amountMsat + 1, cs1, pubHex)).toBe(false)
+    expect(verifyNoteSignature('b'.repeat(64), amountMsat, cs1, pubHex)).toBe(
+      false
+    )
     const otherPub = bytesToHex(
       secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
     )
-    expect(verifyNoteSignature(K1, amountMsat, sigHex, otherPub)).toBe(false)
+    expect(verifyNoteSignature(K1, amountMsat, cs1, otherPub)).toBe(false)
   })
 
-  it('also verifies the recovery-id-leading layout some mints still send', () => {
-    // lnurl-mint used to forward its Lightning node's signmessage RPC
-    // output unreordered (recovery-id || r || s) rather than the spec
-    // text's r || s || recovery-id, and has since fixed that - kept here
-    // as a real-world-interop regression guard in case another
-    // implementation (or a not-yet-updated lnurl-mint) gets it wrong
+  it('rejects a cs1 relabelled with a different amount', () => {
     const priv = secp256k1.utils.randomSecretKey()
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
-    const amountMsat = 6000
-    const k1Hash = bytesToHex(sha256(hexToBytes(K1)))
-    const message = utf8ToBytes(`LNURLcash:${amountMsat}:${k1Hash}`)
-    const digest = sha256(
-      sha256(
-        new Uint8Array([
-          ...utf8ToBytes('Lightning Signed Message:'),
-          ...message
-        ])
-      )
+    const cs1 = signAsMint(priv, K1, 21000)
+    const relabelled = encodeCs1WithAmount(
+      21001,
+      decodeCs1WithAmount(cs1)!.signature
     )
-    const leadingSigHex = bytesToHex(
-      secp256k1.sign(digest, priv, {format: 'recovered', prehash: false})
-    )
-    expect(verifyNoteSignature(K1, amountMsat, leadingSigHex, pubHex)).toBe(
-      true
-    )
+    expect(verifyNoteSignature(K1, 21000, relabelled, pubHex)).toBe(false)
+    expect(verifyNoteSignature(K1, 21001, relabelled, pubHex)).toBe(false)
+  })
+
+  it('rejects a plain-hex signature: only a cs1 is a certificate', () => {
+    const priv = secp256k1.utils.randomSecretKey()
+    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
+    const cs1 = signAsMint(priv, K1, 1000)
+    const hex = bytesToHex(decodeCs1WithAmount(cs1)!.signature)
+    expect(verifyNoteSignature(K1, 1000, hex, pubHex)).toBe(false)
   })
 
   it('rejects garbage signatures without throwing', () => {
     expect(verifyNoteSignature(K1, 1000, 'not-hex', 'ab'.repeat(33))).toBe(
       false
     )
-    // wrong length (not 65 bytes)
     expect(
       verifyNoteSignature(K1, 1000, 'ab'.repeat(10), 'ab'.repeat(33))
     ).toBe(false)
-  })
-
-  it('verifies a cs1-encoded signature exactly the same as its hex form', () => {
-    // SERVICE may disclose sig/sig2 as cs1<...> (bech32m) instead of plain
-    // hex (see requireMutationSignature, which now preserves whichever
-    // shape SERVICE actually sent rather than normalizing it away) -
-    // verification must accept either transparently, dispatched by shape
-    const priv = secp256k1.utils.randomSecretKey()
-    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
-    const amountMsat = 21000
-    const sigHex = signAsMint(priv, K1, amountMsat)
-    const sigCs1 = encodeCs1(hexToBytes(sigHex))
-
-    expect(verifyNoteSignature(K1, amountMsat, sigCs1, pubHex)).toBe(true)
-    expect(
-      verifyNoteSignatureHash(hashK1(K1), amountMsat, sigCs1, pubHex)
-    ).toBe(true)
-    // still correctly rejects a cs1 signature that doesn't actually match
-    const otherPub = bytesToHex(
-      secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
-    )
-    expect(verifyNoteSignature(K1, amountMsat, sigCs1, otherPub)).toBe(false)
   })
 
   it('rejects a malformed k1 without throwing', () => {
@@ -140,38 +108,9 @@ describe('offline signature verification', () => {
     // signed", never an exception escaping into render
     const priv = secp256k1.utils.randomSecretKey()
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
-    const sigHex = signAsMint(priv, K1, 1000)
-    expect(verifyNoteSignature('zz', 1000, sigHex, pubHex)).toBe(false)
-    expect(verifyNoteSignature('a'.repeat(63), 1000, sigHex, pubHex)).toBe(
-      false
-    )
-  })
-
-  it('verifies a cs1-with-amount-encoded signature (25.md "encode amount in offline sig") exactly the same as its hex form', () => {
-    // the CURRENT wire shape - amount folded into cs1's own HRP instead of
-    // needing a separate `amount` alongside it (see recoverableNotes.ts's
-    // encodeCs1WithAmount/decodeAnyCs1) - must verify identically to the
-    // legacy cs1 test above, since the signed digest itself never changed,
-    // only the wire encoding around it
-    const priv = secp256k1.utils.randomSecretKey()
-    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
-    const amountMsat = 21000
-    const sigHex = signAsMint(priv, K1, amountMsat)
-    const sigCs1 = encodeCs1WithAmount(amountMsat, hexToBytes(sigHex))
-
-    expect(verifyNoteSignature(K1, amountMsat, sigCs1, pubHex)).toBe(true)
-    expect(
-      verifyNoteSignatureHash(hashK1(K1), amountMsat, sigCs1, pubHex)
-    ).toBe(true)
-    const relabelled = encodeCs1WithAmount(amountMsat + 1, hexToBytes(sigHex))
-    expect(verifyNoteSignature(K1, amountMsat, relabelled, pubHex)).toBe(false)
-    expect(
-      verifyNoteSignatureHash(hashK1(K1), amountMsat, relabelled, pubHex)
-    ).toBe(false)
-    const otherPub = bytesToHex(
-      secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
-    )
-    expect(verifyNoteSignature(K1, amountMsat, sigCs1, otherPub)).toBe(false)
+    const cs1 = signAsMint(priv, K1, 1000)
+    expect(verifyNoteSignature('zz', 1000, cs1, pubHex)).toBe(false)
+    expect(verifyNoteSignature('a'.repeat(63), 1000, cs1, pubHex)).toBe(false)
   })
 })
 
@@ -240,7 +179,10 @@ describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
       format: 'recovered',
       prehash: false
     })
-    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
+    return encodeCs1WithAmount(
+      amountMsat,
+      new Uint8Array([...libSig.subarray(1), libSig[0]!])
+    )
   }
 
   it('verifies a cp1 note (k1=ck1<sig>) against its recovered pubkey', () => {
@@ -276,7 +218,6 @@ describe('recoverNoteOwnershipPubkey', () => {
     const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     const owner = recoverNoteOwnershipPubkey(ck1, DOMAIN)
-    expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
   })
 
@@ -292,18 +233,19 @@ describe('recoverNoteOwnershipPubkey', () => {
     expect(bytesToHex(ck1Pubkey(ck1)!)).toBe(bytesToHex(pubkeyXOnly))
   })
 
-  it('TODO(deprecated): still reads a ck1 signed over sha256("LNURLcash"), as legacy', () => {
+  it('rejects a ck1 signed over a fixed message instead of the sighash', () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const oldCk1 = encodeCk1(
-      pubkeyXOnly,
-      schnorr.sign(
-        sha256(utf8ToBytes('LNURLcash')),
-        secretKey,
-        new Uint8Array(32)
+    for (const message of [
+      sha256(utf8ToBytes('LNURLcash')),
+      utf8ToBytes('LNURLcash')
+    ]) {
+      const oldCk1 = encodeCk1(
+        pubkeyXOnly,
+        schnorr.sign(message, secretKey, new Uint8Array(32))
       )
-    )
-    expect(recoverNoteOwnershipPubkey(oldCk1, DOMAIN)?.legacy).toBe(true)
+      expect(recoverNoteOwnershipPubkey(oldCk1, DOMAIN)).toBeNull()
+    }
   })
 
   it('rejects a ck1 whose embedded pubkey does not match its signature', () => {
@@ -321,63 +263,14 @@ describe('recoverNoteOwnershipPubkey', () => {
     expect(recoverNoteOwnershipPubkey(K1, DOMAIN)).toBeNull()
   })
 
-  // TODO(deprecated): the OLD bare recoverable-ECDSA ck1 shape (no embedded
-  // pubkey) still decodes via ecrecover, flagged legacy:true so a caller
-  // (BearerCard.tsx) can warn the holder and prompt a rotate
-  it('TODO(deprecated): still recovers a pubkey from the OLD recoverable-ECDSA ck1 shape', () => {
-    const priv = secp256k1.utils.randomSecretKey()
-    const expectedPubkey = secp256k1.getPublicKey(priv, true).subarray(1)
-    const message = utf8ToBytes('LNURLcash')
-    const digest = sha256(
-      sha256(
-        new Uint8Array([
-          ...utf8ToBytes('Lightning Signed Message:'),
-          ...message
-        ])
-      )
-    )
-    const libSig = secp256k1.sign(digest, priv, {
-      format: 'recovered',
-      prehash: false
-    })
-    const legacySignature = new Uint8Array([...libSig.subarray(1), libSig[0]!])
+  it('rejects the pre-schnorr 65-byte ck1 shape', () => {
     const legacyCk1 = bech32m.encode(
       'ck',
-      bech32m.toWords(legacySignature),
+      bech32m.toWords(new Uint8Array(65).fill(0xef)),
       false
     )
-    const owner = recoverNoteOwnershipPubkey(legacyCk1, DOMAIN)
-    expect(owner?.legacy).toBe(true)
-    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
-  })
-
-  // TODO(deprecated): a ck1 signed before the "32-byte hashed message"
-  // change (2026-09-16, ../luds commit 6de59b2) - same current pk||sig
-  // shape, but Sign(sk, "LNURLcash") over the raw 9-byte string instead of
-  // Sign(sk, sha256("LNURLcash")). WALLET never produces this anymore
-  // (signNoteOwnership always signs the digest); this only covers reading
-  // an already-minted note back. Remove this test alongside the fallback
-  // branch in recoverNoteOwnershipPubkey once no such notes are expected
-  // to remain in the wild.
-  it('TODO(deprecated): still recovers a pubkey from a ck1 signed over the OLD raw (un-hashed) message', () => {
-    const secretKey = schnorr.utils.randomSecretKey()
-    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const rawMessageSignature = schnorr.sign(
-      utf8ToBytes('LNURLcash'),
-      secretKey,
-      new Uint8Array(32)
-    )
-    const oldCk1 = encodeCk1(pubkeyXOnly, rawMessageSignature)
-    const owner = recoverNoteOwnershipPubkey(oldCk1, DOMAIN)
-    expect(owner?.legacy).toBe(true)
-    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
-  })
-
-  it('prefers the current digest scheme when a signature happens to be ambiguous - a fresh signNoteOwnership output never falls into the legacy branch', () => {
-    const secretKey = schnorr.utils.randomSecretKey()
-    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
-    const ck1 = encodeCk1(pubkeyXOnly, signature)
-    expect(recoverNoteOwnershipPubkey(ck1, DOMAIN)?.legacy).toBe(false)
+    expect(recoverNoteOwnershipPubkey(legacyCk1, DOMAIN)).toBeNull()
+    expect(ck1Pubkey(legacyCk1)).toBeNull()
   })
 })
 

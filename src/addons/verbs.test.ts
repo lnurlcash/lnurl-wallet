@@ -6,7 +6,9 @@ import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 
 import {buildTicketLabel, VERBS, type VerbContext} from './verbs'
 import {parseLabelTags} from '../noteTags'
-import {encodeCp1} from '../lnurlcash'
+import {encodeCp1, encodeCs1WithAmount} from '../lnurlcash'
+
+const CS1 = encodeCs1WithAmount(1000, new Uint8Array(65))
 import type {Bearer} from '../storage'
 
 const RAFFLE = {id: 'raffle', name: 'Raffle Tickets'}
@@ -87,8 +89,8 @@ describe("VERBS['note.split']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: '00'.repeat(65),
-            sig2: '00'.repeat(65)
+            sig: CS1,
+            sig2: CS1
           })
         } as Response
       }
@@ -354,7 +356,10 @@ describe("VERBS['note.lockToPubkey']", () => {
       format: 'recovered',
       prehash: false
     })
-    return bytesToHex(new Uint8Array([...sig.subarray(1), sig[0]!]))
+    return encodeCs1WithAmount(
+      amountMsat,
+      new Uint8Array([...sig.subarray(1), sig[0]!])
+    )
   }
 
   const makeBearer = (over: Partial<Bearer> = {}): Bearer => ({
@@ -427,19 +432,6 @@ describe("VERBS['note.lockToPubkey']", () => {
     expect(markedSpent).toEqual(['source'])
   })
 
-  it("an old kind: 'ct1' argument still locks to cp1<Q> - every note is one kind", async () => {
-    // a taproot output key with script leaves is an ordinary cp1 note: the
-    // mint accepts its key path and every leaf alike, so there is nothing
-    // left to choose
-    const seen = stubMint()
-    const {ctx} = makeCtx(makeBearer())
-    await VERBS['note.lockToPubkey']!(
-      {note: 'source', pubkeyHex: TARGET_HEX, kind: 'ct1'},
-      ctx
-    )
-    expect(seen[0]!.get('p1')).toBe(encodeCp1(hexToBytes(TARGET_HEX)))
-  })
-
   it('a mint that refuses the lock burns nothing and keeps the note', async () => {
     // the lock must fail cleanly and leave the wallet's note untouched
     vi.stubGlobal(
@@ -475,7 +467,10 @@ describe("VERBS['note.lockToPubkey']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: bytesToHex(new Uint8Array([...sig.subarray(1), sig[0]!]))
+            sig: encodeCs1WithAmount(
+              AMOUNT,
+              new Uint8Array([...sig.subarray(1), sig[0]!])
+            )
           })
         } as Response
       })

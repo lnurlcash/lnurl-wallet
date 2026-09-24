@@ -346,7 +346,6 @@ describe('LUD-25 Test Vectors - vector 3 (ck1 key-path spend)', () => {
       'ck14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6g8wlplczy60g4e5wp3dyyz6xr07fpse9flp0fy50cg4a4w64av6eprdctjlan6cu9dt38re9nu08etk5w3dmknlhuxzwcm3ycjysw3c9dpmpy'
     )
     const owner = recoverNoteOwnershipPubkey(ck1, DOMAIN)
-    expect(owner?.legacy).toBe(false)
     expect(owner && bytesToHex(owner.pubkeyXOnly)).toBe(PK)
     expect(recoverNoteOwnershipPubkey(ck1, 'cash.example.com')).toBeNull()
   })
@@ -452,9 +451,10 @@ describe('LUD-25 Test Vectors - vector 4 (cs1 mint offline certificate)', () => 
     )
     // the kit's own real verifier, checked against this vector's own
     // mintPubkey - not a re-implementation, the actual shipped code
+    // only the cs1 is a certificate; its bare 65 bytes are not
     expect(
       verifyNoteSignatureForKey(PK, 1000, bytesToHex(sig65), MINT_PUBKEY)
-    ).toBe(true)
+    ).toBe(false)
     expect(verifyNoteSignatureForKey(PK, 1000, cs1, MINT_PUBKEY)).toBe(true)
   })
 
@@ -471,23 +471,25 @@ describe('LUD-25 Test Vectors - vector 4 (cs1 mint offline certificate)', () => 
     )
     expect(
       verifyNoteSignatureForKey(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
-    ).toBe(true)
+    ).toBe(false)
     expect(verifyNoteSignatureForKey(PK, 21000000, cs1, MINT_PUBKEY)).toBe(true)
   })
 
   it('a certificate for one amount does not verify against a different amount (message binds amount_msat)', () => {
     const {sig65} = buildCs1(1000)
+    // the same signature relabelled with the other amount
+    const relabelled = encodeCs1WithAmount(21000000, sig65)
     expect(
-      verifyNoteSignatureForKey(PK, 21000000, bytesToHex(sig65), MINT_PUBKEY)
+      verifyNoteSignatureForKey(PK, 21000000, relabelled, MINT_PUBKEY)
     ).toBe(false)
   })
 
   it('a certificate does not verify against a different pk (message binds pk)', () => {
-    const {sig65} = buildCs1(1000)
+    const {cs1} = buildCs1(1000)
     const otherPk =
       'f0c1ea9aede945b9cf84f3bf8df27ac65154a937e4d10cb8a5865df0583b1083' // pk_1 from vector 1
-    expect(
-      verifyNoteSignatureForKey(otherPk, 1000, bytesToHex(sig65), MINT_PUBKEY)
-    ).toBe(false)
+    expect(verifyNoteSignatureForKey(otherPk, 1000, cs1, MINT_PUBKEY)).toBe(
+      false
+    )
   })
 })

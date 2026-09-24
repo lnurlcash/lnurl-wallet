@@ -25,6 +25,8 @@ import {
   dequeuePendingDeviceOp
 } from './deviceQueue'
 import {buildNoteUrl} from './lnurlcash'
+import {bearerNoteIdOfHash, bearerNoteIdOfPreimage} from './lib/spend'
+import {decodeCp1} from './lib/recoverableNotes'
 
 // Combines mockMint.test.ts's mock-mint pattern (a fake fetch) with
 // device.test.ts's fake-transport DeviceClient (a fake device), exercising
@@ -50,6 +52,16 @@ type MintNote = {amountMsat: number; pending: boolean}
 // trimmed version of mockMint.test.ts's MockMint - just the withdraw
 // endpoint + callback, nothing payRequest/invoice-related, since
 // deviceOrchestration.ts never touches those directly
+// The mock mint keys notes by hex(Q), as a real mint does: a bearer k1's Q
+// is its hashlock note's, and a disclosed reference is a cp1 or a bearer
+// note's 64-hex h (its short form).
+const noteIdOfK1 = (k1: string): string => bearerNoteIdOfPreimage(k1)
+const noteIdOfRef = (value: string): string | null => {
+  const q = decodeCp1(value)
+  if (q) return bytesToHex(q)
+  return /^[0-9a-f]{64}$/i.test(value) ? bearerNoteIdOfHash(value) : null
+}
+
 class MockMint {
   private notes = new Map<string, MintNote>()
   rejectNextCallback = false
@@ -60,11 +72,11 @@ class MockMint {
   dropNextCallback = false
 
   seed(k1: string, amountMsat: number): void {
-    this.notes.set(hashK1(k1), {amountMsat, pending: false})
+    this.notes.set(noteIdOfK1(k1), {amountMsat, pending: false})
   }
 
   isOutstanding(k1: string): boolean {
-    return this.notes.has(hashK1(k1))
+    return this.notes.has(noteIdOfK1(k1))
   }
 
   private respond(body: object): Promise<Response> {
@@ -82,10 +94,12 @@ class MockMint {
 
     if (url.pathname === '/w') {
       const k1 = params.get('k1')
-      const requestedHash = params.get('h')
+      const requestedHash = params.get('p')
       if (!k1 && !requestedHash)
         return this.respond({status: 'ERROR', reason: 'missing k1'})
-      const note = this.notes.get(requestedHash ?? hashK1(k1!))
+      const note = this.notes.get(
+        requestedHash ? noteIdOfRef(requestedHash) : noteIdOfK1(k1!)
+      )
       if (!note) return this.respond({status: 'ERROR', reason: 'not found'})
       return this.respond({
         tag: 'withdrawRequest',
@@ -105,12 +119,14 @@ class MockMint {
       const k1s = params.getAll('k1')
       const pr = params.get('pr')
       const amount = params.get('amount')
-      const h = params.get('h')
-      const h2 = params.get('h2')
+      const p1 = params.get('p1')
+      const p2 = params.get('p2')
+      const h = p1 ? noteIdOfRef(p1) : null
+      const h2 = p2 ? noteIdOfRef(p2) : null
       if (k1s.length === 0) {
         return this.respond({status: 'ERROR', reason: 'missing k1'})
       }
-      const hashes = k1s.map(hashK1)
+      const hashes = k1s.map(noteIdOfK1)
       const notes = hashes.map(hash => this.notes.get(hash))
       if (notes.some(n => !n)) {
         return this.respond({status: 'ERROR', reason: 'not found'})

@@ -2,7 +2,6 @@ import {hexToBytes} from '@noble/hashes/utils.js'
 import {requireNoteK1, serverOf, withNewK1} from './urls'
 import {
   MINT_PUBKEY_PATTERN,
-  NOTE_SIGNATURE_PATTERN,
   hashK1,
   parseMintKey,
   requireMutationSignature,
@@ -24,10 +23,16 @@ import {
   isCk1,
   isCw1,
   isPubkeyCommitment,
-  isAnyCs1,
+  isCs1WithAmount,
   encodeCp1,
   outputKeyOfCw1
 } from './recoverableNotes'
+import {bearerNoteIdOfPreimage, noteRef, shortNoteRef} from './spend'
+
+// How a bearer note's h goes on the wire: its cp1 by default, or with the
+// `…Short` variants of the functions below, the 64-hex short form.
+const refOf = (value: string, short: boolean): string =>
+  short ? shortNoteRef(value) : noteRef(value)
 
 export type WithdrawRequestInfo = {
   tag: 'withdrawRequest'
@@ -52,10 +57,7 @@ export type HashWithdrawRequestInfo = Omit<WithdrawRequestInfo, 'k1'>
 
 const parseOptionalSig = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined
-  if (NOTE_SIGNATURE_PATTERN.test(value)) return value.toLowerCase()
-  // either cs1 wire shape, current or legacy - see recoverableNotes.ts's
-  // isAnyCs1
-  return isAnyCs1(value) ? value.trim() : undefined
+  return isCs1WithAmount(value) ? value.trim() : undefined
 }
 
 const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
@@ -85,24 +87,17 @@ const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   } as HashWithdrawRequestInfo
 }
 
-// the informational GET's note-reference field: bare `h`/`p` (never
-// `p1`/`p2` - that renaming is /w/cb's own, a different endpoint, see
-// callbackRequest's siblings below). `h` is still the legacy field name
-// SERVICE aliases forever, so a plain hash keeps using it unchanged
-// (works on every mint, old or new); `p` is LUD-25 Part 2's canonical name
-// for a cp1 pubkey commitment, meaningful only to a Part-2-aware mint
-// anyway - there's no compatibility reason to send a cp1 value under the
-// old name.
-const requestNoteInfoByField = async (
+// the informational GET's note reference, `p`: a cp1, or a bearer note's
+// 64-hex `h` (its short form)
+const requestNoteInfoByRef = async (
   url: string,
-  field: 'h' | 'p',
   value: string
 ): Promise<HashWithdrawRequestInfo> => {
   const lookupUrl = new URL(url)
   lookupUrl.searchParams.delete('k1')
   lookupUrl.searchParams.delete('amount')
   lookupUrl.searchParams.delete('sig')
-  lookupUrl.searchParams.set(field, value)
+  lookupUrl.searchParams.set('p', value)
   const body = await lnurlFetch(lookupUrl)
   if (body.k1 !== undefined) {
     throw new Error('SERVICE returned k1 in a hash-only lookup response.')
@@ -112,12 +107,13 @@ const requestNoteInfoByField = async (
 
 const requestNoteInfoByHash = async (
   url: string,
-  h: string
+  h: string,
+  short = false
 ): Promise<HashWithdrawRequestInfo> => {
   if (!/^[0-9a-f]{64}$/i.test(h)) {
     throw new Error('A note hash must be 32 bytes of hex.')
   }
-  return requestNoteInfoByField(url, 'h', h.toLowerCase())
+  return requestNoteInfoByRef(url, refOf(h, short))
 }
 
 const requestNoteInfoByPubkey = async (
@@ -130,7 +126,7 @@ const requestNoteInfoByPubkey = async (
   if (!isPubkeyCommitment(pubkeyValue)) {
     throw new Error('A note pubkey must be a valid cp1 value.')
   }
-  return requestNoteInfoByField(url, 'p', pubkeyValue)
+  return requestNoteInfoByRef(url, pubkeyValue)
 }
 
 // For device-held notes the companion already has h in public recovery
@@ -138,14 +134,21 @@ const requestNoteInfoByPubkey = async (
 // keys.  No raw-k1 compatibility fallback is possible or attempted here.
 export const fetchNoteInfoByHash = async (
   url: string,
-  h: string
+  h: string,
+  short = false
 ): Promise<HashWithdrawRequestInfo> => {
   try {
-    return await requestNoteInfoByHash(url, h)
+    return await requestNoteInfoByHash(url, h, short)
   } catch (err) {
     throw classifyNoteError(err as Error)
   }
 }
+
+// fetchNoteInfoByHash, sending `h` as its 64-hex short form instead of its cp1
+export const fetchNoteInfoByHashShort = (
+  url: string,
+  h: string
+): Promise<HashWithdrawRequestInfo> => fetchNoteInfoByHash(url, h, true)
 
 // LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a note
 // up by its public commitment, never a secret (its ck1 or cw1). One of
@@ -166,11 +169,9 @@ export const fetchNoteInfoByPubkey = async (
 }
 
 // The informational GET (LUD-03 step 1) never burns, rotates or alters the
-// note.  Prefer LUD-25's h=hex(sha256(k1)) lookup so merely checking value and
-// signing keys does not expose the bearer secret.  Fall back to raw k1 only
-// when an older SERVICE explicitly reports that k1 is the missing/required
-// parameter.  Unknown/spent replies and transport failures never trigger a
-// secret-revealing retry.
+// note. Every note is looked up by its public Q (`?p=cp1<Q>`, 25.md's
+// Checking a note without exposing it), derived locally from its spend, so
+// merely checking value and signing keys never sends the spend itself.
 export const fetchNoteInfo = async (
   url: string
 ): Promise<WithdrawRequestInfo> => {
@@ -183,13 +184,7 @@ export const fetchNoteInfo = async (
   const rawUrl = new URL(url)
   rawUrl.searchParams.delete('sig')
 
-  // LUD-25 Part 2: a ck1 note is looked up by its PUBLIC commitment
-  // (p=cp1<pk>), recovered locally from the ck1 signature itself - never
-  // by sending the ck1 secret to an informational GET, for the same
-  // privacy reason a legacy note is looked up by hash rather than raw k1.
-  // No raw-k1-style compatibility fallback exists for this path: a mint
-  // that doesn't understand cp1/p at all doesn't support this note kind
-  // regardless of field name.
+  // a ck1 carries its note's Q
   if (isCk1(queried)) {
     const pubkey = ck1Pubkey(queried)
     if (!pubkey) {
@@ -225,35 +220,15 @@ export const fetchNoteInfo = async (
     return {...info, k1: queried}
   }
 
+  // a bearer note's hex preimage (k1 short form) determines its Q
+  let bearerCp1: string
   try {
-    const info = await requestNoteInfoByHash(rawUrl.toString(), hashK1(queried))
-    return {...info, k1: queried}
-  } catch (err) {
-    const missingK1 =
-      err instanceof ServiceError &&
-      /(?:missing|required|specify).{0,40}\bk1\b|\bk1\b.{0,40}(?:missing|required)/i.test(
-        err.reason
-      )
-    if (!missingK1) throw classifyNoteError(err as Error)
+    bearerCp1 = encodeCp1(hexToBytes(bearerNoteIdOfPreimage(queried)))
+  } catch {
+    throw new Error("This note's k1 is not a valid spend.")
   }
-  let body: any
-  try {
-    body = await lnurlFetch(rawUrl)
-  } catch (fallbackError) {
-    throw classifyNoteError(fallbackError as Error)
-  }
-  // A raw compatibility response MUST echo the actual bearer secret, never a
-  // derived/opaque id.  The hash response omits it; restore the wallet's own
-  // already-known value only in the local return object for existing callers.
-  if (typeof body.k1 !== 'string' || body.k1.toLowerCase() !== queried) {
-    throw new Error(
-      "Service echoed back a different k1 than queried - the note may have been redeemed elsewhere, or the service isn't spec-compliant."
-    )
-  }
-  return {
-    ...parseNoteLookupBody(body),
-    k1: queried
-  } as WithdrawRequestInfo
+  const info = await fetchNoteInfoByPubkey(rawUrl.toString(), bearerCp1)
+  return {...info, k1: queried}
 }
 
 // after an AmbiguousMutationError: did the burn the request asked for
@@ -467,25 +442,6 @@ export const meltNote = async (
 
 export type HashedMutationResult = {signature?: string}
 
-// LUD-25 Part 2 renamed /w/cb's h/h2 to p1/p2 - h/h2 are still accepted
-// forever as the old names (SERVICE aliases them), so a plain hash keeps
-// being sent that way unchanged; a note's output key (cp1, see
-// recoverableNotes.ts) is sent as
-// p1/p2 instead, the current canonical name and the only one a Part-2
-// mint is guaranteed to recognize anyway. Dispatched per-field by the
-// value's own shape, same as every other dual-mode field in this module -
-// never a version flag.
-const OUTPUT_FIELD_NAMES: Record<'1' | '2', {legacy: string; current: string}> =
-  {
-    '1': {legacy: 'h', current: 'p1'},
-    '2': {legacy: 'h2', current: 'p2'}
-  }
-
-const outputFieldName = (value: string, suffix: '1' | '2'): string =>
-  isPubkeyCommitment(value)
-    ? OUTPUT_FIELD_NAMES[suffix].current
-    : OUTPUT_FIELD_NAMES[suffix].legacy
-
 // Part 2 public-key outputs must be certified. A plain hash output is
 // deliberately unsigned: there is no public note identifier to certify
 // without disclosing its bearer secret. If an older SERVICE still supplies a
@@ -507,11 +463,12 @@ const mutationSignature = (
 export const rotateNoteWithHash = async (
   callback: string,
   k1: string,
-  h: string
+  h: string,
+  short = false
 ): Promise<HashedMutationResult> => {
   const body = await callbackRequest(callback, [
     ['k1', k1],
-    [outputFieldName(h, '1'), h]
+    ['p1', refOf(h, short)]
   ])
   const signature = mutationSignature(body, 'sig', h)
   return signature === undefined ? {} : {signature}
@@ -527,13 +484,14 @@ export const splitNoteWithHash = async (
   k1s: string[],
   amountMsat: number,
   h: string,
-  h2: string
+  h2: string,
+  short = false
 ): Promise<HashedSplitResult> => {
   const body = await callbackRequest(callback, [
     ...k1s.map((k1): [string, string] => ['k1', k1]),
     ['amount', String(amountMsat)],
-    [outputFieldName(h, '1'), h],
-    [outputFieldName(h2, '2'), h2]
+    ['p1', refOf(h, short)],
+    ['p2', refOf(h2, short)]
   ])
   const signature = mutationSignature(body, 'sig', h)
   const changeSignature = mutationSignature(body, 'sig2', h2)
@@ -546,24 +504,48 @@ export const splitNoteWithHash = async (
 export const mergeNotesWithHash = async (
   callback: string,
   k1s: string[],
-  h: string
+  h: string,
+  short = false
 ): Promise<HashedMutationResult> => {
   const body = await callbackRequest(callback, [
     ...k1s.map((k1): [string, string] => ['k1', k1]),
-    [outputFieldName(h, '1'), h]
+    ['p1', refOf(h, short)]
   ])
   const signature = mutationSignature(body, 'sig', h)
   return signature === undefined ? {} : {signature}
 }
 
+// The *WithHash mutations above, sending each bearer output's h as its
+// 64-hex short form instead of its cp1.
+export const rotateNoteWithHashShort = (
+  callback: string,
+  k1: string,
+  h: string
+): Promise<HashedMutationResult> => rotateNoteWithHash(callback, k1, h, true)
+
+export const splitNoteWithHashShort = (
+  callback: string,
+  k1s: string[],
+  amountMsat: number,
+  h: string,
+  h2: string
+): Promise<HashedSplitResult> =>
+  splitNoteWithHash(callback, k1s, amountMsat, h, h2, true)
+
+export const mergeNotesWithHashShort = (
+  callback: string,
+  k1s: string[],
+  h: string
+): Promise<HashedMutationResult> => mergeNotesWithHash(callback, k1s, h, true)
+
 export type RotateResult = {k1: string; signature?: string}
 
-// LUD-25 Part 2: an output whose OWN k1 already proves key ownership - ck1
-// directly, or a script-path note's cw1 script-path spend (its leaf's own signature, or
-// for a keyless leaf the mere ability to satisfy it, already establishes
-// the redeemer controls the note) - reissuing it as a legacy preimage on
-// every rotate/split/merge would silently downgrade it back to Part 1
-// forever (a pub/sig note that never survives its first refresh).
+// An output whose OWN k1 already proves key ownership - ck1 directly, or a
+// script-path note's cw1 (its leaf's own signature, or for a keyless leaf
+// the mere ability to satisfy it, already establishes the redeemer controls
+// the note) - reissuing it as a bearer preimage on every rotate/split/merge
+// would silently turn a seed-recoverable key-path note back into a bearer
+// note (one that never survives its first refresh).
 // `isUpgradedSecret` names which input shapes count. `preferPubkey` names
 // whether the note(s) feeding this mutation were themselves one of those
 // shapes; generatePubkeySecret returning null (no Part 2 provider
@@ -587,9 +569,8 @@ export const generateOutputSecret = (
   return generateSecret(domain)
 }
 
-// the value actually disclosed to SERVICE for a freshly generated output -
-// outputFieldName below picks the matching field name (p1/h1, p2/h2) from
-// this same shape
+// the value actually disclosed to SERVICE for a freshly generated output,
+// sent as p1/p2
 export const disclosedValue = (secret: string): string => {
   if (isCk1(secret)) {
     const cp1 = cp1FromCk1(secret)
@@ -632,8 +613,8 @@ export const rotateNote = async (
 
 // The holder-initiated counterpart to rotateNote's own passive "never
 // downgrade" policy (isUpgradedSecret above): rotateNote only ever
-// PRESERVES a note that's already ck1/cw1-shaped, it never turns a plain
-// legacy preimage into one on its own (a silent, surprising upgrade is not
+// PRESERVES a note that's already ck1/cw1-shaped, it never turns a bearer
+// note's preimage into one on its own (a silent, surprising upgrade is not
 // what an ordinary refresh/rotate should do). This is for the explicit
 // "Upgrade" action a holder picks for exactly that (see BearerCard.tsx) -
 // unlike generateOutputSecret's own soft preference, a caller here has

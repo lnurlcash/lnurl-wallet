@@ -18,26 +18,30 @@ import type {MintFee, InvoiceResult} from './lib/index'
 // LUD-25 LNURLcash - bearer assets. Draft spec:
 // https://github.com/lnurl/luds/blob/lnurlcash/25.md
 //
-// A bearer note is an ordinary LUD-03 withdrawRequest link whose k1 *is*
-// the asset. No new endpoint, no new encoding. A GET on the note's LNURL
-// is purely informational (the authoritative value is always
-// maxWithdrawable, never the URL's own `amount`); every mutating op goes
-// to the `callback` from that response:
+// A note is an ordinary LUD-03 withdrawRequest link whose k1 *is* the
+// asset: a spend of the note's taproot output key Q (a ck1, a cw1, or a
+// bearer note's hex preimage, the k1 short form). No new endpoint. A GET on
+// the note's LNURL is purely informational (the authoritative value is
+// always maxWithdrawable, never the URL's own `amount`); every mutating op
+// goes to the `callback` from that response:
 //
-//   callback?k1=X&pr=<bolt11>              melt: X burned, pr (of exactly its value) paid
-//   callback?k1=X&h=<sha256(X')>           rotate: X burned, a note keyed by h minted, same value
-//   callback?k1=X..&amount=<msat>&h&h2     split: one or many k1s burned, notes keyed by h (amount) + h2 (change) minted
-//   callback?k1=X&k1=Y..&h=<sha256(Z)>     merge: all burned, one note keyed by h minted, worth their sum
+//   callback?k1=X&pr=<bolt11>                   melt: X burned, pr (of exactly its value) paid
+//   callback?k1=X&p1=<cp1>                      rotate: X burned, a note of the same value minted at p1
+//   callback?k1=X..&amount=<msat>&p1=<cp1>&p2=<cp1>
+//                                               split: one or many k1s burned, p1 (amount) + p2 (change) minted
+//   callback?k1=X&k1=Y..&p1=<cp1>               merge: all burned, one note worth their sum minted at p1
 //
-// `h`/`h2` are hashes of secrets this wallet generates itself, never
+// `p1`/`p2` are the cp1<Q> of outputs this wallet generates itself, never
 // SERVICE (see generateNoteSecret) - the response carries no new k1, just
-// {"status":"OK"} (plus sig/sig2, see Offline verification below).
+// {"status":"OK"} (plus sig/sig2, see Offline verification below). For a
+// bearer output the lib builds that cp1 from the hashlock note (see
+// noteRef); LUD-25's hex short form, which lets SERVICE build it instead,
+// is only sent through the explicit `…Short` functions.
 //
 // Minting: a LUD-06 payRequest may advertise `withdrawLink` (raw LUD-17 URL
-// of the withdraw endpoint). The current LUD-25 draft profile requires the
-// payRequest to advertise `commentAllowed >= 64`; WALLET generates its own
-// `secret`, sends only `comment=hashK1(secret)` on the invoice request
-// (requestInvoice), and SERVICE credits the note as k1=secret once paid.
+// of the withdraw endpoint) and must advertise `commentAllowed >= 64`;
+// WALLET generates the note itself and sends only its `comment=cp1<Q>` on
+// the invoice request (requestInvoice), and SERVICE credits Q once paid.
 // The Lightning payment preimage is settlement proof, never the new note.
 //
 // A melt's {"status":"OK"} only means the payment is now in flight - the
@@ -77,8 +81,8 @@ configureNetworkGuard(() => {
 //
 // `domain` is the issuing SERVICE's own host (see serverOf) - every call
 // site already has it in scope from the callback/payRequest URL it's about
-// to use. LUD-25 Part 1 defines no derivation of its own (unlike Part 2's
-// cx1 branch below): plain randomness is fully spec-compliant. Wired into
+// to use. LUD-25 defines no derivation for bearer notes (unlike key-path
+// notes' cx1 branch below): plain randomness is fully spec-compliant. Wired into
 // src/lib's rotateNote/splitNote/mergeNotes via configureSecretProvider, so
 // this is the ONLY place in the app that needs to know about cashSecrets.ts.
 export const generateNoteSecret = (domain: string): string =>
@@ -89,9 +93,9 @@ configureSecretProvider(generateNoteSecret)
 // New mint invoices and cross-mint transfers must survive a reload after
 // payment. Unlike an ordinary mutation output, they cannot safely use
 // generateNoteSecret's bare in-memory randomness with nothing recorded: the
-// note SERVICE will credit under sha256(secret) would become permanently
-// unclaimable if a reload wipes this page's component state first. Part 1
-// has no seed-derivation to fall back on (see generateNoteSecret above), so
+// bearer note SERVICE will credit would become permanently unclaimable if a
+// reload wipes this page's component state first. A bearer note has no
+// seed-derivation to fall back on (see generateNoteSecret above), so
 // this persists the plain random secret directly instead - a same-device,
 // same-localStorage guarantee, not a from-seed one (see
 // cashSecrets.ts's recordPendingMintSecret for what that trade buys back).
@@ -101,7 +105,7 @@ export const generateMintSecret = (domain: string): string => {
   return secret
 }
 
-// LUD-25 Part 2 counterpart to generateMintSecret above - a wallet-
+// Key-path counterpart to generateMintSecret above - a wallet-
 // initiated mint/transfer's own pubkey-bound secret (a ck1 ownership
 // signature, not a preimage), seed-recoverable the same way and for the
 // same reload-survival reason (see requireRecoverableCashAddressSecret).
@@ -111,7 +115,7 @@ export const generateMintPubkeySecret = (domain: string): string =>
 // Wires generateMintPubkeySecret into src/lib's rotateNote/splitNote/
 // mergeNotes (see configurePubkeySecretProvider) so a note that already
 // is pub/sig-bound stays that way across a rotate/refresh/split/merge,
-// instead of always coming back as a fresh legacy preimage - never throws
+// instead of always coming back as a fresh bearer preimage - never throws
 // (the seed-derived key can be unavailable, same as generateNoteSecret's
 // own fallback story), which is exactly what tells src/lib to fall back to
 // its ordinary legacy provider instead.
@@ -123,19 +127,19 @@ configurePubkeySecretProvider(domain => {
   }
 })
 
-// Requests a mint invoice, preferring a LUD-25 Part 2 pubkey-bound output
-// (comment=cp1<pk>) over the legacy hash-keyed one (comment=hashK1(secret))
-// whenever the mint accepts it - there is no capability flag to check
+// Requests a mint invoice, preferring a seed-recoverable key-path note
+// (comment=cp1<pk>) over a random bearer note (comment=cp1 of its hashlock
+// note, see requestInvoice) whenever the mint accepts it - there is no capability flag to check
 // first (this protocol dispatches by value shape, never version
 // negotiation - see requestInvoice itself), so this just tries. Requesting
 // an invoice has no burn side effect either way: if the mint doesn't
-// understand a cp1 comment, no invoice is issued and nothing was paid, so
-// falling back to the legacy scheme is always safe - at most this wastes
+// accept the output, no invoice is issued and nothing was paid, so
+// falling back to a bearer note is always safe - at most this wastes
 // one already-persisted address-branch index (harmless, see
 // nextCashAddressSecret's own comment). Every existing call site
 // (Mint.tsx, TransferDialog.tsx) already required commentAllowed >= 64
 // (requireMintComment) before reaching this point, and a cp1 value is
-// only 61 characters, so it always fits when either scheme would.
+// only 61 characters, so it always fits.
 export const requestMintInvoice = async (
   callback: string,
   amountMsat: number,
@@ -149,9 +153,9 @@ export const requestMintInvoice = async (
       return {result, secret}
     }
   } catch {
-    // no cash root loaded, or the mint didn't accept a cp1 comment -
-    // either way, no invoice was issued and nothing was paid, so falling
-    // back to the legacy scheme below is always safe
+    // no cash root loaded, or the mint didn't accept this output - either
+    // way, no invoice was issued and nothing was paid, so falling back to a
+    // bearer note below is always safe
   }
   const secret = generateMintSecret(domain)
   const result = await requestInvoice(callback, amountMsat, hashK1(secret))

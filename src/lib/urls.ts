@@ -276,11 +276,9 @@ export const noteSignature = (url: string): string | null => {
   }
 }
 
-// a well-formed note secret: a legacy 32-byte hex preimage, a LUD-25 Part 2
-// ck1 recoverable-signature secret, or a script-path note's own cw1 script-path
-// spend (see src/lib/recoverableNotes.ts) - dispatched on the string's own
-// shape, same as every other Part 1/Part 2 dual-mode field in this
-// codebase (no version flag). A k1 that's none of these would crash
+// a well-formed note spend: a bearer note's 32-byte hex preimage (the k1
+// short form), a key-path ck1, or a script-path cw1 (see
+// src/lib/recoverableNotes.ts) - dispatched on the string's own shape. A k1 that's none of these would crash
 // sha256-based hashing (isPreimage's own reason for existing) or
 // ecrecover/the taproot merkle walk later, so it's rejected at the door
 // either way.

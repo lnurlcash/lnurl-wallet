@@ -1539,14 +1539,6 @@ nav {
   color: #e4c567;
 }
 
-// TODO(deprecated): flags a note still using a deprecated ck1 signing
-// scheme (src/lib/signature.ts's recoverNoteOwnershipPubkey legacy flag) -
-// same warning color as .bearer-sunset since both ask the holder to act
-// (rotate) before something stops working
-.bearer-legacy-ck1 {
-  color: #e4c567;
-}
-
 // a script-path note redeemed by revealing a Tapscript leaf (a cw1) rather than a
 // plain ck1 signature - purely descriptive, same "not a warning" muted
 // treatment as .bearer-plain, distinguished by an underline-on-hover

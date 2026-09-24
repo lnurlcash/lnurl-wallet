@@ -7,6 +7,12 @@ import {
   isCp1,
   MIN_COMMENT_LENGTH_FOR_SECRET
 } from './lnurlcash'
+import {hexToBytes} from '@noble/hashes/utils.js'
+import {bearerNoteIdOfPreimage} from './lib/spend'
+import {encodeCp1} from './lib/recoverableNotes'
+
+const bearerCp1 = (secret: string): string =>
+  encodeCp1(hexToBytes(bearerNoteIdOfPreimage(secret)))
 
 // Everything else this file used to test now lives in src/lib/*.test.ts,
 // mirroring the protocol code's own extraction into src/lib (see its
@@ -82,10 +88,12 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to the legacy hash comment when the mint rejects cp1', async () => {
+  it("falls back to a bearer note's cp1 when the mint rejects the key-path cp1", async () => {
+    const comments: string[] = []
     const fetchMock = vi.fn(async (input: string | URL) => {
       const comment = new URL(input.toString()).searchParams.get('comment')!
-      if (isCp1(comment)) {
+      comments.push(comment)
+      if (comments.length === 1) {
         return {
           json: async () => ({
             status: 'ERROR',
@@ -93,7 +101,6 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
           })
         } as Response
       }
-      expect(comment).toMatch(/^[0-9a-f]{64}$/)
       return {json: async () => ({pr: 'lnbc1testinvoice'})} as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -105,20 +112,21 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
     )
     expect(isPreimage(secret)).toBe(true)
     expect(result.pr).toBe('lnbc1testinvoice')
-    // one rejected cp1 attempt, then the successful legacy retry
+    // one rejected key-path attempt, then the bearer note, also as a cp1
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(comments[1]).toBe(bearerCp1(secret))
   })
 
-  it('falls back to the legacy hash comment when no cash root is loaded at all', async () => {
+  it("falls back to a bearer note's cp1 when no cash root is loaded at all", async () => {
     // Part 2's pubkey secret needs a cash root (requireRecoverableCashAddressSecret
     // throws without one); Part 1's plain secret does not (25.md's Part 1
     // defines no derivation at all - see cashSecrets.ts's header comment),
-    // so the legacy fallback still succeeds even fully locked
+    // so the bearer fallback still succeeds even fully locked
     const cashSecrets = await import('./cashSecrets')
     cashSecrets.setCashRoot(null)
+    const comments: string[] = []
     const fetchMock = vi.fn(async (input: string | URL) => {
-      const comment = new URL(input.toString()).searchParams.get('comment')!
-      expect(comment).toMatch(/^[0-9a-f]{64}$/)
+      comments.push(new URL(input.toString()).searchParams.get('comment')!)
       return {json: async () => ({pr: 'lnbc1testinvoice'})} as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -131,7 +139,8 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
     expect(isPreimage(secret)).toBe(true)
     expect(result.pr).toBe('lnbc1testinvoice')
     // the Part 2 attempt fails locally (no cash root) before ever reaching
-    // the network, so only the legacy request is ever sent
+    // the network, so only the bearer request is ever sent
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(comments[0]).toBe(bearerCp1(secret))
   })
 })

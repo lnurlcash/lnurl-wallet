@@ -34,12 +34,12 @@
 // verb, same as the musig2 addon's own "add external pubkey" flow), which
 // builds a real 2-of-2 leaf instead (the taproot addon's own `multisig2`
 // template - BIP342's CHECKSIGADD idiom, real Tapscript, already verified
-// against the real lnurlcashkernel in ct1Interop.test.ts): <outcome point>
+// against the real lnurlcashkernel in spendInterop.test.ts): <outcome point>
 // CHECKSIG <counterparty pubkey> CHECKSIGADD 2 NUMEQUAL. Spendable only by
 // whoever holds BOTH the oracle's attestation AND that counterparty's own
 // private key - see buildRedeemCw1's own comment on the exact witness
 // order this requires (signatures go in REVERSE of the leaf's own pubkey
-// order, per BIP342/ct1Interop.test.ts's own convention).
+// order, per BIP342/spendInterop.test.ts's own convention).
 //
 // Every bet also carries a MANDATORY refund leaf - <refund pubkey>
 // CHECKLOCKTIMEVERIFY DROP CHECKSIG (the taproot addon's own `cltv`
@@ -754,7 +754,7 @@ export const receiptProblem = (value: unknown): string => {
 // consumes witness items in REVERSE of the leaf's own pubkey order (see
 // multisig2's own build() in taproot.ts: pubkeyA CHECKSIG pubkeyB
 // CHECKSIGADD), a convention verified against the real lnurlcashkernel in
-// ct1Interop.test.ts's own multisig2 case, reused here rather than
+// spendInterop.test.ts's own multisig2 case, reused here rather than
 // re-derived.
 export const buildRedeemCw1 = (
   receipt: BetReceipt,
