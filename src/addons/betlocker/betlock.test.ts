@@ -21,6 +21,7 @@ import {
   type BetReceipt
 } from './betlock'
 
+const MINT = 'mint.example.com'
 const AMOUNT_MSAT = 20_000_000
 const URL_TEMPLATE = 'https://mint.example.com/w'
 // same trick as ct1Interop.test.ts's own betlocker vector: a fixed,
@@ -58,14 +59,16 @@ describe('betProblem / planBet', () => {
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     const b = planBet(
       oracle.pubkeyHex,
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     expect(a.outcomes).toEqual(['yes', 'no'])
     // different refund keypair each call -> different refund leaf ->
@@ -81,30 +84,53 @@ describe('betProblem / planBet', () => {
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     const b = planBet(
       oracle.pubkeyHex,
       nonce.pubkeyHex,
       ['yes', 'no', 'push'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     expect(a.outputKeyHex).not.toBe(b.outputKeyHex)
   })
 
   it("throws with betProblem's own message on invalid input", () => {
     expect(() =>
-      planBet('nope', nonce.pubkeyHex, ['yes', 'no'], AMOUNT_MSAT, REFUND_DATE)
+      planBet(
+        'nope',
+        nonce.pubkeyHex,
+        ['yes', 'no'],
+        AMOUNT_MSAT,
+        REFUND_DATE,
+        MINT
+      )
     ).toThrow()
   })
 
   it('requires a positive amount and a usable refund date', () => {
     expect(() =>
-      planBet(oracle.pubkeyHex, nonce.pubkeyHex, ['yes', 'no'], 0, REFUND_DATE)
+      planBet(
+        oracle.pubkeyHex,
+        nonce.pubkeyHex,
+        ['yes', 'no'],
+        0,
+        REFUND_DATE,
+        MINT
+      )
     ).toThrow(/note to stake/)
     expect(() =>
-      planBet(oracle.pubkeyHex, nonce.pubkeyHex, ['yes', 'no'], AMOUNT_MSAT, '')
+      planBet(
+        oracle.pubkeyHex,
+        nonce.pubkeyHex,
+        ['yes', 'no'],
+        AMOUNT_MSAT,
+        '',
+        MINT
+      )
     ).toThrow(/date/i)
   })
 
@@ -114,7 +140,8 @@ describe('betProblem / planBet', () => {
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     // tweaking the SAME NUMS key with an EMPTY leaf list gives the
     // key-path-only tweak - genuinely different from the locked output,
@@ -240,7 +267,8 @@ describe('bet receipt: build, parse, round-trip', () => {
     nonce.pubkeyHex,
     ['yes', 'no'],
     AMOUNT_MSAT,
-    REFUND_DATE
+    REFUND_DATE,
+    MINT
   )
   const lockedNote = {
     urlTemplate: URL_TEMPLATE,
@@ -256,7 +284,8 @@ describe('bet receipt: build, parse, round-trip', () => {
       nonce.pubkeyHex,
       ['yes', 'no', 'push'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     expect(betReceiptUrl(lockedNote, otherPlan)).toBeNull()
   })
@@ -323,6 +352,7 @@ describe('bet receipt: build, parse, round-trip', () => {
       ['yes', 'no'],
       AMOUNT_MSAT,
       REFUND_DATE,
+      MINT,
       'https://oracle.example.com',
       'game-7-2026'
     )
@@ -345,7 +375,8 @@ describe('mandatory refund leaf', () => {
     nonce.pubkeyHex,
     ['yes', 'no'],
     AMOUNT_MSAT,
-    REFUND_DATE
+    REFUND_DATE,
+    MINT
   )
   const lockedNote = {
     urlTemplate: URL_TEMPLATE,
@@ -390,7 +421,8 @@ describe('mandatory refund leaf', () => {
       nonce.pubkeyHex,
       ['yes', 'no', 'push'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     expect(refundNoteUrl(lockedNote, otherPlan)).toBeNull()
   })
@@ -417,7 +449,8 @@ describe('mandatory refund leaf', () => {
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     // simulate an old-shape receipt by stripping the refund fields a
     // pre-refund-leaf wallet's own receipt would never have had
@@ -447,7 +480,8 @@ describe('buildRedeemCw1', () => {
     nonce.pubkeyHex,
     ['yes', 'no'],
     AMOUNT_MSAT,
-    REFUND_DATE
+    REFUND_DATE,
+    MINT
   )
   const receipt: BetReceipt = {
     urlTemplate: URL_TEMPLATE,
@@ -557,6 +591,7 @@ describe('counterparty-bound bets (multisig2 leaves)', () => {
     ['yes', 'no'],
     AMOUNT_MSAT,
     REFUND_DATE,
+    MINT,
     undefined,
     undefined,
     counterparty.pubkeyHex
@@ -574,7 +609,8 @@ describe('counterparty-bound bets (multisig2 leaves)', () => {
       nonce.pubkeyHex,
       ['yes', 'no'],
       AMOUNT_MSAT,
-      REFUND_DATE
+      REFUND_DATE,
+      MINT
     )
     expect(plan.outputKeyHex).not.toBe(plainPlan.outputKeyHex)
   })

@@ -1,6 +1,5 @@
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
-import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {sha256} from '@noble/hashes/sha2.js'
+import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {
   newParticipant,
   aggregatePubkeys,
@@ -23,6 +22,7 @@ import {
 import {
   encodeCk1,
   encodeCp1,
+  keyPathSighash,
   recoverNoteOwnershipPubkey,
   withNewK1
 } from '../../lnurlcash'
@@ -140,28 +140,64 @@ const musigCp1Preview = (participants: unknown): string => {
   }
 }
 
-// ck1's own fixed message (src/lib/signature.ts's NOTE_OWNERSHIP_MESSAGE) -
-// this addon always signs exactly this, never free text, so the worked
-// example below is never just a coincidental match: every "Aggregate &
-// sign" click here IS a real ck1 ownership proof, checked against this
-// wallet's own verification code below
-const CK1_OWNERSHIP_MESSAGE = 'LNURLcash'
+// What every round here signs: exactly what a real ck1 signs - the LUD-25
+// key-path sighash (src/lib/spend.ts's keyPathSighash) for the key a lock
+// would name (lockTargetHex below), bound to a mint's domain. Once a note
+// is locked, that is the locked note's own mint, so a round signed after
+// locking IS that note's ck1, checked against this wallet's own
+// verification code (recoverNoteOwnershipPubkey); before any note is
+// locked it is a placeholder domain, so the demo still runs end to end -
+// but a signature bound to it opens nothing at a real mint.
+const DEMO_DOMAIN = 'mint.example'
 
-// ck1 signs sha256("LNURLcash"), a 32-byte digest, not the raw 9-byte
-// string (src/lib/signature.ts's NOTE_OWNERSHIP_DIGEST - most conforming
-// Schnorr signers only accept a 32-byte message, so the fixed string is
-// hashed down first). Precomputed once, not per click.
-const CK1_OWNERSHIP_DIGEST = sha256(utf8ToBytes(CK1_OWNERSHIP_MESSAGE))
+const signingDomain = (lockedNote: unknown): string =>
+  (lockedNote as {mint?: unknown} | null)?.mint &&
+  typeof (lockedNote as {mint: unknown}).mint === 'string'
+    ? (lockedNote as {mint: string}).mint
+    : DEMO_DOMAIN
 
-// the staged functions (below) are hex-in/hex-out, unlike
-// aggregateAndSignBytes's own raw-bytes signature
-const CK1_OWNERSHIP_DIGEST_HEX = bytesToHex(CK1_OWNERSHIP_DIGEST)
+const roundDigest = (
+  participants: unknown,
+  scripts: unknown,
+  lockedNote: unknown
+): Uint8Array =>
+  keyPathSighash(
+    hexToBytes(lockTargetHex(participants, scripts)),
+    signingDomain(lockedNote)
+  )
 
-// ---- optional Tapscript leaves: locking to ct1<Q> instead of cp1<P> ----
+// the message a co-signer elsewhere needs, shown live - '-' until the group
+// has a key to sign for
+const roundDigestPreview = (
+  participants: unknown,
+  scripts: unknown,
+  lockedNote: unknown
+): string => {
+  try {
+    return roundDigestHex(participants, scripts, lockedNote)
+  } catch {
+    return '-'
+  }
+}
+
+const lockedMintLabel = (lockedNote: unknown): string => {
+  const mint = signingDomain(lockedNote)
+  return mint === DEMO_DOMAIN
+    ? `the placeholder mint ${DEMO_DOMAIN} - lock a note to sign for its own`
+    : `the locked note's mint ${mint}`
+}
+
+const roundDigestHex = (
+  participants: unknown,
+  scripts: unknown,
+  lockedNote: unknown
+): string => bytesToHex(roundDigest(participants, scripts, lockedNote))
+
+// ---- optional Tapscript leaves: locking to a tweaked Q instead of P ----
 //
 // Attaching leaves turns this group's aggregate key into a BIP341 INTERNAL
 // key P, and the note gets locked to the tweaked OUTPUT key
-// Q = P + t·G instead (see recoverableNotes.ts's ct1). The whole round
+// Q = P + t·G instead - still a cp1, now also spendable by its leaves. The whole round
 // then has to sign for Q, not P - the tweak enters key aggregation itself
 // (musig2.ts's own tweakArgs), so it can't be bolted on afterwards, which
 // is why every helper below takes the leaves and re-derives it rather than
@@ -185,12 +221,13 @@ const roundTweakHex = (
   }
 }
 
-// which commitment type a lock would use right now - derived from whether
-// any leaf actually compiles, never a separate toggle that could contradict
-// the tree (a ct1 with an empty script tree is redeemable exactly like a
-// cp1, so it would be strictly worse: same capability, rejected by mints)
+// whether a lock right now names a tweaked Q (leaves attached) or the bare
+// aggregate P - both are cp1 notes, redeemable by the group's ck1; only a
+// tweaked one is also spendable by revealing a leaf
 const lockKind = (participants: unknown, scripts: unknown): string =>
-  roundTweakHex(participants, scripts) === undefined ? 'cp1' : 'ct1'
+  roundTweakHex(participants, scripts) === undefined
+    ? 'cp1 (key only)'
+    : 'cp1 (key + leaves)'
 
 // the key a lock actually names: the tweaked output key Q once leaves are
 // attached, the bare aggregate P otherwise
@@ -222,10 +259,14 @@ const canAddScriptLeaf = (scripts: unknown): boolean =>
 // toast notification, unlike a live binding). Only ever reachable for an
 // all-local group (see allLocal above) - a pubkey-only participant goes
 // through the staged flow below instead.
-const runMusigRound = (participants: unknown, scripts: unknown): Musig2Result =>
+const runMusigRound = (
+  participants: unknown,
+  scripts: unknown,
+  lockedNote: unknown
+): Musig2Result =>
   aggregateAndSignBytes(
     asParticipants(participants),
-    CK1_OWNERSHIP_DIGEST,
+    roundDigest(participants, scripts, lockedNote),
     roundTweakHex(participants, scripts)
   )
 
@@ -255,7 +296,8 @@ const allSigsReady = (participants: unknown): boolean =>
 // generate one on their behalf.
 const generateLocalNonces = (
   participants: unknown,
-  scripts: unknown
+  scripts: unknown,
+  lockedNote: unknown
 ): Musig2Participant[] => {
   const list = asParticipants(participants)
   // a nonce binds to the aggregate key the round is actually for - the
@@ -271,7 +313,7 @@ const generateLocalNonces = (
       p.pubkeyHex,
       p.secretKeyHex,
       groupPubkeyHex,
-      CK1_OWNERSHIP_DIGEST_HEX
+      roundDigestHex(participants, scripts, lockedNote)
     )
     return {...p, nonceSecretHex: nonce.secretHex, pubNonceHex: nonce.publicHex}
   })
@@ -279,7 +321,7 @@ const generateLocalNonces = (
 
 // the aggregate nonce every participant's own partial signature is signed
 // against - the one value a genuine external co-signer needs from this
-// page (alongside the pubkey list and the fixed message) before they can
+// page (alongside the pubkey list and the message to sign) before they can
 // compute their own partial signature elsewhere and paste it back in
 const aggregateNoncePreview = (participants: unknown): string => {
   if (!allNoncesReady(participants)) return '-'
@@ -297,7 +339,8 @@ const aggregateNoncePreview = (participants: unknown): string => {
 // participant's own partialSigHex can only come from a paste.
 const signLocalParts = (
   participants: unknown,
-  scripts: unknown
+  scripts: unknown,
+  lockedNote: unknown
 ): Musig2Participant[] => {
   const list = asParticipants(participants)
   if (!allNoncesReady(list)) return list
@@ -309,7 +352,7 @@ const signLocalParts = (
     const partialSigHex = partialSign(
       aggNonceHex,
       pubkeysHex,
-      CK1_OWNERSHIP_DIGEST_HEX,
+      roundDigestHex(participants, scripts, lockedNote),
       p.nonceSecretHex,
       p.secretKeyHex,
       tweakHex
@@ -325,7 +368,8 @@ const signLocalParts = (
 const partialSigValid = (
   participants: unknown,
   index: unknown,
-  scripts: unknown
+  scripts: unknown,
+  lockedNote: unknown
 ): boolean => {
   const list = asParticipants(participants)
   const item = list[Number(index)]
@@ -336,7 +380,7 @@ const partialSigValid = (
     return verifyPartialSig(
       aggregateNonces(pubNoncesHex),
       pubkeysHex,
-      CK1_OWNERSHIP_DIGEST_HEX,
+      roundDigestHex(participants, scripts, lockedNote),
       pubNoncesHex,
       item.partialSigHex,
       Number(index),
@@ -353,7 +397,8 @@ const partialSigValid = (
 // runMusigRound above.
 const combineStagedSignatures = (
   participants: unknown,
-  scripts: unknown
+  scripts: unknown,
+  lockedNote: unknown
 ): Musig2Result => {
   const list = asParticipants(participants)
   const pubkeysHex = list.map(p => p.pubkeyHex)
@@ -372,7 +417,7 @@ const combineStagedSignatures = (
     pubkeysHex,
     pubNoncesHex,
     partialSigsHex,
-    CK1_OWNERSHIP_DIGEST_HEX,
+    roundDigestHex(participants, scripts, lockedNote),
     roundTweakHex(participants, scripts)
   )
 }
@@ -398,9 +443,12 @@ const ck1FromMusigResult = (result: unknown): string | null => {
 const ck1Display = (result: unknown): string =>
   ck1FromMusigResult(result) ?? '-'
 
-const ck1Accepted = (result: unknown): boolean => {
+const ck1Accepted = (result: unknown, lockedNote: unknown): boolean => {
   const ck1 = ck1FromMusigResult(result)
-  return ck1 !== null && recoverNoteOwnershipPubkey(ck1) !== null
+  return (
+    ck1 !== null &&
+    recoverNoteOwnershipPubkey(ck1, signingDomain(lockedNote)) !== null
+  )
 }
 
 // ---- redeeming a note this page locked to the group pubkey ----
@@ -432,7 +480,15 @@ const lockedNoteUrl = (
     return null
   }
   const ck1 = ck1FromMusigResult(result)
-  if (!ck1) return null
+  // a round signed before this note was locked is bound to the placeholder
+  // domain, not this note's mint - it would open nothing, so it builds no
+  // note: sign again now that the note is locked
+  if (
+    !ck1 ||
+    recoverNoteOwnershipPubkey(ck1, signingDomain(locked))?.legacy !== false
+  ) {
+    return null
+  }
   try {
     return withNewK1(
       locked.urlTemplate,
@@ -523,7 +579,12 @@ const participantRow: UiNode = {
           type: 'Show',
           when: {
             helper: 'partialSigValid',
-            args: [{var: 'participants'}, {var: 'index'}]
+            args: [
+              {var: 'participants'},
+              {var: 'index'},
+              {var: 'lockScripts'},
+              {var: 'lockedNote'}
+            ]
           },
           children: [{type: 'Text', value: '✓ verified'}]
         },
@@ -537,7 +598,8 @@ const participantRow: UiNode = {
                 args: [
                   {var: 'participants'},
                   {var: 'index'},
-                  {var: 'lockScripts'}
+                  {var: 'lockScripts'},
+                  {var: 'lockedNote'}
                 ]
               }
             ]
@@ -664,11 +726,11 @@ const musigDocsUi: UiNode[] = [
     each: [
       "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, resolve their Lightning Address (preferred - or a cp1/cx1 address, or a username) with 'Resolve', or paste their pubkey directly.",
       'Once there are 2 or more participants, the aggregated group pubkey (and its cp1 address form) appear automatically below the list.',
-      "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over ck1's own fixed message, \"LNURLcash\".",
-      "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and fixed message above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
+      "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over exactly what a ck1 signs: the LUD-25 key-path sighash for the group key, bound to the locked note's mint (a placeholder mint until a note is locked - sign again after locking).",
+      "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and message to sign above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
       "Check the result: the final signature's own ✓ verified line, and each signer's individual partial-signature ✓ underneath (also shown live next to a pasted partial signature, before the round is even combined).",
       "Optional - to actually lock a note to this pubkey: once 2+ participants exist, pick one of your own unspent notes under 'Lock a real note to this pubkey' and click 'Lock this note' - this burns it and re-mints it owned by the group pubkey, certified by the mint's own signature (checked here, not just assumed). Once this same round has ALSO produced a matching ck1 above, a 'Redeemable note' section appears with the complete note (both signatures included) - copy it, or click 'Withdraw to wallet' to claim it back here directly.",
-      'Optional - add Tapscript leaves (a timelock, a hashlock, a 2-of-2) before locking, and the lock becomes a ct1 taproot output instead of a plain cp1: the group key becomes the INTERNAL key, the note is locked to the tweaked output key, and every signing step above automatically signs for that tweaked key instead. The leaves themselves stay private until one is used. No mint implements ct1 script-path redemption yet, so the lock request will be refused today - the construction, the tweak and the key-path signature are all real and checkable here regardless.'
+      'Optional - add Tapscript leaves (a timelock, a hashlock, a 2-of-2) before locking, and the lock names a tweaked taproot output key instead of the bare group key: the group key becomes the INTERNAL key, the note is locked to the tweaked output key, and every signing step above automatically signs for that tweaked key instead. The leaves themselves stay private until one is used.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
   }
@@ -808,7 +870,7 @@ const musigBuilderUi: UiNode[] = [
             value:
               'Optional - burns one of your own wallet notes and re-mints it owned by the group pubkey above. Only a valid ck1 for this exact group (produced below) will ever redeem it again; this wallet gives up any other way to spend it the moment this succeeds.'
           },
-          // ---- optional Tapscript leaves (turns the lock into a ct1) ----
+          // ---- optional Tapscript leaves (locks to the tweaked output key) ----
           {
             type: 'Text',
             value: 'Alternate unlock conditions (optional)',
@@ -817,7 +879,7 @@ const musigBuilderUi: UiNode[] = [
           {
             type: 'Text',
             value:
-              'Add one or more Tapscript leaves and the group pubkey above becomes a BIP341 INTERNAL key: the note gets locked to the tweaked output key (ct1) instead of the plain one (cp1). The group can still redeem it by signing - the round below automatically signs for the tweaked key once a leaf compiles - but the leaves are ALSO valid ways to redeem it, which is what makes a timelock possible. No mint implements ct1 script-path redemption yet, so treat this as a construction demo: the lock request itself will be refused today, safely, before anything burns.'
+              'Add one or more Tapscript leaves and the group pubkey above becomes a BIP341 INTERNAL key: the note gets locked to the tweaked output key instead of the bare group key. The group can still redeem it by signing - the round below automatically signs for the tweaked key once a leaf compiles - but the leaves are ALSO valid ways to redeem it, which is what makes a timelock possible.'
           },
           {type: 'For', each: {var: 'lockScripts'}, children: [lockScriptRow]},
           {
@@ -944,8 +1006,24 @@ const musigBuilderUi: UiNode[] = [
       },
       {
         type: 'Text',
-        value:
-          'Message to sign together: "LNURLcash" (fixed - ck1’s own ownership message, see below)',
+        value: {
+          cat: [
+            'Message to sign together (the key-path sighash a ck1 signs, for this group key and ',
+            {
+              helper: 'lockedMintLabel',
+              args: [{var: 'lockedNote'}]
+            },
+            '): ',
+            {
+              helper: 'roundDigestPreview',
+              args: [
+                {var: 'participants'},
+                {var: 'lockScripts'},
+                {var: 'lockedNote'}
+              ]
+            }
+          ]
+        },
         style: 'response-block'
       },
       {
@@ -960,7 +1038,11 @@ const musigBuilderUi: UiNode[] = [
               path: 'musigResult',
               value: {
                 helper: 'runMusigRound',
-                args: [{var: 'participants'}, {var: 'lockScripts'}]
+                args: [
+                  {var: 'participants'},
+                  {var: 'lockScripts'},
+                  {var: 'lockedNote'}
+                ]
               }
             }
           }
@@ -994,7 +1076,11 @@ const musigBuilderUi: UiNode[] = [
                   path: 'participants',
                   value: {
                     helper: 'generateLocalNonces',
-                    args: [{var: 'participants'}, {var: 'lockScripts'}]
+                    args: [
+                      {var: 'participants'},
+                      {var: 'lockScripts'},
+                      {var: 'lockedNote'}
+                    ]
                   }
                 }
               },
@@ -1052,14 +1138,18 @@ const musigBuilderUi: UiNode[] = [
                       path: 'participants',
                       value: {
                         helper: 'signLocalParts',
-                        args: [{var: 'participants'}, {var: 'lockScripts'}]
+                        args: [
+                          {var: 'participants'},
+                          {var: 'lockScripts'},
+                          {var: 'lockedNote'}
+                        ]
                       }
                     }
                   },
                   {
                     type: 'Text',
                     value:
-                      'Fills in a partial signature for every local participant above. Any external participant still needs its own partial signature (computed against the aggregate nonce, pubkey list, and fixed message above) pasted into its row before the round can be combined.'
+                      'Fills in a partial signature for every local participant above. Any external participant still needs its own partial signature (computed against the aggregate nonce, pubkey list, and message to sign above) pasted into its row before the round can be combined.'
                   }
                 ]
               },
@@ -1075,7 +1165,11 @@ const musigBuilderUi: UiNode[] = [
                       path: 'musigResult',
                       value: {
                         helper: 'combineStagedSignatures',
-                        args: [{var: 'participants'}, {var: 'lockScripts'}]
+                        args: [
+                          {var: 'participants'},
+                          {var: 'lockScripts'},
+                          {var: 'lockedNote'}
+                        ]
                       }
                     }
                   }
@@ -1149,7 +1243,10 @@ const musigBuilderUi: UiNode[] = [
       },
       {
         type: 'Show',
-        when: {helper: 'ck1Accepted', args: [{var: 'musigResult'}]},
+        when: {
+          helper: 'ck1Accepted',
+          args: [{var: 'musigResult'}, {var: 'lockedNote'}]
+        },
         children: [
           {
             type: 'Text',
@@ -1162,7 +1259,12 @@ const musigBuilderUi: UiNode[] = [
         type: 'Show',
         when: {
           helper: 'not',
-          args: [{helper: 'ck1Accepted', args: [{var: 'musigResult'}]}]
+          args: [
+            {
+              helper: 'ck1Accepted',
+              args: [{var: 'musigResult'}, {var: 'lockedNote'}]
+            }
+          ]
         },
         children: [{type: 'Text', value: '✗ not accepted'}]
       },
@@ -1355,6 +1457,8 @@ const musig2Helpers: Record<string, AddonHelper> = {
   combineStagedSignatures: combineStagedSignatures as AddonHelper,
   ck1Display: ck1Display as AddonHelper,
   ck1Accepted: ck1Accepted as AddonHelper,
+  roundDigestPreview: roundDigestPreview as AddonHelper,
+  lockedMintLabel: lockedMintLabel as AddonHelper,
   lockedNoteUrl: lockedNoteUrl as AddonHelper
 }
 

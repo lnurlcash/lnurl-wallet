@@ -9,7 +9,8 @@ import {
   scanForAddressNotes,
   resolveScanStartIndex,
   encodeCk1,
-  signNoteOwnership
+  signNoteOwnership,
+  k1SpendsNote
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import {msatToSats} from './helpers'
@@ -186,7 +187,7 @@ export const scanRegisteredAddress = async (
       // unlocked again picks this index right back up
       if (!secretKey) continue
       const {pubkeyXOnly: ownershipPubkey, signature: ownershipSignature} =
-        signNoteOwnership(secretKey)
+        signNoteOwnership(secretKey, withdrawUrl)
       const ck1 = encodeCk1(ownershipPubkey, ownershipSignature)
       // attach an already-disclosed offline-verification sig immediately
       // (see WithdrawRequestInfo's own comment) rather than requiring a
@@ -198,7 +199,9 @@ export const scanRegisteredAddress = async (
         result.info.sig
       )
       const alreadyHeld = existing.some(
-        b => serverOf(b.url) === serverOf(url) && noteK1(b.url) === ck1
+        b =>
+          serverOf(b.url) === serverOf(url) &&
+          k1SpendsNote(noteK1(b.url), ownershipPubkey)
       )
       if (!alreadyHeld) {
         recovered.push({

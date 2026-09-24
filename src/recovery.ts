@@ -7,7 +7,8 @@ import {
   noteK1,
   scanForAddressNotes,
   encodeCk1,
-  signNoteOwnership
+  signNoteOwnership,
+  k1SpendsNote
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import type {Bearer} from './storage'
@@ -138,7 +139,10 @@ export const scanMintForNotes = async (
         // while it was running - skip rather than crash; a re-scan once
         // unlocked again picks this index right back up
         if (!secretKey) return
-        const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+        const {pubkeyXOnly, signature} = signNoteOwnership(
+          secretKey,
+          withdrawLink
+        )
         const ck1 = encodeCk1(pubkeyXOnly, signature)
         // attach an already-disclosed offline-verification sig immediately
         // (see WithdrawRequestInfo's own comment) rather than requiring a
@@ -150,7 +154,9 @@ export const scanMintForNotes = async (
           result.info.sig
         )
         const alreadyHeld = existing.some(
-          b => serverOf(b.url) === serverOf(url) && noteK1(b.url) === ck1
+          b =>
+            serverOf(b.url) === serverOf(url) &&
+            k1SpendsNote(noteK1(b.url), pubkeyXOnly)
         )
         if (!alreadyHeld) {
           recovered.push({

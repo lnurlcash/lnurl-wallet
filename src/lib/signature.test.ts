@@ -4,14 +4,18 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {bech32m} from '@scure/base'
 import {
-  verifyNoteSignature,
-  verifyNoteSignatureHash,
-  hashK1,
-  signNoteOwnership,
-  recoverNoteOwnershipPubkey,
+  ck1Pubkey,
   cp1FromCk1,
-  signAddressProof
+  hashK1,
+  recoverNoteOwnershipPubkey,
+  signAddressProof,
+  signNoteOwnership,
+  verifyNoteSignature,
+  verifyNoteSignatureHash
 } from './signature'
+import {keyPathSighash} from './spend'
+
+const DOMAIN = 'mint.example'
 import {
   encodeCk1,
   encodeCp1,
@@ -171,34 +175,46 @@ describe('offline signature verification', () => {
   })
 })
 
-describe('signNoteOwnership (LUD-25 Part 2, ck1)', () => {
-  // independently recomputes what signNoteOwnership signs - a plain
-  // BIP-340 Schnorr signature over sha256("LNURLcash"), no Lightning-
-  // signmessage digest wrapping - deliberately not importing any internal
-  // helper, so this test would actually fail if the construction ever
-  // silently drifted. Hashed rather than the raw 9-byte string because
-  // most conforming Schnorr signers only accept a 32-byte message.
-  const FIXED_DIGEST = sha256(utf8ToBytes('LNURLcash'))
+describe('signNoteOwnership (LUD-25 key-path spend, ck1)', () => {
+  // what signNoteOwnership signs: a plain BIP-340 Schnorr signature over
+  // the canonical spend transaction's key-path sighash for the note's mint
+  // (spend.ts's keyPathSighash - itself pinned to 25.md's test vector 3 in
+  // spend.test.ts), never a free-form message
+  const sighashFor = (pubkeyXOnly: Uint8Array) =>
+    keyPathSighash(pubkeyXOnly, DOMAIN)
 
   it("produces a (pubkey, signature) pair that verifies against the signer's own x-only pubkey", () => {
     const secretKey = schnorr.utils.randomSecretKey()
     const expectedPubkey = schnorr.getPublicKey(secretKey)
-    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
     expect(bytesToHex(pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
     expect(signature).toHaveLength(64)
-    expect(schnorr.verify(signature, FIXED_DIGEST, pubkeyXOnly)).toBe(true)
+    expect(
+      schnorr.verify(signature, sighashFor(pubkeyXOnly), pubkeyXOnly)
+    ).toBe(true)
+  })
+
+  it('binds the signature to the mint: another domain gets another signature', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const here = signNoteOwnership(secretKey, DOMAIN)
+    const there = signNoteOwnership(secretKey, 'other.example')
+    expect(bytesToHex(here.signature)).not.toBe(bytesToHex(there.signature))
+    // a note URL, a server URL and a bare host all name the same domain
+    expect(
+      bytesToHex(signNoteOwnership(secretKey, `lnurlw://${DOMAIN}/w`).signature)
+    ).toBe(bytesToHex(here.signature))
   })
 
   it('produces a different signature for a different secret key', () => {
-    const a = signNoteOwnership(schnorr.utils.randomSecretKey())
-    const b = signNoteOwnership(schnorr.utils.randomSecretKey())
+    const a = signNoteOwnership(schnorr.utils.randomSecretKey(), DOMAIN)
+    const b = signNoteOwnership(schnorr.utils.randomSecretKey(), DOMAIN)
     expect(bytesToHex(a.pubkeyXOnly)).not.toBe(bytesToHex(b.pubkeyXOnly))
   })
 
   it('is deterministic (fixed aux_rand) for the same secret key - required so a rescan reproduces the same ck1', () => {
     const secretKey = schnorr.utils.randomSecretKey()
-    expect(bytesToHex(signNoteOwnership(secretKey).signature)).toBe(
-      bytesToHex(signNoteOwnership(secretKey).signature)
+    expect(bytesToHex(signNoteOwnership(secretKey, DOMAIN).signature)).toBe(
+      bytesToHex(signNoteOwnership(secretKey, DOMAIN).signature)
     )
   })
 })
@@ -233,7 +249,7 @@ describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
     const noteSecretKey = schnorr.utils.randomSecretKey()
     const notePubkeyHex = bytesToHex(schnorr.getPublicKey(noteSecretKey))
     const amountMsat = 21000
-    const {pubkeyXOnly, signature} = signNoteOwnership(noteSecretKey)
+    const {pubkeyXOnly, signature} = signNoteOwnership(noteSecretKey, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     const cs1Sig = signAsMintForId(mintPriv, notePubkeyHex, amountMsat)
 
@@ -257,23 +273,52 @@ describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
 describe('recoverNoteOwnershipPubkey', () => {
   it('reads and verifies the exact pubkey a wallet-produced ck1 belongs to', () => {
     const secretKey = schnorr.utils.randomSecretKey()
-    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
-    const owner = recoverNoteOwnershipPubkey(ck1)
+    const owner = recoverNoteOwnershipPubkey(ck1, DOMAIN)
     expect(owner?.legacy).toBe(false)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
   })
 
+  it('rejects a ck1 signed for another mint - a replay from elsewhere', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const {pubkeyXOnly, signature} = signNoteOwnership(
+      secretKey,
+      'other.example'
+    )
+    const ck1 = encodeCk1(pubkeyXOnly, signature)
+    expect(recoverNoteOwnershipPubkey(ck1, DOMAIN)).toBeNull()
+    // ...while its Q still decodes, for a lookup that needs no proof
+    expect(bytesToHex(ck1Pubkey(ck1)!)).toBe(bytesToHex(pubkeyXOnly))
+  })
+
+  it('TODO(deprecated): still reads a ck1 signed over sha256("LNURLcash"), as legacy', () => {
+    const secretKey = schnorr.utils.randomSecretKey()
+    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+    const oldCk1 = encodeCk1(
+      pubkeyXOnly,
+      schnorr.sign(
+        sha256(utf8ToBytes('LNURLcash')),
+        secretKey,
+        new Uint8Array(32)
+      )
+    )
+    expect(recoverNoteOwnershipPubkey(oldCk1, DOMAIN)?.legacy).toBe(true)
+  })
+
   it('rejects a ck1 whose embedded pubkey does not match its signature', () => {
-    const {signature} = signNoteOwnership(schnorr.utils.randomSecretKey())
+    const {signature} = signNoteOwnership(
+      schnorr.utils.randomSecretKey(),
+      DOMAIN
+    )
     const wrongPubkey = schnorr.getPublicKey(schnorr.utils.randomSecretKey())
     const ck1 = encodeCk1(wrongPubkey, signature)
-    expect(recoverNoteOwnershipPubkey(ck1)).toBeNull()
+    expect(recoverNoteOwnershipPubkey(ck1, DOMAIN)).toBeNull()
   })
 
   it('returns null for anything that is not a ck1, rather than throwing', () => {
-    expect(recoverNoteOwnershipPubkey('not-a-ck1')).toBeNull()
-    expect(recoverNoteOwnershipPubkey(K1)).toBeNull()
+    expect(recoverNoteOwnershipPubkey('not-a-ck1', DOMAIN)).toBeNull()
+    expect(recoverNoteOwnershipPubkey(K1, DOMAIN)).toBeNull()
   })
 
   // TODO(deprecated): the OLD bare recoverable-ECDSA ck1 shape (no embedded
@@ -301,7 +346,7 @@ describe('recoverNoteOwnershipPubkey', () => {
       bech32m.toWords(legacySignature),
       false
     )
-    const owner = recoverNoteOwnershipPubkey(legacyCk1)
+    const owner = recoverNoteOwnershipPubkey(legacyCk1, DOMAIN)
     expect(owner?.legacy).toBe(true)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(expectedPubkey))
   })
@@ -323,23 +368,23 @@ describe('recoverNoteOwnershipPubkey', () => {
       new Uint8Array(32)
     )
     const oldCk1 = encodeCk1(pubkeyXOnly, rawMessageSignature)
-    const owner = recoverNoteOwnershipPubkey(oldCk1)
+    const owner = recoverNoteOwnershipPubkey(oldCk1, DOMAIN)
     expect(owner?.legacy).toBe(true)
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(bytesToHex(pubkeyXOnly))
   })
 
   it('prefers the current digest scheme when a signature happens to be ambiguous - a fresh signNoteOwnership output never falls into the legacy branch', () => {
     const secretKey = schnorr.utils.randomSecretKey()
-    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
-    expect(recoverNoteOwnershipPubkey(ck1)?.legacy).toBe(false)
+    expect(recoverNoteOwnershipPubkey(ck1, DOMAIN)?.legacy).toBe(false)
   })
 })
 
 describe('cp1FromCk1', () => {
   it('recovers the exact cp1 a ck1 secret belongs to, purely locally', () => {
     const secretKey = schnorr.utils.randomSecretKey()
-    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+    const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, DOMAIN)
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     expect(cp1FromCk1(ck1)).toBe(encodeCp1(pubkeyXOnly))
   })

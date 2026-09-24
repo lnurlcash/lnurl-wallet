@@ -6,9 +6,6 @@ import {
   encodeCp1,
   decodeCp1,
   isCp1,
-  encodeCt1,
-  decodeCt1,
-  isCt1,
   isPubkeyCommitment,
   encodeCw1,
   decodeCw1,
@@ -44,29 +41,9 @@ describe('bech32m codec', () => {
     expect(isCp1(encoded)).toBe(true)
   })
 
-  it('round-trips a ct1 (32 bytes - same payload shape as cp1)', () => {
+  it('a cp1 is a pubkey commitment; a ck1 spending it is not', () => {
     const bytes = hexToBytes('ab'.repeat(32))
-    const encoded = encodeCt1(bytes)
-    expect(encoded.startsWith('ct1')).toBe(true)
-    expect(decodeCt1(encoded)).toEqual(bytes)
-    expect(isCt1(encoded)).toBe(true)
-  })
-
-  it('never confuses a ct1 with a cp1, despite the identical payload', () => {
-    // the whole point of the separate HRP: same 32 bytes, different
-    // redemption semantics, so neither may ever decode as the other
-    const bytes = hexToBytes('ab'.repeat(32))
-    const cp1 = encodeCp1(bytes)
-    const ct1 = encodeCt1(bytes)
-    expect(cp1).not.toBe(ct1)
-    expect(decodeCt1(cp1)).toBeNull()
-    expect(decodeCp1(ct1)).toBeNull()
-    expect(isCt1(cp1)).toBe(false)
-    expect(isCp1(ct1)).toBe(false)
-    // but both ARE pubkey commitments, which is what every mutation-output
-    // dispatch site actually cares about
-    expect(isPubkeyCommitment(cp1)).toBe(true)
-    expect(isPubkeyCommitment(ct1)).toBe(true)
+    expect(isPubkeyCommitment(encodeCp1(bytes))).toBe(true)
     expect(
       isPubkeyCommitment(encodeCk1(bytes, hexToBytes('cd'.repeat(64))))
     ).toBe(false)

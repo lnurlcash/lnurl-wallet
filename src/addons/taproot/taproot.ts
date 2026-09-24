@@ -24,12 +24,12 @@ import {
   taprootTweakPubkey
 } from '@scure/btc-signer/utils.js'
 import {p2tr, tapLeafHash, type P2TR_TREE} from '@scure/btc-signer/payment.js'
-import {Transaction} from '@scure/btc-signer'
 import {Script, ScriptNum} from '@scure/btc-signer/script.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {deriveScriptPathCommitment} from '../../lib/recoverableNotes'
+import {scriptPathSighash, spendDomainOf} from '../../lib/spend'
 
 const parseHex = (
   hex: string,
@@ -322,7 +322,7 @@ export const compileLeaf = (
 // One editable "script tree" entry: a (template, params) pair, compiled
 // through compileLeaf above into a REAL Tapscript program. Lives here
 // rather than in a manifest because two addons now build script trees -
-// taproot's own playground, and musig2's "lock a note to ct1<Q>" flow -
+// taproot's own playground, and musig2's "lock a note to cp1<Q>" flow -
 // and both need the identical row -> compiled-leaf mapping. Only the pure
 // mapping is shared; each manifest still owns its own UI for editing rows.
 
@@ -452,7 +452,7 @@ export const scriptPathProofs = (
 // resolves a bare cw1 note back to its Q with no addon involved); this
 // just adds the "matches an already-known key" comparison a lock's own
 // self-check wants. This is pure crypto - no opcode is executed and no
-// clock is consulted - and it is the whole reason a ct1 needs to carry
+// clock is consulted - and it is the whole reason a cp1 needs to carry
 // nothing but Q: nobody can satisfy it for a key they didn't build
 // forward from a real tree.
 //
@@ -549,67 +549,49 @@ export const signWithTweakedKey = (
   }
 }
 
-// Signs a script-path spend of the canonical single-input, zero-value
-// transaction lnurlcashkernel checks against (see lnurl-mint's ct1.py /
-// verify.py's own README - a fixed, versioned shape, not something this
-// function invents) - the one piece shared by every addon that needs to
-// actually PRODUCE a witness for a leaf it already holds the private key
-// for (the timelocker addon's own throwaway key, the sibling betlocker
-// addon's oracle-revealed one). `allLeafScripts` is the FULL tree - needed
-// to build the right merkle structure even when only signing for one of
-// several leaves (betlocker locks one leaf per possible outcome at once);
-// `targetScript` picks which one this call produces a witness for. Throws
-// if `targetScript` isn't part of the tree, or `secretKeyHex` isn't the
-// right key for its own CHECKSIG pubkey (in which case @scure/btc-signer's
-// own signer silently produces nothing to sign).
+// Signs a script-path spend of LUD-25's canonical spend transaction (see
+// src/lib/spend.ts - a fixed, versioned shape the mint checks every spend
+// against, via lnurlcashkernel) - the one piece shared by every addon that
+// needs to actually PRODUCE a witness for a leaf it already holds the
+// private key for (the timelocker addon's own throwaway key, the sibling
+// betlocker addon's oracle-revealed one). `allLeafScripts` is the FULL tree
+// - needed to know the output key Q the note is locked to even when only
+// signing for one of several leaves (betlocker locks one leaf per possible
+// outcome at once); `targetScript` picks which one this call produces a
+// witness for. `domain` is the note's mint (its URL, or bare host): the
+// signature is bound to it, and to the claimed locktime/sequence, never to
+// the note's amount. Throws if `targetScript` isn't part of the tree, or
+// `secretKeyHex`'s own pubkey isn't pushed by it (nothing to sign for).
 export const signScriptPathSpend = (
   secretKeyHex: string,
   internalKeyHex: string,
   allLeafScripts: Uint8Array[],
   targetScript: Uint8Array,
-  amountMsat: number,
+  domain: string,
   locktime: number,
   sequence: number
 ): Uint8Array => {
-  const tree = p2tr(
-    hexToBytes(internalKeyHex),
-    allLeafScripts.map(script => ({script})),
-    undefined,
-    true
-  )
   const targetHex = bytesToHex(targetScript)
-  // each tapLeafScript entry's own script comes back with a trailing
-  // leaf-version byte appended (@scure/btc-signer's own TaprootControlBlock/
-  // leafScript convention) - stripped before comparing against a bare
-  // compiled script's own hex
-  const tapLeafScript = (tree.tapLeafScript ?? []).filter(
-    ([, leafScript]) =>
-      bytesToHex(leafScript.subarray(0, leafScript.length - 1)) === targetHex
-  )
-  if (tapLeafScript.length === 0) {
+  if (!allLeafScripts.some(script => bytesToHex(script) === targetHex)) {
     throw new Error('That leaf script is not part of this tree.')
   }
-  const tx = new Transaction({
-    version: 2,
-    lockTime: locktime,
-    allowUnknownOutputs: true
-  })
-  tx.addInput({
-    txid: new Uint8Array(32),
-    index: 0,
-    sequence,
-    witnessUtxo: {script: tree.script, amount: BigInt(amountMsat)},
-    tapLeafScript
-  })
-  tx.addOutput({script: new Uint8Array(0), amount: 0n})
-  tx.signIdx(hexToBytes(secretKeyHex), 0)
-  const input = tx.getInput(0) as {
-    tapScriptSig?: [{pubKey: Uint8Array}, Uint8Array][]
-  }
-  const pubkeyHex = bytesToHex(schnorr.getPublicKey(hexToBytes(secretKeyHex)))
-  const sig = (input.tapScriptSig ?? []).find(
-    ([k]) => bytesToHex(k.pubKey) === pubkeyHex
-  )?.[1]
-  if (!sig) throw new Error('Could not sign the script-path spend.')
-  return sig
+  const secretKey = hexToBytes(secretKeyHex)
+  const pubkey = schnorr.getPublicKey(secretKey)
+  const pushesKey = Script.decode(targetScript).some(
+    op => op instanceof Uint8Array && bytesToHex(op) === bytesToHex(pubkey)
+  )
+  if (!pushesKey) throw new Error('Could not sign the script-path spend.')
+  const outputKey = hexToBytes(
+    tweakPubkey(internalKeyHex, allLeafScripts).tweakedPubkeyHex
+  )
+  return schnorr.sign(
+    scriptPathSighash(
+      outputKey,
+      spendDomainOf(domain),
+      targetScript,
+      locktime,
+      sequence
+    ),
+    secretKey
+  )
 }

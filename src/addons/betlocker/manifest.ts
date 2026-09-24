@@ -506,6 +506,7 @@ const lockUi: UiNode[] = [
                         args: [{var: 'selectedNote.amountSat'}]
                       },
                       {var: 'refundDate'},
+                      {var: 'selectedNote.mint'},
                       {var: 'oracleBaseUrl'},
                       {var: 'fetchedAnnouncement.eventId'},
                       {
@@ -633,6 +634,7 @@ const lockUi: UiNode[] = [
                     args: [{var: 'selectedNote.amountSat'}]
                   },
                   {var: 'refundDate'},
+                  {var: 'selectedNote.mint'},
                   null,
                   null,
                   {
@@ -668,8 +670,7 @@ const lockUi: UiNode[] = [
               verb: 'note.lockToPubkey',
               args: {
                 note: {var: 'selectedNote.id'},
-                pubkeyHex: {var: 'plan.outputKeyHex'},
-                kind: 'ct1'
+                pubkeyHex: {var: 'plan.outputKeyHex'}
               },
               result: 'lockedNote'
             }
@@ -1153,7 +1154,7 @@ const docsUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      "The lock cannot be undone. Needs a mint with ct1 support (lnurl-mint's ct1 extra); one without it refuses the lock before anything is burned."
+      'The lock cannot be undone. Any LUD-25 mint redeems the script path - it accepts every leaf, the same way it accepts a signature.'
   }
 ]
 

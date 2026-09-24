@@ -1,4 +1,7 @@
 import {describe, expect, it} from 'vitest'
+import {hexToBytes} from '@noble/hashes/utils.js'
+import {schnorr} from '@noble/curves/secp256k1.js'
+import {scriptPathSighash} from '../../lib/spend'
 import {decodeCw1} from '../../lib/recoverableNotes'
 import {
   LOCKTIME_THRESHOLD,
@@ -11,6 +14,7 @@ import {
 import {tweakPubkey, verifyScriptPath} from '../taproot/taproot'
 
 const NOW = 1_800_000_000
+const MINT = 'mint.example.com'
 const AMOUNT_MSAT = 20_000_000
 const at = (seconds: number): string =>
   // datetime-local wants local wall time; build it from a local Date
@@ -38,7 +42,7 @@ describe('timelocker date handling', () => {
 
 describe('planTimelock', () => {
   const when = at(NOW + 7 * 86400)
-  const plan = planTimelock(when, AMOUNT_MSAT, NOW)
+  const plan = planTimelock(when, AMOUNT_MSAT, MINT, NOW)
 
   it('produces a ready-to-spend cw1 for exactly this amount and date', () => {
     const cw1 = decodeCw1(plan.cw1)!
@@ -60,7 +64,7 @@ describe('planTimelock', () => {
     ).toBe(true)
   })
   it('draws a fresh throwaway key every time - never returns it', () => {
-    const other = planTimelock(when, AMOUNT_MSAT, NOW)
+    const other = planTimelock(when, AMOUNT_MSAT, MINT, NOW)
     expect(other.cw1).not.toBe(plan.cw1)
     expect(other.outputKeyHex).not.toBe(plan.outputKeyHex)
     expect(Object.keys(plan).sort()).toEqual([
@@ -69,15 +73,22 @@ describe('planTimelock', () => {
       'outputKeyHex'
     ])
   })
-  it('signs the amount, so a different amount gives a different signature', () => {
-    const other = decodeCw1(planTimelock(when, AMOUNT_MSAT + 1, NOW).cw1)!
-    const mine = decodeCw1(plan.cw1)!
-    expect(other.witness[0]).not.toEqual(mine.witness[0])
+  it("binds the signature to the note's mint and claimed locktime, never its amount", () => {
+    const cw1 = decodeCw1(plan.cw1)!
+    const q = hexToBytes(plan.outputKeyHex)
+    const sighashAt = (domain: string) =>
+      scriptPathSighash(q, domain, cw1.script, cw1.locktime, cw1.sequence)
+    const [sig] = cw1.witness
+    const ownerKey = cw1.script.subarray(cw1.script.length - 33, -1)
+    expect(schnorr.verify(sig!, sighashAt(MINT), ownerKey)).toBe(true)
+    expect(schnorr.verify(sig!, sighashAt('other.example'), ownerKey)).toBe(
+      false
+    )
   })
   it('refuses to plan an invalid date or a missing amount', () => {
-    expect(() => planTimelock('', AMOUNT_MSAT, NOW)).toThrow()
-    expect(() => planTimelock(at(NOW - 1000), AMOUNT_MSAT, NOW)).toThrow()
-    expect(() => planTimelock(when, 0, NOW)).toThrow()
-    expect(() => planTimelock(when, undefined, NOW)).toThrow()
+    expect(() => planTimelock('', AMOUNT_MSAT, MINT, NOW)).toThrow()
+    expect(() => planTimelock(at(NOW - 1000), AMOUNT_MSAT, MINT, NOW)).toThrow()
+    expect(() => planTimelock(when, 0, MINT, NOW)).toThrow()
+    expect(() => planTimelock(when, undefined, MINT, NOW)).toThrow()
   })
 })

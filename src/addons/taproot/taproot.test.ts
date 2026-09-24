@@ -237,7 +237,7 @@ describe('identifyLeaf', () => {
   })
 })
 
-describe('script-path proofs (what a ct1 redemption reveals)', () => {
+describe('script-path proofs (what a script-path redemption reveals)', () => {
   const leafFor = (id: 'pk' | 'cltv' | 'hashlock', pubkeyHex: string) =>
     scriptTemplateById(id)!.build({
       pubkeyHex,
@@ -282,7 +282,7 @@ describe('script-path proofs (what a ct1 redemption reveals)', () => {
     expect(scriptPathProofs(hexToBytes(internal.pubkeyHex), [])).toEqual([])
   })
 
-  // The soundness argument the whole ct1 design rests on: a mint given
+  // The soundness argument the whole script-path design rests on: a mint given
   // nothing but Q can trust a revealed leaf, because nobody can fabricate
   // one for a key they did not build forward from a real tree.
   describe('forgery is rejected', () => {

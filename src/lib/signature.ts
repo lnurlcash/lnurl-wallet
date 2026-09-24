@@ -7,10 +7,18 @@ import {
   decodeCs1WithAmount,
   isAnyCs1,
   isCk1,
+  isCw1,
   decodeCk1,
-  encodeCp1
+  encodeCp1,
+  outputKeyOfCw1
 } from './recoverableNotes'
 import type {DecodedCk1} from './recoverableNotes'
+import {
+  bearerNoteIdOfHash,
+  bearerNoteIdOfPreimage,
+  keyPathSighash,
+  spendDomainOf
+} from './spend'
 
 // ---- offline verification ----
 
@@ -35,31 +43,32 @@ export const parseMintKey = (body: any): {mintPubkey: string} => {
 // secret instead of an existing k1
 export const hashK1 = (k1: string): string => bytesToHex(sha256(hexToBytes(k1)))
 
-// Signed the same way LUD-13 signs its auth seed phrase - the standard
-// Lightning node `signmessage` wrapping:
-//   message = "LNURLcash:" || amount_msat (decimal ASCII) || ":" || hex(sha256(k1))
+// A note's cs1 certificate, signed the same way LUD-13 signs its auth seed
+// phrase - the standard Lightning node `signmessage` wrapping:
+//   message = "LNURLcash:" || amount_msat (decimal ASCII) || ":" || hex(Q)
 //   digest  = sha256(sha256("Lightning Signed Message:" || message))
+// Q is the note's taproot output key (25.md's Offline verification). For a
+// bearer note that is the Q its hash h names (spend.ts's bearerNote) - a
+// SERVICE from before notes were keyed by Q signed over hex(h) itself
+// instead, so a bearer note's certificate is checked against both ids.
 const LIGHTNING_SIGNED_MESSAGE_PREFIX = utf8ToBytes('Lightning Signed Message:')
 
-const noteSignatureDigestForHash = (
-  h: string,
+const noteSignatureDigestForId = (
+  noteId: string,
   amountMsat: number
 ): Uint8Array => {
-  if (!/^[0-9a-fA-F]{64}$/.test(h.trim())) {
-    throw new Error('A note hash must be 32 bytes of hex.')
+  if (!/^[0-9a-fA-F]{64}$/.test(noteId.trim())) {
+    throw new Error('A note id must be 32 bytes of hex.')
   }
   const message = utf8ToBytes(
-    `LNURLcash:${amountMsat}:${h.trim().toLowerCase()}`
+    `LNURLcash:${amountMsat}:${noteId.trim().toLowerCase()}`
   )
   return sha256(
     sha256(new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message]))
   )
 }
 
-const noteSignatureDigest = (k1: string, amountMsat: number): Uint8Array =>
-  noteSignatureDigestForHash(hashK1(k1), amountMsat)
-
-// recovers the signer's pubkey from (k1, amountMsat, signature) and checks
+// recovers the signer's pubkey from (note id, amountMsat, signature) and checks
 // it against `mintPubkey` - true only if both match. `signature` is 65
 // bytes, but which end carries the recovery id varies by mint in practice:
 // the spec text calls for r || s || recovery-id (trailing - the same
@@ -125,82 +134,96 @@ const verifyNoteSignatureDigest = (
   return false
 }
 
+const verifiesAgainstAnyId = (
+  noteIds: string[],
+  amountMsat: number,
+  signatureHex: string,
+  mintPubkeyHex: string
+): boolean =>
+  noteIds.some(noteId => {
+    try {
+      return verifyNoteSignatureDigest(
+        noteSignatureDigestForId(noteId, amountMsat),
+        signatureHex,
+        mintPubkeyHex,
+        amountMsat
+      )
+    } catch {
+      return false
+    }
+  })
+
+// The note ids a certificate for the note spent by `k1` may be signed over:
+// its Q, read or derived locally from k1's own shape with no network - a
+// ck1 carries it, a cw1's control block commits to it, a hex preimage's
+// bearer note is built from it - plus, for a bearer note, the pre-Q id
+// (see noteSignatureDigestForId). Only the certificate is checked here, not
+// whether k1 itself opens Q; for a ck1 that needs the note's domain, see
+// recoverNoteOwnershipPubkey.
+const noteIdsOfK1 = (k1: string): string[] => {
+  if (isCk1(k1)) {
+    const pubkey = ck1Pubkey(k1)
+    return pubkey ? [bytesToHex(pubkey)] : []
+  }
+  if (isCw1(k1)) {
+    const outputKeyHex = outputKeyOfCw1(k1)
+    return outputKeyHex ? [outputKeyHex] : []
+  }
+  try {
+    return [bearerNoteIdOfPreimage(k1), hashK1(k1)]
+  } catch {
+    return [] // a malformed stored k1 is unverifiable, never a crash
+  }
+}
+
 export const verifyNoteSignature = (
   k1: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
-): boolean => {
-  // LUD-25 Part 2: a cp1 note's k1 is a ck1 signature, not a preimage -
-  // hashing it (noteSignatureDigest's normal path) would check against a
-  // digest nothing ever signed. Recover the note's own pubkey locally
-  // instead (no network needed) and verify against THAT hex, the exact
-  // same digest template a legacy hash uses (see noteSignatureDigestForHash -
-  // it never cared whether the hex it names a note by is a hash or a raw
-  // pubkey). Centralized here, not left to each call site, so nothing that
-  // calls this generic entry point can reintroduce the same bug.
-  if (isCk1(k1)) {
-    const owner = recoverNoteOwnershipPubkey(k1)
-    return owner
-      ? verifyNoteSignatureHash(
-          bytesToHex(owner.pubkeyXOnly),
-          amountMsat,
-          signatureHex,
-          mintPubkeyHex
-        )
-      : false
-  }
-  try {
-    return verifyNoteSignatureDigest(
-      noteSignatureDigest(k1, amountMsat),
-      signatureHex,
-      mintPubkeyHex,
-      amountMsat
-    )
-  } catch {
-    // A malformed stored k1 is unverifiable, never a render-time crash.
-    return false
-  }
-}
+): boolean =>
+  verifiesAgainstAnyId(noteIdsOfK1(k1), amountMsat, signatureHex, mintPubkeyHex)
 
-// A sealed vault discloses h=sha256(k1), not k1. A bound-mint receipt signs
-// that same note id, so the companion can authenticate it without asking the
-// device to export the bearer secret.
+// A sealed vault discloses h=sha256(k1), not k1. A bound-mint receipt
+// certifies the bearer note h names, so the companion can authenticate it
+// without asking the device to export the bearer secret.
 export const verifyNoteSignatureHash = (
   h: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
 ): boolean => {
+  let noteIds: string[]
   try {
-    return verifyNoteSignatureDigest(
-      noteSignatureDigestForHash(h, amountMsat),
-      signatureHex,
-      mintPubkeyHex,
-      amountMsat
-    )
+    noteIds = [bearerNoteIdOfHash(h), h.trim().toLowerCase()]
   } catch {
     return false
   }
+  return verifiesAgainstAnyId(noteIds, amountMsat, signatureHex, mintPubkeyHex)
 }
 
-// ---- LUD-25 Part 2: wallet-side ownership proof (ck1) ----
+// A note's certificate, by its Q (hex) directly.
+export const verifyNoteSignatureForKey = (
+  outputKeyHex: string,
+  amountMsat: number,
+  signatureHex: string,
+  mintPubkeyHex: string
+): boolean =>
+  verifiesAgainstAnyId([outputKeyHex], amountMsat, signatureHex, mintPubkeyHex)
+
+// ---- LUD-25 key-path spends (ck1) ----
 //
-// CURRENT scheme (2026-09-16, luds#ck1): a plain BIP-340 Schnorr signature
-// over sha256("LNURLcash") - a fixed 32-byte digest, the same for every
-// note, every request, unlike noteSignatureDigest's per-note/per-amount one
-// above. The fixed message is hashed down to 32 bytes before signing,
-// rather than handed to Sign as the raw 9-byte ASCII string: BIP-340's own
-// reference implementation, and most conforming Schnorr signers
-// (libsecp256k1's schnorrsig module included), only accept a 32-byte
-// message, so signing the raw string only worked here because
-// @noble/curves' own schnorr.sign is more permissive than that - it would
-// not have interoperated with an off-the-shelf signer (25.md's "Wallet-side
-// ownership proofs"). A cp1 note's bearer secret IS this (pubkey,
-// signature) pair; the pubkey travels alongside the signature explicitly
-// (see encodeCk1) rather than being ecrecover'd back out of it, so
-// verification is a direct Verify(pk, digest, sig) instead of a
-// recovery-then-compare.
+// A ck1 is Q || sig: a plain BIP-340 Schnorr signature by the note's own key
+// over the canonical spend transaction's key-path sighash for the note's
+// mint (spend.ts's keyPathSighash) - never a free-form message, so the
+// mint can hand it to an off-the-shelf taproot verifier (Bitcoin Core's own,
+// via lnurlcashkernel), and a signature one mint has seen can never be
+// replayed at another. Q travels alongside the signature, since a Schnorr
+// signature does not reveal its key.
+//
+// TODO(deprecated): the fixed messages a ck1 signed before spends moved onto
+// the sighash - sha256("LNURLcash"), and before that the raw 9-byte string.
+// Same Q || sig shape; only ever verified (legacy: true), never signed.
 const NOTE_OWNERSHIP_MESSAGE = utf8ToBytes('LNURLcash')
 const NOTE_OWNERSHIP_DIGEST = sha256(NOTE_OWNERSHIP_MESSAGE)
 
@@ -220,31 +243,34 @@ const legacyNoteOwnershipDigest = (): Uint8Array =>
 
 // BIP-340's own aux_rand exists to harden a HARDWARE signer against fault/
 // side-channel attacks across repeated signings - it is not what makes a
-// single signature secure (the nonce is still a tagged hash of aux_rand,
-// the secret key, and the message either way). 25.md requires the OPPOSITE
-// property here: "WALLET computes this once per key and reuses the exact
-// same (pk, sig) pair everywhere ck1 is needed" - a note recovered again
-// later (address-branch rescan, this wallet's own addressRecovery.ts) must
-// re-derive the identical ck1 byte-for-byte, or a plain string-equality
-// "already held" check would treat the same note as a brand new one every
-// scan. A fixed, all-zero aux_rand makes this signature pure function of
-// (secretKey, message), matching secp256k1.sign's own RFC6979-deterministic
-// default that the OLD recoverable-ECDSA ck1 got "for free".
+// single signature secure. 25.md asks for the opposite here: a key has one
+// signature per mint, and a note recovered again later (address-branch
+// rescan, this wallet's own addressRecovery.ts) must re-derive the
+// identical ck1 byte-for-byte, or a plain string-equality "already held"
+// check would treat the same note as a brand new one every scan. A fixed,
+// all-zero aux_rand makes the signature a pure function of (secretKey,
+// sighash) - and the sighash of (Q, domain).
 const ZERO_AUX_RAND = new Uint8Array(32)
 
-// The one signing function in this file - everything else only verifies.
-// Returns the note's x-only pubkey alongside its 64-byte Schnorr signature;
-// callers bech32m-encode both together as ck1 (see
-// src/lib/recoverableNotes.ts's encodeCk1) for the wire. Takes and returns
-// raw bytes rather than hex: unlike a k1 preimage, this secret is a genuine
-// secp256k1 scalar (see src/lib/recoverableNotes.ts's deriveNoteSecretKey),
-// never text.
+// The one note-signing function in this file - everything else only
+// verifies. `domain` is the note's mint: its withdraw URL, server URL, or
+// bare host (see spend.ts's spendDomainOf). Returns the note's x-only
+// pubkey (its Q) alongside the 64-byte signature; callers bech32m-encode
+// both together as ck1 (see recoverableNotes.ts's encodeCk1).
 export const signNoteOwnership = (
-  secretKey: Uint8Array
-): {pubkeyXOnly: Uint8Array; signature: Uint8Array} => ({
-  pubkeyXOnly: schnorr.getPublicKey(secretKey),
-  signature: schnorr.sign(NOTE_OWNERSHIP_DIGEST, secretKey, ZERO_AUX_RAND)
-})
+  secretKey: Uint8Array,
+  domain: string
+): {pubkeyXOnly: Uint8Array; signature: Uint8Array} => {
+  const pubkeyXOnly = schnorr.getPublicKey(secretKey)
+  return {
+    pubkeyXOnly,
+    signature: schnorr.sign(
+      keyPathSighash(pubkeyXOnly, spendDomainOf(domain)),
+      secretKey,
+      ZERO_AUX_RAND
+    )
+  }
+}
 
 // TODO(deprecated): recovers the x-only pubkey an OLD-style (bare
 // recoverable-ECDSA, no embedded pk) ck1 signature belongs to. Only reached
@@ -275,29 +301,35 @@ const legacyRecoverNoteOwnershipPubkey = (
 export type NoteOwnershipPubkey = {
   pubkeyXOnly: Uint8Array
   // true iff this ck1 was produced under a deprecated signing scheme - the
-  // OLD bare recoverable-ECDSA shape, or the current pk||sig shape but
-  // signed over the raw un-hashed message (before the "32-byte hashed
-  // message" change, 2026-09-16, ../luds commit 6de59b2). A caller holding
-  // a note whose owner resolved with legacy:true should warn the holder and
-  // prompt them to rotate the note (closing the exposure and re-issuing it
-  // under the current scheme) - see BearerCard.tsx's deprecation badge.
+  // OLD bare recoverable-ECDSA shape, or the current Q||sig shape signed
+  // over a fixed message instead of the spend sighash. A caller holding a
+  // note whose owner resolved with legacy:true should warn the holder and
+  // prompt them to rotate the note (re-issuing it under the current scheme)
+  // - see BearerCard.tsx's deprecation badge.
   legacy: boolean
 }
 
-// the inverse of signNoteOwnership: reads/recovers the x-only pubkey a ck1
-// belongs to, WITHOUT contacting SERVICE - lets a cp1 note's own bearer
-// secret (its ck1) be looked up by public commitment (p=cp1<pk>, see
-// request.ts's fetchNoteInfo) instead of by the secret itself, the same
-// privacy reasoning hashK1 already gives legacy notes. Dispatches on the
-// decoded ck1's own shape: the current one carries its pubkey explicitly
-// and is verified directly (Verify(pk, digest, sig)) rather than merely
-// decoded - an unverified pk paired with a garbage sig must not silently
-// "recover" as valid the way ECDSA recovery never could fail to produce
-// *some* pubkey. TODO(deprecated): the legacy shape has no embedded pk at
-// all, so it falls back to ecrecover instead - see
-// legacyRecoverNoteOwnershipPubkey.
+// The note's Q a ck1 names, decoded only - nothing verified. What a lookup
+// (p=cp1<Q>) or an output disclosure needs: SERVICE verifies the spend
+// itself before honouring it. TODO(deprecated): the pre-schnorr 65-byte
+// shape carries no Q, so it is recovered from the signature instead.
+export const ck1Pubkey = (ck1: string): Uint8Array | null => {
+  const decoded: DecodedCk1 | null = decodeCk1(ck1)
+  if (!decoded) return null
+  if (decoded.legacy === false) return decoded.pubkeyXOnly
+  return legacyRecoverNoteOwnershipPubkey(decoded.signature)
+}
+
+// Verifies a ck1 opens its note at `domain` (a note or mint URL, or a bare
+// host), WITHOUT contacting SERVICE, and returns that note's Q. The current
+// shape is verified directly - Verify(Q, keyPathSighash(Q, domain), sig) -
+// so an unverified Q paired with a garbage signature never passes the way
+// ECDSA recovery could never fail to produce *some* key. TODO(deprecated):
+// falls back to the fixed messages older ck1s signed (legacy: true), and to
+// ecrecover for the pre-schnorr shape.
 export const recoverNoteOwnershipPubkey = (
-  ck1: string
+  ck1: string,
+  domain: string
 ): NoteOwnershipPubkey | null => {
   const decoded: DecodedCk1 | null = decodeCk1(ck1)
   if (!decoded) return null
@@ -309,21 +341,16 @@ export const recoverNoteOwnershipPubkey = (
         return false
       }
     }
-    if (verifies(NOTE_OWNERSHIP_DIGEST)) {
+    let sighash: Uint8Array
+    try {
+      sighash = keyPathSighash(decoded.pubkeyXOnly, spendDomainOf(domain))
+    } catch {
+      return null
+    }
+    if (verifies(sighash)) {
       return {pubkeyXOnly: decoded.pubkeyXOnly, legacy: false}
     }
-    // TODO(deprecated): fallback for a ck1 signed before the "32-byte
-    // hashed message" change (2026-09-16, ../luds commit 6de59b2) - same
-    // pk||sig shape as the current scheme, but Sign(sk, "LNURLcash") over
-    // the raw 9-byte string instead of Sign(sk, sha256("LNURLcash")).
-    // WALLET never signs under this scheme anymore (signNoteOwnership
-    // above always uses NOTE_OWNERSHIP_DIGEST) - this exists purely to
-    // keep an already-minted note redeemable/recoverable while its holder
-    // hasn't rotated it onto the current scheme yet. Remove this branch
-    // (and NOTE_OWNERSHIP_MESSAGE, once nothing else needs it) once no
-    // such notes are expected to remain in the wild - same retirement
-    // convention as legacyRecoverNoteOwnershipPubkey below.
-    if (verifies(NOTE_OWNERSHIP_MESSAGE)) {
+    if (verifies(NOTE_OWNERSHIP_DIGEST) || verifies(NOTE_OWNERSHIP_MESSAGE)) {
       return {pubkeyXOnly: decoded.pubkeyXOnly, legacy: true}
     }
     return null
@@ -409,9 +436,19 @@ export const signAddressProof = (
 // which branch/index it came from. Null (never throws) on anything that
 // isn't actually a ck1, mirroring recoverNoteOwnershipPubkey's own
 // "unverifiable, not a crash" convention.
+// Whether a held k1 is a ck1 spending the note Q (x-only) - by Q, never by
+// the ck1 string itself: the same note has a different ck1 per signing
+// scheme (a note held from before spends moved onto the sighash still
+// carries its old one), so a recovery scan re-deriving today's ck1 must
+// still recognise it as already held.
+export const k1SpendsNote = (k1: string | null, pubkeyXOnly: Uint8Array) => {
+  const held = k1 ? ck1Pubkey(k1) : null
+  return held !== null && bytesToHex(held) === bytesToHex(pubkeyXOnly)
+}
+
 export const cp1FromCk1 = (ck1: string): string | null => {
-  const owner = recoverNoteOwnershipPubkey(ck1)
-  return owner ? encodeCp1(owner.pubkeyXOnly) : null
+  const pubkey = ck1Pubkey(ck1)
+  return pubkey ? encodeCp1(pubkey) : null
 }
 
 // LUD-25 Part 2: a cp1 output's sig/sig2 may come back as cs1<...>

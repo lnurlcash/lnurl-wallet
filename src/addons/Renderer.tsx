@@ -5,7 +5,7 @@ import {A} from '@solidjs/router'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
 import {requireDeviceClient} from '../deviceOrchestration'
-import {serverOf} from '../lnurlcash'
+import {noteMintOf, serverOf} from '../lnurlcash'
 import {notify, NotifyKind} from '../helpers'
 import Qr from '../components/Qr'
 import {evaluate, type EvalContext} from './expr'
@@ -345,9 +345,10 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
             ? true
             : Boolean(b.spent) === node.filter.spent
         )
-        // the bound value is {id, amountSat} - a small opaque-enough
-        // summary resolved once at selection time - never the note's real
-        // url/k1, and never a bare id an addon would need a wallet-reading
+        // the bound value is {id, amountSat, mint} - a small opaque-enough
+        // summary resolved once at selection time (`mint` is the note's
+        // host, the domain its spends are bound to - never secret) - never
+        // the note's real url/k1, and never a bare id an addon would need a wallet-reading
         // helper to make sense of (keeps every helper genuinely pure, no
         // wallet access at all). Read lazily (see the Input case above) -
         // not precomputed - so this stays in sync if state changes some
@@ -365,7 +366,11 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
                 writeBind(
                   node.bind,
                   found
-                    ? {id: found.id, amountSat: Math.floor(found.amount / 1000)}
+                    ? {
+                        id: found.id,
+                        amountSat: Math.floor(found.amount / 1000),
+                        mint: noteMintOf(found.url)
+                      }
                     : null,
                   vars
                 )

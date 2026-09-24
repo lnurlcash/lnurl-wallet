@@ -35,7 +35,7 @@ const isHex32 = (value: unknown): boolean =>
 // merkle root (via @scure/btc-signer/payment.js's own p2tr tree builder,
 // see taproot.ts's merkleRootFor) - the same machinery a real wallet uses,
 // not an approximation of it. The row shape and its compilation live in
-// taproot.ts, shared with the musig2 addon's own ct1 lock flow.
+// taproot.ts, shared with the musig2 addon's own tweaked lock flow.
 
 const templateName = (templateId: unknown): string =>
   scriptTemplateById(trimmedString(templateId))?.name ?? 'Unknown template'

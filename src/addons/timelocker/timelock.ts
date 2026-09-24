@@ -1,4 +1,4 @@
-// Pure math behind the timelocker addon: a note locked to a ct1 whose ONLY
+// Pure math behind the timelocker addon: a note locked to a note whose ONLY
 // spend path is one Tapscript leaf, the stock `cltv` template
 //
 //   <unix time> OP_CHECKLOCKTIMEVERIFY OP_DROP <pubkey> OP_CHECKSIG
@@ -91,11 +91,12 @@ const isPositiveInt = (n: unknown): n is number =>
 export const planTimelock = (
   value: unknown,
   amountMsat: unknown,
+  mint: unknown,
   nowSeconds = Math.floor(Date.now() / 1000)
 ): TimelockPlan => {
   const problem = dateProblem(value, nowSeconds)
   if (problem) throw new Error(problem)
-  if (!isPositiveInt(amountMsat)) {
+  if (!isPositiveInt(amountMsat) || typeof mint !== 'string' || !mint) {
     throw new Error('Pick a note to lock first.')
   }
   const locktime = dateToLocktime(value)!
@@ -118,15 +119,15 @@ export const planTimelock = (
     throw new Error('Internal error: the timelock proof does not verify.')
   }
 
-  // sign the canonical spend transaction lnurlcashkernel checks against
-  // (see verify.py) - fixed shape, this leaf's Q as the spent output, this
-  // exact amount/locktime/sequence
+  // sign LUD-25's canonical spend transaction (src/lib/spend.ts) - this
+  // leaf's Q as the spent output, this note's mint as the domain, this exact
+  // locktime/sequence
   const sig = signScriptPathSpend(
     bytesToHex(secretKey),
     NUMS_INTERNAL_KEY_HEX,
     [script],
     script,
-    Number(amountMsat),
+    mint,
     locktime,
     TIMELOCK_SEQUENCE
   )

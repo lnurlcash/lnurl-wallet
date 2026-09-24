@@ -14,13 +14,7 @@ import {
   mergeNotes
 } from './request'
 import {hashK1, signNoteOwnership, cp1FromCk1} from './signature'
-import {
-  encodeCk1,
-  encodeCp1,
-  encodeCt1,
-  encodeCs1,
-  encodeCw1
-} from './recoverableNotes'
+import {encodeCk1, encodeCp1, encodeCs1, encodeCw1} from './recoverableNotes'
 import {
   AmbiguousMintError,
   AmbiguousMutationError,
@@ -253,7 +247,7 @@ describe('mint address node identity', () => {
 describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   const secretKey = schnorr.utils.randomSecretKey()
   const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-  const ownership = signNoteOwnership(secretKey)
+  const ownership = signNoteOwnership(secretKey, 'mint.example')
   const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
   const cp1 = encodeCp1(pubkeyXOnly)
 
@@ -303,7 +297,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   )
   const outputKeyHex =
     'd37208c49a038f693bc0b362b5a7f804938bfea0b3381cfb88fb69340bb92495'
-  const ct1 = encodeCt1(hexToBytes(outputKeyHex))
+  const scriptNoteCp1 = encodeCp1(hexToBytes(outputKeyHex))
   const cw1 = encodeCw1({
     locktime: 1_800_000_000,
     sequence: 0xfffffffe,
@@ -313,12 +307,12 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   })
   const CW1_NOTE_URL = `https://mint.example.com/withdraw?k1=${cw1}&amount=21000`
 
-  it('looks a cw1 note up by its derived output key (p=ct1<Q>), never its secret - Q comes from the script itself, no mint round trip needed to find it', async () => {
+  it('looks a cw1 note up by its derived output key (p=cp1<Q>), never its secret - Q comes from the script itself, no mint round trip needed to find it', async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
       expect(request.searchParams.get('k1')).toBeNull()
       expect(request.searchParams.get('h')).toBeNull()
-      expect(request.searchParams.get('p')).toBe(ct1)
+      expect(request.searchParams.get('p')).toBe(scriptNoteCp1)
       return {
         json: async () => ({
           tag: 'withdrawRequest',
@@ -552,11 +546,11 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
 
 describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgrade', () => {
   const secretKey = schnorr.utils.randomSecretKey()
-  const ownership = signNoteOwnership(secretKey)
+  const ownership = signNoteOwnership(secretKey, 'mint.example')
   const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
   // a second, distinct ck1 for the "every input" all-or-nothing checks
   const otherSecretKey = schnorr.utils.randomSecretKey()
-  const otherOwnership = signNoteOwnership(otherSecretKey)
+  const otherOwnership = signNoteOwnership(otherSecretKey, 'mint.example')
   const otherCk1 = encodeCk1(
     otherOwnership.pubkeyXOnly,
     otherOwnership.signature
@@ -679,7 +673,7 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
 
 describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', () => {
   const secretKey = schnorr.utils.randomSecretKey()
-  const ownership = signNoteOwnership(secretKey)
+  const ownership = signNoteOwnership(secretKey, 'mint.example')
   const ck1 = encodeCk1(ownership.pubkeyXOnly, ownership.signature)
 
   afterEach(() => {

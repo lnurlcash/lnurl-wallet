@@ -25,9 +25,9 @@
 // already-proven one.
 //
 //   ISSUE: pick a name/description and a first owner, lock one of your
-//   own notes DIRECTLY to that first state's own leaf (note.lockToPubkey,
-//   kind: 'ct1' - the same verb Timelocker/Betlocker already use to lock
-//   a note to an arbitrary taproot commitment). One step: transfers
+//   own notes DIRECTLY to that first state's own leaf (note.lockToPubkey -
+//   the same verb Timelocker/Betlocker already use to lock a note to an
+//   arbitrary taproot commitment). One step: transfers
 //   always go to a NAMED recipient from the very start (see betlock.ts's
 //   own counterparty precedent), so there's no separate "issuer holds it
 //   first" step to model.
@@ -36,9 +36,9 @@
 //   hashlock's own preimage - redeemCurrentStateCw1 below) and signs with
 //   their own key, producing an ordinary cw1 - exactly like any other
 //   script-path redemption in this wallet - then rotates DIRECTLY into a
-//   NEW ct1 output committing to the next state (see verbs.ts's own
+//   NEW cp1 output committing to the next state (see verbs.ts's own
 //   seal.transition, modeled on note.redeemBet's rotateNoteWithHash call,
-//   just targeting a fresh ct1 instead of a plain secret hash).
+//   just targeting a fresh cp1 instead of a plain secret hash).
 //
 //   CONSIGNMENT: what the current owner hands the next one - the mint's
 //   own note url/amount, plus the full state history from genesis to now.
@@ -54,7 +54,7 @@
 //   Encoded the same way this kit encodes every other wire value it
 //   invents (see src/lib/recoverableNotes.ts's own top comment) - a single
 //   bech32m string, not JSON stuffed into a URL's query string. The HRP is
-//   `seal`, deliberately NOT a 2-letter `c*` prefix like cp1/ct1/ck1/cw1/
+//   `seal`, deliberately NOT a 2-letter `c*` prefix like cp1/ck1/cw1/
 //   cs1/cx1: those are real, standardized LUD-25 wire types this wallet
 //   and the mint both implement; a seal consignment is wholly addon-local
 //   and non-standardized, and a short prefix that LOOKED like one of those
@@ -299,14 +299,14 @@ export const planSealLock = (state: SealState): SealLock => {
 export const redeemCurrentStateCw1 = (
   state: SealState,
   ownerSecretKeyHex: unknown,
-  amountMsat: unknown
+  mint: unknown
 ): string => {
   const secret = String(ownerSecretKeyHex ?? '')
     .trim()
     .toLowerCase()
   if (!isHex32(secret)) throw new Error('Not a valid 32-byte secret key.')
-  if (!isPositiveInt(amountMsat)) {
-    throw new Error('Missing this seal’s own amount.')
+  if (typeof mint !== 'string' || !mint.trim()) {
+    throw new Error('Missing this seal’s own mint.')
   }
   const derivedPubkeyHex = bytesToHex(schnorr.getPublicKey(hexToBytes(secret)))
   if (derivedPubkeyHex !== state.ownerPubkeyHex) {
@@ -322,7 +322,7 @@ export const redeemCurrentStateCw1 = (
     NUMS_INTERNAL_KEY_HEX,
     [leaf],
     leaf,
-    Number(amountMsat),
+    mint,
     0,
     0xfffffffe
   )

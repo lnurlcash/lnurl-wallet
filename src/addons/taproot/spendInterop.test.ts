@@ -1,16 +1,17 @@
-// Cross-implementation interop vectors for ct1/cw1.
+// Cross-implementation interop vectors for LUD-25 spends (ck1 / cw1).
 //
 // Everything that reaches a vector comes from THIS wallet's own code - its
-// script templates, tweakPubkey, scriptPathProofs, encodeCt1/encodeCw1 - with
-// only the Schnorr signing delegated to @scure/btc-signer (a separate
-// implementation from anything in the mint-side library). The vectors are then
-// consumed by lnurlcashkernel, which hands them to Bitcoin Core's own script
-// interpreter: wallet on one side, Core on the other, nothing shared between
-// them but the wire format.
+// script templates, tweakPubkey, scriptPathProofs, encodeCp1/encodeCw1,
+// signNoteOwnership - with script-path signing delegated to
+// @scure/btc-signer's own transaction code (a separate implementation of the
+// canonical spend transaction from src/lib/spend.ts, and checked against it
+// here). The vectors are then consumed by lnurlcashkernel, which hands them
+// to Bitcoin Core's own script interpreter: wallet on one side, Core on the
+// other, nothing shared between them but the wire format.
 //
-// Regenerate the mint-side fixture with:
-//   CT1_VECTORS_OUT=../lnurlcashkernel/tests/vectors/wallet_ct1_vectors.json \
-//     npx vitest run src/addons/taproot/ct1Interop.test.ts
+// Regenerate the kernel-side fixture with:
+//   SPEND_VECTORS_OUT=../lnurlcashkernel/tests/vectors/wallet_spend_vectors.json \
+//     npx vitest run src/addons/taproot/spendInterop.test.ts
 import {describe, expect, it} from 'vitest'
 import {writeFileSync} from 'node:fs'
 import {sha256} from '@noble/hashes/sha2.js'
@@ -18,7 +19,14 @@ import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {Transaction, p2tr} from '@scure/btc-signer'
 
-import {encodeCt1, encodeCw1, decodeCw1} from '../../lib/recoverableNotes'
+import {
+  encodeCp1,
+  encodeCk1,
+  encodeCw1,
+  decodeCw1
+} from '../../lib/recoverableNotes'
+import {scriptPathSighash, spendPrevout} from '../../lib/spend'
+import {signNoteOwnership} from '../../lib/signature'
 import {
   scriptTemplateById,
   scriptPathProofs,
@@ -36,6 +44,8 @@ import {
 import {genesisState, planSealLock, redeemCurrentStateCw1} from '../seals/seals'
 
 const AMOUNT_MSAT = 20_000_000
+// every signature below is bound to this mint (see src/lib/spend.ts)
+const DOMAIN = 'mint.example.com'
 const LOCK = 1_800_000_000
 const LOCKED_AT = 1_700_000_000
 const CSV_SEQUENCE = (1 << 22) | 4 // BIP68 time-based, 4 * 512 s
@@ -142,16 +152,19 @@ const buildVector = (c: Case) => {
     true
   )
   expect(bytesToHex(tree.tweakedPubkey)).toBe(tweakedPubkeyHex)
+  // the canonical spend transaction: prevout bound to the mint's domain
+  // (btc-signer serializes a txid byte-reversed, so hand it the reverse),
+  // spent output worth 0
   const tx = new Transaction({
     version: 2,
     lockTime: c.locktime,
     allowUnknownOutputs: true
   })
   tx.addInput({
-    txid: new Uint8Array(32),
+    txid: spendPrevout(DOMAIN).slice().reverse(),
     index: 0,
     sequence: c.sequence,
-    witnessUtxo: {script: tree.script, amount: BigInt(AMOUNT_MSAT)},
+    witnessUtxo: {script: tree.script, amount: 0n},
     tapLeafScript: tree.tapLeafScript
   })
   tx.addOutput({script: new Uint8Array(0), amount: 0n})
@@ -172,6 +185,17 @@ const buildVector = (c: Case) => {
   )
   const sigs = signerPubkeys.map(pk => sigByPubkey.get(pk)!)
   expect(sigs.every(Boolean)).toBe(true)
+  // btc-signer's sighash and the kit's own (src/lib/spend.ts) must agree
+  const kitSighash = scriptPathSighash(
+    hexToBytes(tweakedPubkeyHex),
+    DOMAIN,
+    leaf,
+    c.locktime,
+    c.sequence
+  )
+  signerPubkeys.forEach((pk, i) =>
+    expect(schnorr.verify(sigs[i]!, kitSighash, hexToBytes(pk))).toBe(true)
+  )
   const witness = [...[...sigs].reverse(), ...c.extra]
 
   const cw1 = encodeCw1({
@@ -191,18 +215,17 @@ const buildVector = (c: Case) => {
 
   return {
     name: c.name,
-    ct1: encodeCt1(hexToBytes(tweakedPubkeyHex)),
+    cp1: encodeCp1(hexToBytes(tweakedPubkeyHex)),
     output_key: tweakedPubkeyHex,
-    amount_msat: AMOUNT_MSAT,
     leaf_script: bytesToHex(proof!.script),
     control_block: bytesToHex(proof!.controlBlock),
     witness: witness.map(bytesToHex),
     locktime: c.locktime,
     sequence: c.sequence,
-    cw1,
+    spend: cw1,
+    domain: DOMAIN,
     locked_at: LOCKED_AT,
-    now: c.now,
-    expect_kind: c.expectKind
+    now: c.now
   }
 }
 
@@ -238,12 +261,13 @@ const buildBetlockerCounterpartyVector = () => {
     outcomes,
     AMOUNT_MSAT,
     '2030-01-01T00:00:00Z',
+    DOMAIN,
     undefined,
     undefined,
     counterparty.pubkeyHex
   )
   const lockedNote = {
-    urlTemplate: 'https://mint.example.com/w',
+    urlTemplate: `https://${DOMAIN}/w`,
     amountMsat: AMOUNT_MSAT,
     signature: 'deadbeef'.repeat(16),
     groupPubkeyHex: plan.outputKeyHex
@@ -259,18 +283,17 @@ const buildBetlockerCounterpartyVector = () => {
 
   return {
     name: 'betlocker-counterparty-multisig2',
-    ct1: encodeCt1(hexToBytes(plan.outputKeyHex)),
+    cp1: encodeCp1(hexToBytes(plan.outputKeyHex)),
     output_key: plan.outputKeyHex,
-    amount_msat: AMOUNT_MSAT,
     leaf_script: bytesToHex(decoded.script),
     control_block: bytesToHex(decoded.controlBlock),
     witness: decoded.witness.map(bytesToHex),
     locktime: decoded.locktime,
     sequence: decoded.sequence,
-    cw1,
+    spend: cw1,
+    domain: DOMAIN,
     locked_at: LOCKED_AT,
-    now: LOCKED_AT,
-    expect_kind: 'multisig2'
+    now: LOCKED_AT
   }
 }
 
@@ -292,7 +315,8 @@ const buildBetlockerRefundVector = () => {
     nonce.pubkeyHex,
     ['yes', 'no'],
     AMOUNT_MSAT,
-    refundDate
+    refundDate,
+    DOMAIN
   )
   const decoded = decodeCw1(plan.refundCw1)!
   expect(decoded.witness).toHaveLength(1)
@@ -305,18 +329,17 @@ const buildBetlockerRefundVector = () => {
 
   return {
     name: 'betlocker-refund-cltv',
-    ct1: encodeCt1(hexToBytes(plan.outputKeyHex)),
+    cp1: encodeCp1(hexToBytes(plan.outputKeyHex)),
     output_key: plan.outputKeyHex,
-    amount_msat: AMOUNT_MSAT,
     leaf_script: bytesToHex(decoded.script),
     control_block: bytesToHex(decoded.controlBlock),
     witness: decoded.witness.map(bytesToHex),
     locktime: decoded.locktime,
     sequence: decoded.sequence,
-    cw1: plan.refundCw1,
+    spend: plan.refundCw1,
+    domain: DOMAIN,
     locked_at: LOCKED_AT,
-    now: decoded.locktime + 1,
-    expect_kind: 'cltv'
+    now: decoded.locktime + 1
   }
 }
 
@@ -336,7 +359,7 @@ const buildSealsVector = () => {
     owner.pubkeyHex
   )
   const {outputKeyHex} = planSealLock(state)
-  const cw1 = redeemCurrentStateCw1(state, owner.secretKeyHex, AMOUNT_MSAT)
+  const cw1 = redeemCurrentStateCw1(state, owner.secretKeyHex, DOMAIN)
   const decoded = decodeCw1(cw1)!
   expect(decoded.witness).toHaveLength(2)
   expect(
@@ -348,23 +371,38 @@ const buildSealsVector = () => {
 
   return {
     name: 'seals-genesis-hashlock',
-    ct1: encodeCt1(hexToBytes(outputKeyHex)),
+    cp1: encodeCp1(hexToBytes(outputKeyHex)),
     output_key: outputKeyHex,
-    amount_msat: AMOUNT_MSAT,
     leaf_script: bytesToHex(decoded.script),
     control_block: bytesToHex(decoded.controlBlock),
     witness: decoded.witness.map(bytesToHex),
     locktime: decoded.locktime,
     sequence: decoded.sequence,
-    cw1,
+    spend: cw1,
+    domain: DOMAIN,
     locked_at: LOCKED_AT,
-    now: LOCKED_AT,
-    expect_kind: 'hashlock'
+    now: LOCKED_AT
   }
 }
 
-describe('ct1/cw1 interop vectors (wallet -> lnurlcashkernel -> Bitcoin Core)', () => {
+// A key-path spend (ck1): the note's Q is the owner's own key, signed by
+// this wallet's own signNoteOwnership over the key-path sighash.
+const buildKeyPathVector = () => {
+  const {pubkeyXOnly, signature} = signNoteOwnership(ownerSk, DOMAIN)
+  return {
+    name: 'key',
+    cp1: encodeCp1(pubkeyXOnly),
+    output_key: bytesToHex(pubkeyXOnly),
+    spend: encodeCk1(pubkeyXOnly, signature),
+    domain: DOMAIN,
+    locked_at: LOCKED_AT,
+    now: LOCKED_AT
+  }
+}
+
+describe('spend interop vectors (wallet -> lnurlcashkernel -> Bitcoin Core)', () => {
   const vectors = [
+    buildKeyPathVector(),
     ...CASES.map(buildVector),
     buildBetlockerCounterpartyVector(),
     buildBetlockerRefundVector(),
@@ -373,25 +411,26 @@ describe('ct1/cw1 interop vectors (wallet -> lnurlcashkernel -> Bitcoin Core)', 
 
   it('builds a vector for every supported leaf shape', () => {
     expect(vectors.map(v => v.name)).toEqual([
+      'key',
       ...CASES.map(c => c.name),
       'betlocker-counterparty-multisig2',
       'betlocker-refund-cltv',
       'seals-genesis-hashlock'
     ])
     for (const v of vectors) {
-      expect(v.ct1.startsWith('ct1')).toBe(true)
-      expect(v.cw1.startsWith('cw1')).toBe(true)
+      expect(v.cp1.startsWith('cp1')).toBe(true)
+      expect(v.spend.startsWith(v.name === 'key' ? 'ck1' : 'cw1')).toBe(true)
     }
   })
 
-  it('writes them out when CT1_VECTORS_OUT is set', () => {
-    const out = process.env.CT1_VECTORS_OUT
+  it('writes them out when SPEND_VECTORS_OUT is set', () => {
+    const out = process.env.SPEND_VECTORS_OUT
     if (!out) return
     writeFileSync(
       out,
       JSON.stringify(
         {
-          note: 'Generated by lnurl-wallet src/addons/taproot/ct1Interop.test.ts - do not edit by hand.',
+          note: 'Generated by lnurl-wallet src/addons/taproot/spendInterop.test.ts - do not edit by hand.',
           vectors
         },
         null,

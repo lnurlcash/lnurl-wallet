@@ -137,7 +137,7 @@ export const nextCashAddressSecret = (domain: string): string | null => {
   const indices = readIndices(ADDRESS_STORAGE_KEY)
   indices[domain] = i + 1
   writeIndices(ADDRESS_STORAGE_KEY, indices)
-  const {pubkeyXOnly, signature} = signNoteOwnership(secretKey)
+  const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, domain)
   return encodeCk1(pubkeyXOnly, signature)
 }
 

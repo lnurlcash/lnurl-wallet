@@ -1,8 +1,8 @@
-// Pure math behind the HTLC addon: a note locked to a ct1 with two leaves -
+// Pure math behind the HTLC addon: a note locked to a note with two leaves -
 // a hashlock CLAIM leaf (spendable by whoever can produce the sha256
 // preimage of a hash AND sign with a named claimant's own key) and a
 // mandatory cltv REFUND leaf (spendable by the original locker after a
-// deadline) - see timelock.ts's own top comment for the general "ct1/cw1
+// deadline) - see timelock.ts's own top comment for the general "cp1/cw1
 // note lock" shape this reuses byte-for-byte, and the sibling betlocker
 // addon for the closest existing two-leaf-tree precedent (outcome leaf +
 // mandatory refund leaf).
@@ -176,11 +176,12 @@ export const planHtlc = (
   claimPubkeyHex: unknown,
   amountMsat: unknown,
   refundDate: unknown,
+  mint: unknown,
   nowSeconds = Math.floor(Date.now() / 1000)
 ): HtlcPlan => {
   const problem = htlcProblem(hashHex, claimPubkeyHex)
   if (problem) throw new Error(problem)
-  if (!isPositiveInt(amountMsat)) {
+  if (!isPositiveInt(amountMsat) || typeof mint !== 'string' || !mint) {
     throw new Error('Pick a note to lock first.')
   }
   const refundProblem = dateProblem(refundDate, nowSeconds)
@@ -217,7 +218,7 @@ export const planHtlc = (
     NUMS_INTERNAL_KEY_HEX,
     leaves,
     refundScript,
-    Number(amountMsat),
+    mint,
     refundLocktime,
     TIMELOCK_SEQUENCE
   )
@@ -414,7 +415,7 @@ export const buildClaimCw1 = (
     NUMS_INTERNAL_KEY_HEX,
     leaves,
     targetScript,
-    receipt.amountMsat,
+    receipt.urlTemplate,
     0,
     0xfffffffe
   )
