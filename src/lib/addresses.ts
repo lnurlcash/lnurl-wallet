@@ -146,7 +146,7 @@ export type AddressScanOptions = {
   // after gapLimit consecutive unknowns would otherwise have stopped it -
   // the normal gapLimit-based stop applies again as soon as index passes
   // it. For a SERVICE-advertised next-index hint (25.md's
-  // text/xpub, see resolveScanStartIndex's own doc comment on why the hint
+  // text/cpub, see resolveScanStartIndex's own doc comment on why the hint
   // alone is never trustworthy as a *floor*), this is the complementary
   // guarantee at the other end: a caller doing a full, from-scratch walk
   // wants to know it reached at least as far as SERVICE says it has handed
@@ -266,7 +266,7 @@ export const scanForAddressNotes = async (
 }
 
 // LUD-25's own resume-floor rule for combining a caller's own
-// already-confirmed floor with a SERVICE-advertised `text/xpub` index hint
+// already-confirmed floor with a SERVICE-advertised `text/cpub` index hint
 // (25.md's Internal mint transfers metadata - see internalTransfer.ts's
 // parseInternalTransferHint for the identical wire format). The hint names
 // the next index SERVICE will hand out - it advances the moment SERVICE

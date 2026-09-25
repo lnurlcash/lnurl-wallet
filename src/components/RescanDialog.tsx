@@ -33,7 +33,7 @@ export type RescanDialogProps = {
 // same seed-derived-branch walk (cashSecrets.ts's cashAddressBranch)
 // whether or not this wallet has claimed a username@mint address here -
 // what differs is only whether SERVICE has a next-index hint to offer
-// (LUD-25's text/xpub metadata, registered-address-only). So this
+// (LUD-25's text/cpub metadata, registered-address-only). So this
 // dialog always offers the plain mint-bearer rescan (recovery.ts's
 // scanMintForNotes - notes this wallet minted/rotated/split/merged
 // directly here), and additionally offers the address-aware one

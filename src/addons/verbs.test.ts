@@ -89,8 +89,8 @@ describe("VERBS['note.split']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: CS1,
-            sig2: CS1
+            c: CS1,
+            c2: CS1
           })
         } as Response
       }
@@ -209,7 +209,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("resolves a username against the picked note's own mint, via its published LUD-25 text/xpub hint - always at index 0, not the hint's own next-payable index", async () => {
+  it("resolves a username against the picked note's own mint, via its published LUD-25 text/cpub hint - always at index 0, not the hint's own next-payable index", async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       expect(new URL(input.toString()).toString()).toBe(
         `${BASE}/.well-known/lnurlp/alice`
@@ -222,7 +222,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
           maxSendable: 100000000,
           metadata: JSON.stringify([
             ['text/plain', 'pay alice'],
-            ['text/xpub', `${CX1}:3`]
+            ['text/cpub', `${CX1}:3`]
           ])
         })
       } as Response
@@ -257,7 +257,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
           maxSendable: 100000000,
           metadata: JSON.stringify([
             ['text/plain', 'pay alice'],
-            ['text/xpub', `${CX1}:3`]
+            ['text/cpub', `${CX1}:3`]
           ])
         })
       } as Response
@@ -274,7 +274,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects a Lightning Address whose mint never published a LUD-25 address (no text/xpub)', async () => {
+  it('rejects a Lightning Address whose mint never published a LUD-25 address (no text/cpub)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -295,7 +295,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     ).rejects.toThrow(/LUD-25 address/)
   })
 
-  it('rejects a username whose mint never published a LUD-25 address (no text/xpub)', async () => {
+  it('rejects a username whose mint never published a LUD-25 address (no text/cpub)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -409,7 +409,7 @@ describe("VERBS['note.lockToPubkey']", () => {
         const params = new URL(input.toString()).searchParams
         seen.push(params)
         return {
-          json: async () => ({status: 'OK', sig: certify(TARGET_HEX, AMOUNT)})
+          json: async () => ({status: 'OK', c: certify(TARGET_HEX, AMOUNT)})
         } as Response
       })
     )
@@ -468,7 +468,7 @@ describe("VERBS['note.lockToPubkey']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: encodeCs1WithAmount(
+            c: encodeCs1WithAmount(
               AMOUNT,
               new Uint8Array([...sig.subarray(1), sig[0]!])
             )

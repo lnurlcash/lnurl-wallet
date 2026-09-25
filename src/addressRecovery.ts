@@ -46,7 +46,7 @@ export type AddressScanOutcome = {
   // call the way nextScanIndex is.
   checkedFrom: number
   // SERVICE's own advertised next-unused-index hint for this pass (LUD-25
-  // LUD-25's text/xpub metadata, see mintRequest.ts's
+  // LUD-25's text/cpub metadata, see mintRequest.ts's
   // PayRequestInfo.internalTransfer) - null when SERVICE didn't advertise
   // one, or this pass never got far enough to learn it. Purely
   // informational: resolveScanStartIndex already decided how (or whether)
@@ -205,7 +205,7 @@ export const scanRegisteredAddress = async (
         withdrawUrl,
         ck1,
         result.info.maxWithdrawable,
-        result.info.sig
+        result.info.c
       )
       const alreadyHeld = existing.some(
         b =>

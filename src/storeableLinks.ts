@@ -18,7 +18,7 @@ export type StoreableLink = {
   address: string
   addedAt: number
   // LUD-25's Internal transfer (25.md): whether this address's own
-  // payRequest was last seen advertising a text/xpub metadata entry (see
+  // payRequest was last seen advertising a text/cpub metadata entry (see
   // mintRequest.ts's parseInternalTransferHint) - a CONFIRMED fact from an
   // actual lookup, never guessed (e.g. never inferred just because this
   // wallet happens to hold notes at the same mint - that alone says
@@ -70,7 +70,7 @@ const makeRegistry = (storageKey: string) => {
   // caller (see addStoreableMeltAddress below) - the mint registry's own
   // add() calls simply never pass it, leaving every mint entry's own field
   // undefined. Re-adding an address already on file refreshes what's known
-  // about it (e.g. a later lookup that now sees text/xpub where an earlier
+  // about it (e.g. a later lookup that now sees text/cpub where an earlier
   // one didn't) rather than silently no-op'ing past newer information.
   const add = (address: string, internalTransfer?: boolean): void => {
     const trimmed = address.trim()

@@ -691,7 +691,7 @@ export const VERBS: Record<string, VerbHandler> = {
       const hint = parseInternalTransferHint(String(body.metadata ?? ''))
       if (!hint) {
         throw new Error(
-          `${displayAddress} hasn't published a LUD-25 address (no text/xpub metadata) - they'd need to register a Lightning Address there first, or hand you their pubkey/cp1/cx1 directly.`
+          `${displayAddress} hasn't published a LUD-25 address (no text/cpub metadata) - they'd need to register a Lightning Address there first, or hand you their pubkey/cp1/cx1 directly.`
         )
       }
       const pubkey = deriveNotePubkey(

@@ -327,7 +327,7 @@ export const parseHtlcReceipt = (value: unknown): HtlcReceipt | null => {
     }
     if (!isU32(refundLocktime)) return null
     url.searchParams.delete('amount')
-    url.searchParams.delete('sig')
+    url.searchParams.delete('c')
     url.searchParams.delete('hash')
     url.searchParams.delete('claim')
     url.searchParams.delete('refundPubkey')

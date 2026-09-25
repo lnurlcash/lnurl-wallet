@@ -81,7 +81,7 @@ const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
         callback: `${SERVER}/p/cb?username=${USERNAME}`,
         minSendable: 1000,
         maxSendable: 100_000_000,
-        metadata: xpubHint ? JSON.stringify([['text/xpub', xpubHint]]) : '[]',
+        metadata: xpubHint ? JSON.stringify([['text/cpub', xpubHint]]) : '[]',
         withdrawLink: `${SERVER}/w`
       })
     }
@@ -94,7 +94,7 @@ const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
           mintPubkey: MINT_PUBKEY,
           minWithdrawable: 21000,
           maxWithdrawable: 21000,
-          ...(sig ? {sig} : {})
+          ...(sig ? {c: sig} : {})
         })
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
@@ -264,7 +264,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(100)
   })
 
-  it("never lets SERVICE's own text/xpub metadata hint skip a fresh device's unscanned floor", async () => {
+  it("never lets SERVICE's own text/cpub metadata hint skip a fresh device's unscanned floor", async () => {
     const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(

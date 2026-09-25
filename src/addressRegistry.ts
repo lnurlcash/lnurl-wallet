@@ -33,7 +33,7 @@ export type RegisteredAddress = {
   // scanRegisteredAddress's own `nextScanIndex` return field for how this
   // advances: past whatever this device has itself confirmed used, and
   // past whatever index SERVICE's own payRequest metadata hints at
-  // (LUD-25's text/xpub, internalTransfer.ts's
+  // (LUD-25's text/cpub, internalTransfer.ts's
   // parseInternalTransferHint) - never regresses
   nextScanIndex?: number
 }

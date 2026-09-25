@@ -101,7 +101,7 @@ const METADATA_LABELS: Record<string, string> = {
   'image/jpeg;base64': 'Image (JPEG, base64)',
   // this wallet's own LUD-25 extension - see internalTransfer.ts's
   // parseInternalTransferHint, `cx1<...>:<i>`
-  'text/xpub': 'Internal transfer xpub (LUD-25)'
+  'text/cpub': 'Internal transfer cpub (LUD-25)'
 }
 
 const MAX_METADATA_VALUE_LENGTH = 160

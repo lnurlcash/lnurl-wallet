@@ -898,15 +898,16 @@ const Mint: Component = () => {
         declaredUrl,
         noteInfo.k1,
         noteInfo.maxWithdrawable,
-        noteInfo.sig
+        noteInfo.c
       )
-      // SERVICE may already disclose this note's offline-verification sig
-      // right on this informational GET (see WithdrawRequestInfo's own
-      // comment) - skip the rotate-for-a-certificate dance entirely when
-      // it's already there. Only fall back to it (as in the minting
-      // diagram) when SERVICE doesn't yet disclose one this way.
+      // SERVICE may already disclose this note's offline-verification
+      // certificate right on this informational GET (see
+      // WithdrawRequestInfo's own comment) - skip the rotate-for-a-
+      // certificate dance entirely when it's already there. Only fall back
+      // to it (as in the minting diagram) when SERVICE doesn't yet disclose
+      // one this way.
       let rotationError: string | null = null
-      if (!noteInfo.sig) {
+      if (!noteInfo.c) {
         try {
           const rotated = await rotateNote(noteInfo.callback, noteInfo.k1)
           url = withNewK1(

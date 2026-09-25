@@ -123,7 +123,7 @@ const scanPurposeNotes = async (
           withdrawLink,
           ck1,
           result.info.maxWithdrawable,
-          result.info.sig
+          result.info.c
         )
         const alreadyHeld = existing.some(
           b =>

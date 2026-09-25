@@ -50,16 +50,16 @@ export type WithdrawRequestInfo = {
   // plain informational GET itself now (not just a k1=ck1 lookup, and not
   // only after an explicit rotate) - a note that already has one needs no
   // rotate/refresh just to become offline-verifiable. Validated the same
-  // way requireMutationSignature validates a mutation's own sig (hex or
-  // cs1, preserved exactly as disclosed) - never trusted un-normalized off
-  // the wire, and simply absent (not a malformed placeholder) if SERVICE
-  // didn't send a recognizable one.
-  sig?: string
+  // way requireMutationSignature validates a mutation's own certificate
+  // (hex or cs1, preserved exactly as disclosed) - never trusted
+  // un-normalized off the wire, and simply absent (not a malformed
+  // placeholder) if SERVICE didn't send a recognizable one.
+  c?: string
 }
 
 export type HashWithdrawRequestInfo = Omit<WithdrawRequestInfo, 'k1'>
 
-const parseOptionalSig = (value: unknown): string | undefined => {
+const parseOptionalCertificate = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined
   return isCs1WithAmount(value) ? value.trim() : undefined
 }
@@ -79,15 +79,15 @@ const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   ) {
     throw new Error('Not a withdrawRequest (unexpected response).')
   }
-  // body's own (untyped, unvalidated) sig is deliberately excluded from the
-  // spread below and only ever reintroduced via parseOptionalSig - a
-  // malformed one must never leak through unnormalized
-  const {sig: _rawSig, ...rest} = body
-  const sig = parseOptionalSig(body.sig)
+  // body's own (untyped, unvalidated) c is deliberately excluded from the
+  // spread below and only ever reintroduced via parseOptionalCertificate -
+  // a malformed one must never leak through unnormalized
+  const {c: _rawCert, ...rest} = body
+  const c = parseOptionalCertificate(body.c)
   return {
     ...rest,
     ...parseMintKey(body),
-    ...(sig !== undefined ? {sig} : {})
+    ...(c !== undefined ? {c} : {})
   } as HashWithdrawRequestInfo
 }
 
@@ -100,7 +100,7 @@ const requestNoteInfoByRef = async (
   const lookupUrl = new URL(url)
   lookupUrl.searchParams.delete('k1')
   lookupUrl.searchParams.delete('amount')
-  lookupUrl.searchParams.delete('sig')
+  lookupUrl.searchParams.delete('c')
   lookupUrl.searchParams.set('p', value)
   const body = await lnurlFetch(lookupUrl)
   if (body.k1 !== undefined) {
@@ -186,7 +186,7 @@ export const fetchNoteInfo = async (
   // legitimate caller already reconstructs a secret-bearing URL first.
   const queried = requireNoteK1(url)
   const rawUrl = new URL(url)
-  rawUrl.searchParams.delete('sig')
+  rawUrl.searchParams.delete('c')
 
   // a ck1 carries its note's Q
   if (isCk1(queried)) {
@@ -351,8 +351,8 @@ export const fetchMintAddress = async (
 
 export type WithdrawSuccessResponse = {
   status: 'OK'
-  sig?: string
-  sig2?: string
+  c?: string
+  c2?: string
   // LUD-25 melt proof (optional): only present on a melt's response, and
   // only when SERVICE advertises it - see meltNote
   pr?: string
@@ -453,7 +453,7 @@ export type HashedMutationResult = {signature?: string}
 // malformed optional proof does not make the landed note unusable.
 const mutationSignature = (
   body: any,
-  field: 'sig' | 'sig2',
+  field: 'c' | 'c2',
   output: string
 ): string | undefined => {
   if (isPubkeyCommitment(output)) return requireMutationSignature(body, field)
@@ -474,7 +474,7 @@ export const rotateNoteWithHash = async (
     ['k1', k1],
     ['p1', refOf(h, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
+  const signature = mutationSignature(body, 'c', h)
   return signature === undefined ? {} : {signature}
 }
 
@@ -497,8 +497,8 @@ export const splitNoteWithHash = async (
     ['p1', refOf(h, short)],
     ['p2', refOf(h2, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
-  const changeSignature = mutationSignature(body, 'sig2', h2)
+  const signature = mutationSignature(body, 'c', h)
+  const changeSignature = mutationSignature(body, 'c2', h2)
   return {
     ...(signature === undefined ? {} : {signature}),
     ...(changeSignature === undefined ? {} : {changeSignature})
@@ -515,7 +515,7 @@ export const mergeNotesWithHash = async (
     ...k1s.map((k1): [string, string] => ['k1', k1]),
     ['p1', refOf(h, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
+  const signature = mutationSignature(body, 'c', h)
   return signature === undefined ? {} : {signature}
 }
 

@@ -1,6 +1,6 @@
 // LUD-25's "Internal transfer" (25.md): if a payee has registered a
 // cx1 (Seed & derivation) at a mint, SERVICE MAY publish it in their
-// payRequest metadata as a `text/xpub` entry, `cx1<...>:<i>` (their own
+// payRequest metadata as a `text/cpub` entry, `cx1<...>:<i>` (their own
 // best-known next-unused index for that branch). A WALLET that already
 // holds a note at that SAME SERVICE can then skip Lightning entirely:
 // derive the payee's next pubkey pk_i from their cx1, and rotate, split or
@@ -36,7 +36,7 @@ import {
 export type InternalTransferHint = {cx1: Cx1; startIndex: number}
 
 // pulls a payee's cx1 export + hinted next index out of a payRequest's
-// metadata (per this section's own `["text/xpub", "cx1<...>:<i>"]` entry),
+// metadata (per this section's own `["text/cpub", "cx1<...>:<i>"]` entry),
 // mirroring fees.ts's parseMintFee - JSON.parse, scan for the matching
 // entry type, never throw. `i` isn't validated against anything here (a
 // stale or adversarial hint is harmless - see payInternalTransfer's own
@@ -53,7 +53,7 @@ export const parseInternalTransferHint = (
   }
   if (!Array.isArray(entries)) return null
   for (const entry of entries) {
-    if (!Array.isArray(entry) || entry[0] !== 'text/xpub') continue
+    if (!Array.isArray(entry) || entry[0] !== 'text/cpub') continue
     if (typeof entry[1] !== 'string') continue
     const sep = entry[1].lastIndexOf(':')
     if (sep < 0) continue

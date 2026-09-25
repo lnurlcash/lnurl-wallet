@@ -151,7 +151,7 @@ describe('mandatory offline-verification fields', () => {
       vi.fn(
         async () =>
           ({
-            json: async () => ({status: 'OK', sig: certificate})
+            json: async () => ({status: 'OK', c: certificate})
           }) as Response
       )
     )
@@ -166,7 +166,7 @@ describe('mandatory offline-verification fields', () => {
       vi.fn(
         async () =>
           ({
-            json: async () => ({status: 'OK', sig: 'not-a-signature'})
+            json: async () => ({status: 'OK', c: 'not-a-signature'})
           }) as Response
       )
     )
@@ -404,7 +404,7 @@ describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
       expect(request.searchParams.get('h')).toBeNull()
       expect(request.searchParams.get('p1')).toBe(cp1)
       return {
-        json: async () => ({status: 'OK', sig: CS1})
+        json: async () => ({status: 'OK', c: CS1})
       } as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -418,7 +418,7 @@ describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
       expect(request.searchParams.get('h')).toBeNull()
       expect(request.searchParams.get('p1')).toBe(noteRef('b'.repeat(64)))
       return {
-        json: async () => ({status: 'OK', sig: CS1})
+        json: async () => ({status: 'OK', c: CS1})
       } as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -439,8 +439,8 @@ describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
       return {
         json: async () => ({
           status: 'OK',
-          sig: CS1,
-          sig2: CS1
+          c: CS1,
+          c2: CS1
         })
       } as Response
     })
@@ -459,8 +459,7 @@ describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
-        async () =>
-          ({json: async () => ({status: 'OK', sig: cert})}) as Response
+        async () => ({json: async () => ({status: 'OK', c: cert})}) as Response
       )
     )
     const result = await rotateNoteWithHash(
@@ -472,9 +471,9 @@ describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
   })
 })
 
-describe('WithdrawRequestInfo.sig: informational GET may already disclose one', () => {
-  it('ignores a plain-hex sig on the informational GET: only a cs1 is a certificate', async () => {
-    const sig = 'ab'.repeat(65)
+describe('WithdrawRequestInfo.c: informational GET may already disclose one', () => {
+  it('ignores a plain-hex value on the informational GET: only a cs1 is a certificate', async () => {
+    const c = 'ab'.repeat(65)
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -486,16 +485,16 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
               minWithdrawable: 21000,
               maxWithdrawable: 21000,
               mintPubkey: MINT_KEY,
-              sig
+              c
             })
           }) as Response
       )
     )
     const info = await fetchNoteInfo(NOTE_URL)
-    expect(info.sig).toBeUndefined()
+    expect(info.c).toBeUndefined()
   })
 
-  it('captures a cs1-encoded sig, preserved exactly as disclosed', async () => {
+  it('captures a cs1-encoded certificate, preserved exactly as disclosed', async () => {
     const cert = encodeCs1WithAmount(21000, new Uint8Array(65).fill(0xcd))
     vi.stubGlobal(
       'fetch',
@@ -508,16 +507,16 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
               minWithdrawable: 21000,
               maxWithdrawable: 21000,
               mintPubkey: MINT_KEY,
-              sig: cert
+              c: cert
             })
           }) as Response
       )
     )
     const info = await fetchNoteInfo(NOTE_URL)
-    expect(info.sig).toBe(cert)
+    expect(info.c).toBe(cert)
   })
 
-  it('leaves sig undefined rather than leaking a malformed one through', async () => {
+  it('leaves c undefined rather than leaking a malformed one through', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -529,16 +528,16 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
               minWithdrawable: 21000,
               maxWithdrawable: 21000,
               mintPubkey: MINT_KEY,
-              sig: 'not-a-real-signature'
+              c: 'not-a-real-signature'
             })
           }) as Response
       )
     )
     const info = await fetchNoteInfo(NOTE_URL)
-    expect(info.sig).toBeUndefined()
+    expect(info.c).toBeUndefined()
   })
 
-  it('leaves sig undefined when SERVICE does not disclose one at all', async () => {
+  it('leaves c undefined when SERVICE does not disclose one at all', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -555,7 +554,7 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
       )
     )
     const info = await fetchNoteInfo(NOTE_URL)
-    expect(info.sig).toBeUndefined()
+    expect(info.c).toBeUndefined()
   })
 })
 
@@ -580,7 +579,7 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
 
   const okResponse = () =>
     ({
-      json: async () => ({status: 'OK', sig: CS1})
+      json: async () => ({status: 'OK', c: CS1})
     }) as Response
 
   it('rotateNote reissues a ck1 input as a pubkey-bound output when a provider is configured', async () => {
@@ -661,8 +660,8 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
       return {
         json: async () => ({
           status: 'OK',
-          sig: CS1,
-          sig2: CS1
+          c: CS1,
+          c2: CS1
         })
       } as Response
     })
@@ -703,7 +702,7 @@ describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', 
 
   const okResponse = () =>
     ({
-      json: async () => ({status: 'OK', sig: CS1})
+      json: async () => ({status: 'OK', c: CS1})
     }) as Response
 
   it('reissues a plain legacy secret as a ck1, unlike an ordinary rotate', async () => {
@@ -747,7 +746,7 @@ describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', 
 
 describe('short-form variants', () => {
   const h = 'b'.repeat(64)
-  const okBody = {status: 'OK', sig: CS1, sig2: CS1}
+  const okBody = {status: 'OK', c: CS1, c2: CS1}
   const capture = (seen: URL[], body: object) =>
     vi.fn(async (input: string | URL) => {
       seen.push(new URL(input.toString()))

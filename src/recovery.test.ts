@@ -97,7 +97,7 @@ const fakeMint = (
           mintPubkey: MINT_PUBKEY,
           minWithdrawable: 21000,
           maxWithdrawable: 21000,
-          ...(sig ? {sig} : {})
+          ...(sig ? {c: sig} : {})
         })
       }
       if (p && spentCp1 && p === spentCp1) {
@@ -140,7 +140,7 @@ describe('scanMintForNotes', () => {
     vi.stubGlobal('fetch', fakeMint([0], null, sig) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)
-    expect(new URL(result.recovered[0]!.url).searchParams.get('sig')).toBe(sig)
+    expect(new URL(result.recovered[0]!.url).searchParams.get('c')).toBe(sig)
   })
 
   it("a spent index doesn't count toward the gap, but yields nothing", async () => {

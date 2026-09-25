@@ -336,14 +336,14 @@ const TransferDialog: Component<TransferDialogProps> = props => {
         declaredUrl,
         noteInfo.k1,
         noteInfo.maxWithdrawable,
-        noteInfo.sig
+        noteInfo.c
       )
       let rotationError: string | null = null
-      // SERVICE may already disclose this note's offline-verification sig
-      // right on this informational GET (see WithdrawRequestInfo's own
-      // comment) - skip the rotate entirely when it's already there, same
-      // as Mint.tsx's own claim().
-      if (!noteInfo.sig) {
+      // SERVICE may already disclose this note's offline-verification
+      // certificate right on this informational GET (see
+      // WithdrawRequestInfo's own comment) - skip the rotate entirely when
+      // it's already there, same as Mint.tsx's own claim().
+      if (!noteInfo.c) {
         try {
           const rotated = await rotateNote(noteInfo.callback, noteInfo.k1)
           url = withNewK1(

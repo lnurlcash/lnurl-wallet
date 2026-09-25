@@ -688,7 +688,7 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
     // optional - see BetReceipt.signature's own doc comment for why a
     // receipt with no offline-verification sig is still a perfectly valid
     // receipt, not a malformed one
-    const signature = url.searchParams.get('sig')
+    const signature = url.searchParams.get('c')
     const dlcRaw = url.searchParams.get('dlc')
     if (!amountRaw || !dlcRaw) return null
     const amountMsat = Number(amountRaw)
@@ -701,7 +701,7 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
     const outcomes = normalizedOutcomes(dlc.outcomes)
     if (outcomes.length < MIN_OUTCOMES) return null
     url.searchParams.delete('amount')
-    url.searchParams.delete('sig')
+    url.searchParams.delete('c')
     url.searchParams.delete('dlc')
     return {
       urlTemplate: url.toString(),

@@ -348,13 +348,13 @@ export const cp1FromCk1 = (ck1: string): string | null => {
   return pubkey ? encodeCp1(pubkey) : null
 }
 
-// A rotate/split/merge's sig/sig2: a cs1, preserved exactly as SERVICE
-// disclosed it, so the note's own stored URL/sig matches the wire value
-// byte-for-byte. verifyNoteSignatureDigest (via normalizeSignatureHex) is
-// the one place that needs raw bytes.
+// A rotate/split/merge's c/c2: a cs1 certificate, preserved exactly as
+// SERVICE disclosed it, so the note's own stored URL/certificate matches
+// the wire value byte-for-byte. verifyNoteSignatureDigest (via
+// normalizeSignatureHex) is the one place that needs raw bytes.
 export const requireMutationSignature = (
   body: any,
-  field: 'sig' | 'sig2'
+  field: 'c' | 'c2'
 ): string => {
   const signature = body?.[field]
   if (typeof signature === 'string' && isCs1WithAmount(signature)) {
@@ -368,6 +368,6 @@ export const requireMutationSignature = (
   // fresh secret(s), so this must stay an AmbiguousMintError and not a
   // plain Error, or that fund-safety path silently stops firing.
   throw new AmbiguousMintError(
-    `SERVICE confirmed the mutation without a valid ${field} signature.`
+    `SERVICE confirmed the mutation without a valid ${field} certificate.`
   )
 }
