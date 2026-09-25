@@ -35,7 +35,7 @@ const BOLT11_AMOUNT_MSAT_PER_UNIT: Record<string, number> = {
 
 // per BOLT-11's own multiplier-choice algorithm (the `bolt11` Python
 // package's msat_to_amount, which lnurl-mint's own bech32m.py reuses
-// verbatim for LUD-25 Part 2's amount-encoding cs1 - see
+// verbatim for LUD-25's amount-encoding cs1 - see
 // recoverableNotes.ts's encodeCs1WithAmount): the COARSEST unit ('' > m >
 // u > n > p) that still represents amount_msat exactly as an integer
 // digit count. Each successive per-unit value differs by exactly 1000x,

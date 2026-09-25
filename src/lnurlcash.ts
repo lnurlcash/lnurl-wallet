@@ -2,7 +2,8 @@ import {bytesToHex} from '@noble/hashes/utils.js'
 import {offlineMode} from './offlineMode'
 import {
   recordPendingMintSecret,
-  requireRecoverableCashAddressSecret
+  requireRecoverableCashAddressSecret,
+  nextChangeSecret
 } from './cashSecrets'
 import {msatToSats} from './helpers'
 import {configureNetworkGuard} from './lib/net'
@@ -11,7 +12,8 @@ import {
   requestInvoice,
   hashK1,
   cp1FromCk1,
-  configurePubkeySecretProvider
+  configurePubkeySecretProvider,
+  configureChangePubkeySecretProvider
 } from './lib/index'
 import type {MintFee, InvoiceResult} from './lib/index'
 
@@ -126,6 +128,13 @@ configurePubkeySecretProvider(domain => {
     return null
   }
 })
+
+// NOTE_PURPOSE_CHANGE counterpart to the wiring above - a split's own
+// change note, drawn from its own independent counter (cashSecrets.ts's
+// nextChangeSecret) so it never shares an index with an ordinary
+// mint/rotate/merge output. Already `(domain) => string | null`, so it
+// wires straight into configureChangePubkeySecretProvider with no wrapper.
+configureChangePubkeySecretProvider(nextChangeSecret)
 
 // Requests a mint invoice, preferring a seed-recoverable key-path note
 // (comment=cp1<pk>) over a random bearer note (comment=cp1 of its hashlock

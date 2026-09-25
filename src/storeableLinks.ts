@@ -17,7 +17,7 @@ import {createSignal} from 'solid-js'
 export type StoreableLink = {
   address: string
   addedAt: number
-  // LUD-25 Part 2's Internal transfer (25.md): whether this address's own
+  // LUD-25's Internal transfer (25.md): whether this address's own
   // payRequest was last seen advertising a text/xpub metadata entry (see
   // mintRequest.ts's parseInternalTransferHint) - a CONFIRMED fact from an
   // actual lookup, never guessed (e.g. never inferred just because this

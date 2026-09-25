@@ -1,9 +1,16 @@
 import {HDKey} from '@scure/bip32'
 import {deriveDomainBranchNode} from './lib/branchDerivation'
-import {deriveNoteSecretKey, encodeCk1, type Cx1} from './lib/recoverableNotes'
+import {
+  deriveNoteSecretKey,
+  encodeCk1,
+  NOTE_PURPOSE_WALLET,
+  NOTE_PURPOSE_CHANGE,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
+  type Cx1
+} from './lib/recoverableNotes'
 import {signNoteOwnership} from './lib/signature'
 
-// LUD-25 Part 2 seed-recoverable note secrets: deterministic secrets for the
+// LUD-25 seed-recoverable note secrets: deterministic secrets for the
 // cp1/ck1 notes this wallet mints/rotates/splits/merges, derived from the
 // seed instead of drawn at random, so a lost/reinstalled wallet can
 // reconstruct them from nothing but the seed phrase plus a small, non-secret
@@ -21,11 +28,22 @@ import {signNoteOwnership} from './lib/signature'
 // prefix already applied, since that's as much of the true BIP32 master as
 // this wallet ever keeps around (see cashRoot below).
 //
-// 25.md's Part 1 (plain hash-preimage bearer notes) defines no derivation of
-// its own at all - a WALLET may generate that secret however it likes. This
-// wallet generates it with plain randomness (see lnurlcash.ts's
+// One branch, three independent index counters (25.md's own `purpose`):
+// NOTE_PURPOSE_WALLET for this file's own nextCashAddressSecret (an
+// ordinary mint/rotate/merge output, or a split's resulting note),
+// NOTE_PURPOSE_CHANGE for a split's own change note (nextChangeSecret
+// below - never shares an index with the above, or a stray retry could
+// merge value into a note someone else already holds the spend for), and
+// NOTE_PURPOSE_LIGHTNING_ADDRESS for whatever a registered address
+// receives, whether by real payment or Internal transfer (addressSecretAtIndex
+// below, used by addressRecovery.ts - never this file's own counter, since
+// SERVICE picks that index, not WALLET).
+//
+// 25.md defines no derivation for bearer notes (a plain hash preimage) - a
+// WALLET may generate that secret however it likes. This wallet generates it
+// with plain randomness (see lnurlcash.ts's
 // generateNoteSecret/generateMintSecret), not a seed-derived branch, so
-// there is nothing here for Part 1 to compete with Part 2 over.
+// bearer notes never compete with key-path notes for a branch index.
 
 // the decrypted cash root node, held in memory only for as long as the
 // wallet is unlocked - set by WalletContext (activate/lock/forgetWallet),
@@ -42,7 +60,7 @@ export const setCashRoot = (node: HDKey | null): void => {
 
 export const hasCashRoot = (): boolean => cashRoot !== null
 
-// per-SERVICE "next index to use" counter for a wallet-initiated Part 2
+// per-SERVICE "next index to use" counter for a wallet-initiated key-path
 // output (see nextCashAddressSecret below) - not secret (an index reveals
 // nothing without the cash root key itself), so plain localStorage, same as
 // trustedMints.ts. `Object.create(null)` sidesteps prototype-pollution
@@ -104,29 +122,55 @@ export const cashAddressBranch = (domain: string): Cx1 | null => {
   return {pubkeyXOnly: publicKey.slice(1), chainCode}
 }
 
-// this note's own bearer secret on the address branch - an actual
-// secp256k1 scalar (see deriveNoteSecretKey). Pure - no counter side effect,
-// so a recovery scan can probe index by index (LUD-25's gap-limit
-// convention, see recovery.ts) without any bookkeeping of its own: unlike a
-// wallet-initiated secret (nextCashAddressSecret below), a note here arrives
-// unsolicited - the mint picks the index, not this wallet - so there is
-// nothing to "claim" ahead of time, only ever a range to check.
+// this note's own bearer secret on the NOTE_PURPOSE_WALLET branch - an
+// actual secp256k1 scalar (see deriveNoteSecretKey). Pure - no counter side
+// effect of its own, so a recovery scan can probe index by index (LUD-25's
+// gap-limit convention, see recovery.ts) without any bookkeeping: the index
+// itself is tracked separately, by nextCashAddressSecretIndex below for a
+// fresh mint, or by the scan's own loop counter during recovery.
 export const cashAddressSecretAtIndex = (
   domain: string,
   index: number
 ): Uint8Array | null => {
   const node = addressDomainNode(domain)
   if (!node?.privateKey || !node.chainCode) return null
-  return deriveNoteSecretKey(node.privateKey, node.chainCode, index)
+  return deriveNoteSecretKey(
+    node.privateKey,
+    node.chainCode,
+    NOTE_PURPOSE_WALLET,
+    index
+  )
 }
 
-// LUD-25 Part 2's own "next index" convention - a wallet-INITIATED
+// the NOTE_PURPOSE_LIGHTNING_ADDRESS counterpart to cashAddressSecretAtIndex
+// above - same branch, same pure/no-counter-side-effect shape (a note here
+// is never wallet-initiated: SERVICE picks the index, whether by an actual
+// payment's auto-mint or an Internal transfer, so there is nothing for this
+// wallet to "claim" ahead of a scan - see addressRecovery.ts's
+// scanRegisteredAddress, the only caller).
+export const addressSecretAtIndex = (
+  domain: string,
+  index: number
+): Uint8Array | null => {
+  const node = addressDomainNode(domain)
+  if (!node?.privateKey || !node.chainCode) return null
+  return deriveNoteSecretKey(
+    node.privateKey,
+    node.chainCode,
+    NOTE_PURPOSE_LIGHTNING_ADDRESS,
+    index
+  )
+}
+
+// LUD-25's own "next index" convention - a wallet-INITIATED
 // mint/transfer's own pubkey-bound output, returned as its actual bearer
 // secret (a ck1 ownership signature - see signNoteOwnership) rather than a
-// raw preimage. This is otherwise unrelated to (and never shares an index
-// with) a registered address's mint-auto-derived notes on the same branch -
-// the mint's own claim_next_index already skips past any index this wallet
-// has already used, on either side, so there is nothing to coordinate here.
+// raw preimage. This draws from NOTE_PURPOSE_WALLET's own counter, entirely
+// independent of a registered address's mint-auto-derived notes
+// (NOTE_PURPOSE_LIGHTNING_ADDRESS, addressSecretAtIndex above) or a split's
+// change (NOTE_PURPOSE_CHANGE, nextChangeSecret below) on that same
+// branch - the three purposes exist specifically so none of them ever needs
+// to coordinate with, or skip past, either of the others.
 export const nextCashAddressSecretIndex = (domain: string): number =>
   readIndices(ADDRESS_STORAGE_KEY)[domain] ?? 0
 
@@ -155,6 +199,58 @@ export const requireRecoverableCashAddressSecret = (domain: string): string => {
     )
   }
   return secret
+}
+
+// NOTE_PURPOSE_CHANGE's own counter - a split's change note only (never a
+// rotate/merge result, never a split's own "resulting" output, both of
+// which stay on NOTE_PURPOSE_WALLET above). A separate counter, not a
+// shared one with a skip-based dance, is the whole reason this purpose
+// exists: nothing here needs to check what NOTE_PURPOSE_WALLET has already
+// used, or vice versa.
+const CHANGE_STORAGE_KEY = 'lnurlcash_cash_change_indices'
+
+export const readCashChangeSecretIndices = (): Indices =>
+  readIndices(CHANGE_STORAGE_KEY)
+
+export const clearCashChangeSecretIndices = (): void => {
+  localStorage.removeItem(CHANGE_STORAGE_KEY)
+}
+
+// the NOTE_PURPOSE_CHANGE counterpart to cashAddressSecretAtIndex above -
+// same branch, same pure/no-counter-side-effect shape.
+export const changeSecretAtIndex = (
+  domain: string,
+  index: number
+): Uint8Array | null => {
+  const node = addressDomainNode(domain)
+  if (!node?.privateKey || !node.chainCode) return null
+  return deriveNoteSecretKey(
+    node.privateKey,
+    node.chainCode,
+    NOTE_PURPOSE_CHANGE,
+    index
+  )
+}
+
+export const nextChangeSecretIndex = (domain: string): number =>
+  readIndices(CHANGE_STORAGE_KEY)[domain] ?? 0
+
+// `(domain) => string | null` already matches PubkeySecretProvider's own
+// shape exactly (secrets.ts) - wired in directly via
+// configureChangePubkeySecretProvider (lnurlcash.ts), no wrapper needed.
+// Unlike requireRecoverableCashAddressSecret's mint-invoice case, a caller
+// here never NEEDS this to succeed: src/lib's splitNote/internalTransfer.ts
+// both fall back to a plain bearer change note whenever this returns null
+// (no cash root loaded), same as generatePubkeySecret's own contract.
+export const nextChangeSecret = (domain: string): string | null => {
+  const i = nextChangeSecretIndex(domain)
+  const secretKey = changeSecretAtIndex(domain, i)
+  if (secretKey === null) return null
+  const indices = readIndices(CHANGE_STORAGE_KEY)
+  indices[domain] = i + 1
+  writeIndices(CHANGE_STORAGE_KEY, indices)
+  const {pubkeyXOnly, signature} = signNoteOwnership(secretKey, domain)
+  return encodeCk1(pubkeyXOnly, signature)
 }
 
 // merges a backup's per-SERVICE counters in - never decreases one (that
@@ -191,19 +287,21 @@ const mergeIndicesInto = (key: string, incoming: unknown): void => {
 export const mergeCashAddressSecretIndices = (incoming: unknown): void =>
   mergeIndicesInto(ADDRESS_STORAGE_KEY, incoming)
 
-// Part 1's own reload-survival - deliberately NOT seed-derived (25.md's
-// Part 1 defines no derivation at all, see this file's header comment).
+export const mergeCashChangeSecretIndices = (incoming: unknown): void =>
+  mergeIndicesInto(CHANGE_STORAGE_KEY, incoming)
+
+// A bearer note's own reload-survival - deliberately NOT seed-derived (25.md
+// defines no derivation for bearer notes, see this file's header comment).
 // generateMintSecret (lnurlcash.ts) generates a plain random secret for a
 // mint/transfer quote and records it here before the invoice leaves the
 // wallet, so a reload between "invoice shown" and "payment settled" doesn't
-// strand the note SERVICE will credit under sha256(secret) - the UI can
+// strand the bearer note SERVICE will credit - the UI can
 // still recover it from this flat, per-domain, append-only list even though
 // component state (and any deterministic re-derivation) is gone. This is a
-// same-device, same-localStorage guarantee only: unlike Part 2's cx1
-// branch, nothing here survives a lost device or a fresh reinstall - that
-// trade is exactly what dropping Part 1's non-spec seed-derivation buys
-// back (see 25.md's own Part 1, which never promised recoverability
-// either).
+// same-device, same-localStorage guarantee only: unlike a key-path note's
+// cx1 branch, nothing here survives a lost device or a fresh reinstall -
+// 25.md never promises recoverability for bearer notes either (Seed &
+// derivation covers key-path notes only).
 const PENDING_MINT_SECRETS_KEY = 'lnurlcash_pending_mint_secrets'
 type PendingMintSecrets = Record<string, string[]>
 

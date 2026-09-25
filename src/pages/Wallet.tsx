@@ -790,8 +790,8 @@ const Wallet: Component = () => {
     }
   }
 
-  // The holder-initiated "Upgrade" action for a plain-secret (LUD-25 Part 1
-  // legacy hash preimage) note, reachable from its own button on
+  // The holder-initiated "Upgrade" action for a bearer (hash preimage)
+  // note, reachable from its own button on
   // BearerCard.tsx - unlike refreshOneBearer's own rotate (which only ever
   // PRESERVES a note's existing kind, see isUpgradedSecret), this always
   // asks for a pub/sig replacement and surfaces a clear error if that isn't
@@ -803,7 +803,7 @@ const Wallet: Component = () => {
   const upgradeOneBearer = async (bearer: Bearer) => {
     if (bearer.deviceId) {
       notify(
-        'A vault-backed note cannot be upgraded yet - Part 2 pub/sig notes are browser-only for now.',
+        'A vault-backed note cannot be upgraded yet - key-path notes are browser-only for now.',
         NotifyKind.ERROR
       )
       return

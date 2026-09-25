@@ -1,4 +1,4 @@
-// LUD-25 Part 2's "Internal transfer" (25.md): if a payee has registered a
+// LUD-25's "Internal transfer" (25.md): if a payee has registered a
 // cx1 (Seed & derivation) at a mint, SERVICE MAY publish it in their
 // payRequest metadata as a `text/xpub` entry, `cx1<...>:<i>` (their own
 // best-known next-unused index for that branch). A WALLET that already
@@ -7,7 +7,11 @@
 // merge (Redeeming a bearer note) naming it as p1 directly, instead of
 // generating a fresh secret for itself the way an ordinary mutation does.
 // `i` is only ever a hint - SERVICE rejects it if some other request beat
-// this one to it, and WALLET just retries at the next index.
+// this one to it, and WALLET just retries at the next index. The
+// recipient's pk_i is always derived on purpose 2 (Lightning Address,
+// Seed & derivation) - an internal transfer is just another rail onto the
+// SAME branch a real Lightning payment would land on, sharing that
+// purpose's one counter rather than a WALLET's own purpose-0 notes.
 import {serverOf} from './urls'
 import {
   AmbiguousMintError,
@@ -19,6 +23,7 @@ import {
   decodeCx1,
   encodeCp1,
   isCk1,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './recoverableNotes'
 import {
@@ -103,7 +108,12 @@ export const payInternalTransfer = async (
   let index = hint.startIndex
   for (let attempt = 0; attempt < MAX_INDEX_ATTEMPTS; attempt++) {
     const recipientOutput = encodeCp1(
-      deriveNotePubkey(hint.cx1.pubkeyXOnly, hint.cx1.chainCode, index)
+      deriveNotePubkey(
+        hint.cx1.pubkeyXOnly,
+        hint.cx1.chainCode,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        index
+      )
     )
     if (amountMsat === totalInputMsat) {
       try {
@@ -126,7 +136,7 @@ export const payInternalTransfer = async (
     // the change output IS this wallet's own money - generated fresh per
     // attempt so a retried index never reuses a secret already disclosed
     // (as a hash/pubkey commitment) to a request that may yet still land
-    const changeK1 = generateOutputSecret(domain, preferPubkey)
+    const changeK1 = generateOutputSecret(domain, preferPubkey, 'change')
     try {
       const result = await splitNoteWithHash(
         callback,

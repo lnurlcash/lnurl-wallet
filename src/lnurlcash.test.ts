@@ -33,9 +33,9 @@ describe('generateNoteSecret', () => {
   })
 })
 
-describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
+describe('requestMintInvoice (key-path vs bearer dispatch)', () => {
   // same in-memory localStorage stand-in as cashSecrets.test.ts - both the
-  // legacy and Part 2 secret generators persist their own "next index"
+  // bearer and key-path secret generators persist their own "next index"
   // counters there. Re-stubbed fresh every test (rather than once at
   // describe-scope, cashSecrets.test.ts's own approach) since this file's
   // own afterEach also unstubs 'fetch' per test via unstubAllGlobals,
@@ -118,9 +118,9 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
   })
 
   it("falls back to a bearer note's cp1 when no cash root is loaded at all", async () => {
-    // Part 2's pubkey secret needs a cash root (requireRecoverableCashAddressSecret
-    // throws without one); Part 1's plain secret does not (25.md's Part 1
-    // defines no derivation at all - see cashSecrets.ts's header comment),
+    // A key-path secret needs a cash root (requireRecoverableCashAddressSecret
+    // throws without one); a bearer note's plain secret does not (25.md
+    // defines no derivation for bearer notes - see cashSecrets.ts's header comment),
     // so the bearer fallback still succeeds even fully locked
     const cashSecrets = await import('./cashSecrets')
     cashSecrets.setCashRoot(null)
@@ -138,7 +138,7 @@ describe('requestMintInvoice (LUD-25 Part 2 dispatch)', () => {
     )
     expect(isPreimage(secret)).toBe(true)
     expect(result.pr).toBe('lnbc1testinvoice')
-    // the Part 2 attempt fails locally (no cash root) before ever reaching
+    // the key-path attempt fails locally (no cash root) before ever reaching
     // the network, so only the bearer request is ever sent
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(comments[0]).toBe(bearerCp1(secret))

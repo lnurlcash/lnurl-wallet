@@ -181,7 +181,7 @@ const BearerCard: Component<BearerCardProps> = props => {
       (isMintUnconfirmed(origin) ? null : (props.bearer.mintPubkey ?? null))
     if (!sig || !mintPubkey) return false
     // verifyNoteSignature itself dispatches on k1's own shape (legacy
-    // preimage vs LUD-25 Part 2 ck1 signature) - see signature.ts
+    // preimage vs a key-path ck1 signature) - see signature.ts
     return props.bearer.deviceHash
       ? verifyNoteSignatureHash(
           props.bearer.deviceHash,
@@ -335,18 +335,18 @@ const BearerCard: Component<BearerCardProps> = props => {
                 &nbsp;signed
               </span>
             </Show>
-            {/* LUD-25 Part 1's legacy hash preimage, as opposed to Part 2's
-            pubkey/signature-bound k1 (see cashAddressBranch/the Address
+            {/* A bearer note's hash preimage, as opposed to a key-path
+            note's pubkey/signature-bound k1 (see cashAddressBranch/the Address
             page) - k1() is '' for a device-backed bearer (no raw k1 kept
             in browser storage), which isCk1('') correctly reads as false;
             gated on a non-empty k1 too so a device note doesn't wrongly
             claim a scheme this wallet can't actually see from here. Also
-            excludes a cw1 script-path note (its own pill below) - it's a
-            Part 2 note too, just not a ck1 key-path one. */}
+            excludes a cw1 script-path note (its own pill below) - it's
+            not a bearer note either, just not a ck1 key-path one. */}
             <Show when={k1() && !isCk1(k1()) && !isScriptNote()}>
               <span
                 class="bearer-plain"
-                title="This note's own secret is a legacy hash preimage (LUD-25 Part 1), not a Part 2 pubkey/signature"
+                title="This note's own secret is a bearer hash preimage, not a key-path pubkey/signature"
               >
                 plain secret
               </span>

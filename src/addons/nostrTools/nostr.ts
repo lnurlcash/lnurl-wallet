@@ -17,7 +17,7 @@ export const NPUB_HRP = 'npub'
 export const NSEC_HRP = 'nsec'
 
 // NIP-19 uses plain bech32 (BIP-173), not bech32m - unlike this wallet's
-// own cp1/ck1/cx1 encoding (LUD-25 Part 2) or LUD-01's own bech32 LNURL,
+// own cp1/ck1/cx1 encoding (LUD-25) or LUD-01's own bech32 LNURL,
 // easy to mix up since both live right next to bech32m elsewhere in this
 // app. 32 bytes (a pubkey or privkey) fits well within bech32's own
 // default ~90-character limit, so no length override is needed the way
@@ -67,7 +67,7 @@ export const parseHexBytes = (value: string): Uint8Array | null => {
 
 // NIP-06: basic key derivation from a BIP39 mnemonic seed phrase, at the
 // fixed path m/44'/1237'/<account>'/0/0 - plain BIP32 all the way down (no
-// taproot-style tweak the way this wallet's own LUD-25 Part 2 derivation
+// taproot-style tweak the way this wallet's own LUD-25 derivation
 // needs), so the derived node's own private key IS the Nostr private key
 // directly.
 export const deriveNostrKeypair = (

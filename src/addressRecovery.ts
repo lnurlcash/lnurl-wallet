@@ -1,4 +1,4 @@
-import {cashAddressBranch, cashAddressSecretAtIndex} from './cashSecrets'
+import {cashAddressBranch, addressSecretAtIndex} from './cashSecrets'
 import {
   resolveMintInput,
   fetchPayRequest,
@@ -10,7 +10,8 @@ import {
   resolveScanStartIndex,
   encodeCk1,
   signNoteOwnership,
-  k1SpendsNote
+  k1SpendsNote,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import {msatToSats} from './helpers'
@@ -18,14 +19,16 @@ import {markAddressScanned} from './addressRegistry'
 import type {Bearer, ActivityKind} from './storage'
 import type {NewBearer} from './WalletContext'
 
-// LUD-25 Part 2 counterpart to recovery.ts's scanMintForNotes - same shape,
+// LUD-25 counterpart to recovery.ts's scanMintForNotes - same shape,
 // same dedup convention (existing bearers checked by serverOf+noteK1, see
 // receive.ts), but scans a REGISTERED address's own watch-only branch
-// (cashSecrets.ts's cashAddressBranch) via the public-commitment lookup
-// (src/lib/addresses.ts's scanForAddressNotes) rather than re-deriving
-// legacy hash-based secrets. Every note this finds signs its own ck1 on
-// the spot (signNoteOwnership) - the scan itself never redeems anything,
-// it only proves this wallet CAN.
+// (cashSecrets.ts's cashAddressBranch) at NOTE_PURPOSE_LIGHTNING_ADDRESS -
+// a separate counter from recovery.ts's own NOTE_PURPOSE_WALLET/
+// NOTE_PURPOSE_CHANGE scans of that same branch - via the public-commitment
+// lookup (src/lib/addresses.ts's scanForAddressNotes) rather than
+// re-deriving legacy hash-based secrets. Every note this finds signs its
+// own ck1 on the spot (signNoteOwnership) - the scan itself never redeems
+// anything, it only proves this wallet CAN.
 
 export type AddressScanOutcome = {
   server: string
@@ -43,7 +46,7 @@ export type AddressScanOutcome = {
   // call the way nextScanIndex is.
   checkedFrom: number
   // SERVICE's own advertised next-unused-index hint for this pass (LUD-25
-  // Part 2's text/xpub metadata, see mintRequest.ts's
+  // LUD-25's text/xpub metadata, see mintRequest.ts's
   // PayRequestInfo.internalTransfer) - null when SERVICE didn't advertise
   // one, or this pass never got far enough to learn it. Purely
   // informational: resolveScanStartIndex already decided how (or whether)
@@ -159,29 +162,35 @@ export const scanRegisteredAddress = async (
   let highestIndex: number | null = null
   const limit = gapLimit()
   try {
-    const results = await scanForAddressNotes(withdrawUrl, branch, {
-      gapLimit: limit,
-      startIndex,
-      // re-verifies gapLimit indices below startIndex too, every pass - the
-      // safety net that catches startIndex itself being wrong (a stale
-      // local floor, or a SERVICE hint that outran actual settlement) even
-      // when it is - see scanForAddressNotes' own doc comment
-      checkBehind: true,
-      // the complementary guarantee at the other end: a forward walk must
-      // not give up on some unrelated stretch of abandoned reservations
-      // well short of where SERVICE says it has actually handed out
-      // invoices (next_index advances at invoice-CREATION time, not
-      // settlement - see scanForAddressNotes' own doc comment on
-      // minIndex). +limit is deliberate margin past the hint itself, not
-      // just up to it, so a genuine gapLimit search still happens beyond
-      // it too.
-      minIndex: serviceHint !== null ? serviceHint + limit : undefined,
-      onFound: result => {
-        highestIndex = Math.max(highestIndex ?? -1, result.index)
+    const results = await scanForAddressNotes(
+      withdrawUrl,
+      branch,
+      NOTE_PURPOSE_LIGHTNING_ADDRESS,
+      {
+        gapLimit: limit,
+        startIndex,
+        // re-verifies gapLimit indices below startIndex too, every pass -
+        // the safety net that catches startIndex itself being wrong (a
+        // stale local floor, or a SERVICE hint that outran actual
+        // settlement) even when it is - see scanForAddressNotes' own doc
+        // comment
+        checkBehind: true,
+        // the complementary guarantee at the other end: a forward walk must
+        // not give up on some unrelated stretch of abandoned reservations
+        // well short of where SERVICE says it has actually handed out
+        // invoices (next_index advances at invoice-CREATION time, not
+        // settlement - see scanForAddressNotes' own doc comment on
+        // minIndex). +limit is deliberate margin past the hint itself, not
+        // just up to it, so a genuine gapLimit search still happens beyond
+        // it too.
+        minIndex: serviceHint !== null ? serviceHint + limit : undefined,
+        onFound: result => {
+          highestIndex = Math.max(highestIndex ?? -1, result.index)
+        }
       }
-    })
+    )
     for (const result of results) {
-      const secretKey = cashAddressSecretAtIndex(host, result.index)
+      const secretKey = addressSecretAtIndex(host, result.index)
       // the cash root can only disappear mid-scan if the wallet locked
       // while it was running - skip rather than crash; a re-scan once
       // unlocked again picks this index right back up

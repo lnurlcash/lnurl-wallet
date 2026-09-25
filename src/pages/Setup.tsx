@@ -10,7 +10,10 @@ import {resolveMintInput} from '../lnurlcash'
 import {PUBLIC_MINTS} from '../trustedMints'
 import {scanMintForNotes} from '../recovery'
 import {gapLimit} from '../gapLimit'
-import {mergeCashAddressSecretIndices} from '../cashSecrets'
+import {
+  mergeCashAddressSecretIndices,
+  mergeCashChangeSecretIndices
+} from '../cashSecrets'
 
 type Tab = 'create' | 'restore'
 
@@ -368,6 +371,11 @@ const MintRecovery: Component<{onDone: () => void}> = props => {
             [result.server]: result.highestUsedIndex + 1
           })
         }
+        if (result.highestUsedChangeIndex !== null) {
+          mergeCashChangeSecretIndices({
+            [result.server]: result.highestUsedChangeIndex + 1
+          })
+        }
         totalFound += result.recovered.length
         totalMsat += result.recovered.reduce((sum, n) => sum + n.amount, 0)
         setResults(prev => ({
@@ -396,19 +404,19 @@ const MintRecovery: Component<{onDone: () => void}> = props => {
       <h2>Recover notes</h2>
       <div class="setup-card">
         <p>
-          Re-derives every pub/sig-bound note key (LUD-25 Part 2) this wallet
-          would have generated at each mint below and checks which ones are
-          still outstanding. This only finds notes minted, rotated, split or
-          merged by a seed-aware version of this wallet - not ones simply
-          received from someone else, not ones minted while offline or with an
-          older version that predates this feature, and not a legacy hash-keyed
-          note (those are plain randomness, never seed-derived, so there is
-          nothing here to re-derive them from). Each mint is checked index by
-          index until {gapLimit()} in a row turn up nothing, the same gap-limit
-          convention HD wallets already use for address recovery (configurable
-          under Settings &gt; Recovery scan gap limit). Pick every mint you
-          remember using; nothing is lost by skipping one now, the same seed can
-          scan it again later.
+          Re-derives every key-path note key (LUD-25) this wallet would have
+          generated at each mint below and checks which ones are still
+          outstanding. This only finds notes minted, rotated, split or merged by
+          a seed-aware version of this wallet - not ones simply received from
+          someone else, not ones minted while offline or with an older version
+          that predates this feature, and not a legacy hash-keyed note (those
+          are plain randomness, never seed-derived, so there is nothing here to
+          re-derive them from). Each mint is checked index by index until{' '}
+          {gapLimit()} in a row turn up nothing, the same gap-limit convention
+          HD wallets already use for address recovery (configurable under
+          Settings &gt; Recovery scan gap limit). Pick every mint you remember
+          using; nothing is lost by skipping one now, the same seed can scan it
+          again later.
         </p>
         <label>Public mints</label>
         <div class="form-item">

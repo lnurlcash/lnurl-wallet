@@ -1,4 +1,4 @@
-// LUD-25 Part 2 onchain receiving: the SAME cp1 note pubkey this wallet
+// LUD-25 onchain receiving: the SAME cp1 note pubkey this wallet
 // derives for a registered SERVICE/index (see ../../cashSecrets.ts's
 // cashAddressBranch/cashAddressSecretAtIndex and
 // ../../lib/recoverableNotes.ts's deriveNotePubkey/deriveNoteSecretKey),
@@ -10,7 +10,7 @@
 // addon.
 //
 // Reusing one keypair across two protocols this way is deliberate, not
-// incidental: LUD-25 Part 2 never discloses this note's PRIVATE key to a
+// incidental: LUD-25 never discloses this note's PRIVATE key to a
 // mint, only a BIP-340 Schnorr signature over a fixed message (ck1 - see
 // ../../lib/signature.ts), and a signature does not leak the scalar that
 // produced it. The onchain side, in turn, never signs with this raw scalar
@@ -38,7 +38,8 @@ import {deriveDomainBranchNode} from '../../lib/branchDerivation'
 import {
   deriveNotePubkey,
   deriveNoteSecretKey,
-  encodeCp1
+  encodeCp1,
+  NOTE_PURPOSE_WALLET
 } from '../../lib/recoverableNotes'
 
 const base58check = createBase58check(sha256)
@@ -81,17 +82,27 @@ export const deriveOnchainReceive = (
     const branchPubkeyXOnly = branch.publicKey?.slice(1)
     if (!branchPubkeyXOnly || !chainCode || !branch.privateKey) return null
 
-    // the exact cp1 the mint would compute for this SERVICE + index (watch-
-    // only math, identical to what a cx1 export lets the mint derive on its
-    // own) - shown so a holder can cross-check "this address's key really
-    // is this exact note"
-    const notePubkeyXOnly = deriveNotePubkey(branchPubkeyXOnly, chainCode, i)
+    // the exact cp1 the mint would compute for this SERVICE + index on
+    // NOTE_PURPOSE_WALLET (watch-only math, identical to what a cx1 export
+    // lets the mint derive on its own) - shown so a holder can cross-check
+    // "this address's key really is this exact note"
+    const notePubkeyXOnly = deriveNotePubkey(
+      branchPubkeyXOnly,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      i
+    )
 
     // only the wallet (holder of the branch's own private key) can go this
     // direction - see deriveNoteSecretKey's own parity-handling comment in
     // recoverableNotes.ts for why this is safe to reuse as the taproot
     // internal key's spending scalar
-    const noteSecretKey = deriveNoteSecretKey(branch.privateKey, chainCode, i)
+    const noteSecretKey = deriveNoteSecretKey(
+      branch.privateKey,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      i
+    )
     const tweakedPrivateKey = taprootTweakPrivKey(noteSecretKey)
 
     const {address} = p2tr(notePubkeyXOnly, undefined, NETWORK)

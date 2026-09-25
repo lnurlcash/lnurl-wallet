@@ -158,7 +158,7 @@ describe('signNoteOwnership (LUD-25 key-path spend, ck1)', () => {
   })
 })
 
-describe('verifyNoteSignature - LUD-25 Part 2 ck1 dispatch', () => {
+describe('verifyNoteSignature - LUD-25 ck1 dispatch', () => {
   // cs1's message is LNURLcash:<amount>:<hex(pk)>, pk hex used directly, no
   // hashing - see mintRequest.test.ts's own signAsMintForId, same shape
   const signAsMintForId = (
@@ -289,7 +289,7 @@ describe('cp1FromCk1', () => {
   })
 })
 
-describe('signAddressProof (LUD-25 Part 2, un-/register)', () => {
+describe('signAddressProof (LUD-25, un-/register)', () => {
   // independently recomputes the per-action/domain/username digest
   // signAddressProof signs - a plain BIP-340 Schnorr signature over
   // sha256(message), no Lightning-signmessage digest wrapping -

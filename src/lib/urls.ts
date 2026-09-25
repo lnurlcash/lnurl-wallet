@@ -392,7 +392,7 @@ export const withoutSignature = (url: string): string => {
   return newUrl.toString()
 }
 
-// This MUST be what every LUD-25 Part 2 seed-derived branch (cx1/cp1/ck1 -
+// This MUST be what every LUD-25 seed-derived branch (cx1/cp1/ck1 -
 // cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex, and this
 // package's own generatePubkeySecret/generateOutputSecret) derives its
 // domain from - the bare host, deliberately never the scheme/port-bearing

@@ -253,7 +253,7 @@ const TransferDialog: Component<TransferDialogProps> = props => {
       )
       const noteInfo = await fetchNoteInfo(declaredUrl)
 
-      // LUD-25 Part 2: same reasoning as Mint.tsx's claim() - this note's
+      // LUD-25: same reasoning as Mint.tsx's claim() - this note's
       // bearer secret already proves key ownership (no rotate-for-a-
       // certificate needed, and rotating would silently downgrade it back
       // to a legacy secret), and the hardware vault has not been migrated
