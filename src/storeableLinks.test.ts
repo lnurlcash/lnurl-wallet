@@ -48,7 +48,7 @@ describe('addStoreableMint / addStoreableMeltAddress', () => {
   })
 })
 
-describe('internalTransfer flag (LUD-25 Part 2 Internal transfer)', () => {
+describe('internalTransfer flag (LUD-25 Internal transfer)', () => {
   it('records whether a melt address confirmed text/xpub support', () => {
     mod.addStoreableMeltAddress('alice@mint.example', true)
     expect(mod.storeableMeltAddresses()[0]?.internalTransfer).toBe(true)

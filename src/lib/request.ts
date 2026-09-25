@@ -17,7 +17,11 @@ import {
   ServiceError,
   classifyNoteError
 } from './errors'
-import {generateSecret, generatePubkeySecret} from './secrets'
+import {
+  generateSecret,
+  generatePubkeySecret,
+  generateChangePubkeySecret
+} from './secrets'
 import {lnurlFetch} from './net'
 import {
   isCk1,
@@ -42,20 +46,20 @@ export type WithdrawRequestInfo = {
   maxWithdrawable: number
   defaultDescription?: string
   mintPubkey: string
-  // LUD-25 Part 2 Offline verification: SERVICE MAY include this on the
+  // LUD-25 Offline verification: SERVICE MAY include this on the
   // plain informational GET itself now (not just a k1=ck1 lookup, and not
   // only after an explicit rotate) - a note that already has one needs no
   // rotate/refresh just to become offline-verifiable. Validated the same
-  // way requireMutationSignature validates a mutation's own sig (hex or
-  // cs1, preserved exactly as disclosed) - never trusted un-normalized off
-  // the wire, and simply absent (not a malformed placeholder) if SERVICE
-  // didn't send a recognizable one.
-  sig?: string
+  // way requireMutationSignature validates a mutation's own certificate
+  // (hex or cs1, preserved exactly as disclosed) - never trusted
+  // un-normalized off the wire, and simply absent (not a malformed
+  // placeholder) if SERVICE didn't send a recognizable one.
+  c?: string
 }
 
 export type HashWithdrawRequestInfo = Omit<WithdrawRequestInfo, 'k1'>
 
-const parseOptionalSig = (value: unknown): string | undefined => {
+const parseOptionalCertificate = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined
   return isCs1WithAmount(value) ? value.trim() : undefined
 }
@@ -75,15 +79,15 @@ const parseNoteLookupBody = (body: any): HashWithdrawRequestInfo => {
   ) {
     throw new Error('Not a withdrawRequest (unexpected response).')
   }
-  // body's own (untyped, unvalidated) sig is deliberately excluded from the
-  // spread below and only ever reintroduced via parseOptionalSig - a
-  // malformed one must never leak through unnormalized
-  const {sig: _rawSig, ...rest} = body
-  const sig = parseOptionalSig(body.sig)
+  // body's own (untyped, unvalidated) c is deliberately excluded from the
+  // spread below and only ever reintroduced via parseOptionalCertificate -
+  // a malformed one must never leak through unnormalized
+  const {c: _rawCert, ...rest} = body
+  const c = parseOptionalCertificate(body.c)
   return {
     ...rest,
     ...parseMintKey(body),
-    ...(sig !== undefined ? {sig} : {})
+    ...(c !== undefined ? {c} : {})
   } as HashWithdrawRequestInfo
 }
 
@@ -96,7 +100,7 @@ const requestNoteInfoByRef = async (
   const lookupUrl = new URL(url)
   lookupUrl.searchParams.delete('k1')
   lookupUrl.searchParams.delete('amount')
-  lookupUrl.searchParams.delete('sig')
+  lookupUrl.searchParams.delete('c')
   lookupUrl.searchParams.set('p', value)
   const body = await lnurlFetch(lookupUrl)
   if (body.k1 !== undefined) {
@@ -150,7 +154,7 @@ export const fetchNoteInfoByHashShort = (
   h: string
 ): Promise<HashWithdrawRequestInfo> => fetchNoteInfoByHash(url, h, true)
 
-// LUD-25 Part 2 counterpart to fetchNoteInfoByHash - looks a note
+// LUD-25 counterpart to fetchNoteInfoByHash - looks a note
 // up by its public commitment, never a secret (its ck1 or cw1). One of
 // the two things a recovery scan (deriving pk_0, pk_1, ... off a registered
 // cx1 branch) needs, and also how fetchNoteInfo resolves a bare cw1 (whose
@@ -182,7 +186,7 @@ export const fetchNoteInfo = async (
   // legitimate caller already reconstructs a secret-bearing URL first.
   const queried = requireNoteK1(url)
   const rawUrl = new URL(url)
-  rawUrl.searchParams.delete('sig')
+  rawUrl.searchParams.delete('c')
 
   // a ck1 carries its note's Q
   if (isCk1(queried)) {
@@ -347,8 +351,8 @@ export const fetchMintAddress = async (
 
 export type WithdrawSuccessResponse = {
   status: 'OK'
-  sig?: string
-  sig2?: string
+  c?: string
+  c2?: string
   // LUD-25 melt proof (optional): only present on a melt's response, and
   // only when SERVICE advertises it - see meltNote
   pr?: string
@@ -442,14 +446,14 @@ export const meltNote = async (
 
 export type HashedMutationResult = {signature?: string}
 
-// Part 2 public-key outputs must be certified. A plain hash output is
+// Key-path outputs must be certified. A plain hash output is
 // deliberately unsigned: there is no public note identifier to certify
 // without disclosing its bearer secret. If an older SERVICE still supplies a
 // well-formed optional signature for a hash, preserve it; otherwise absence or
 // malformed optional proof does not make the landed note unusable.
 const mutationSignature = (
   body: any,
-  field: 'sig' | 'sig2',
+  field: 'c' | 'c2',
   output: string
 ): string | undefined => {
   if (isPubkeyCommitment(output)) return requireMutationSignature(body, field)
@@ -470,7 +474,7 @@ export const rotateNoteWithHash = async (
     ['k1', k1],
     ['p1', refOf(h, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
+  const signature = mutationSignature(body, 'c', h)
   return signature === undefined ? {} : {signature}
 }
 
@@ -493,8 +497,8 @@ export const splitNoteWithHash = async (
     ['p1', refOf(h, short)],
     ['p2', refOf(h2, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
-  const changeSignature = mutationSignature(body, 'sig2', h2)
+  const signature = mutationSignature(body, 'c', h)
+  const changeSignature = mutationSignature(body, 'c2', h2)
   return {
     ...(signature === undefined ? {} : {signature}),
     ...(changeSignature === undefined ? {} : {changeSignature})
@@ -511,7 +515,7 @@ export const mergeNotesWithHash = async (
     ...k1s.map((k1): [string, string] => ['k1', k1]),
     ['p1', refOf(h, short)]
   ])
-  const signature = mutationSignature(body, 'sig', h)
+  const signature = mutationSignature(body, 'c', h)
   return signature === undefined ? {} : {signature}
 }
 
@@ -548,22 +552,34 @@ export type RotateResult = {k1: string; signature?: string}
 // note (one that never survives its first refresh).
 // `isUpgradedSecret` names which input shapes count. `preferPubkey` names
 // whether the note(s) feeding this mutation were themselves one of those
-// shapes; generatePubkeySecret returning null (no Part 2 provider
+// shapes; generatePubkeySecret returning null (no pubkey provider
 // configured, or the seed-derived key isn't available right now) always
 // falls back to the ordinary legacy provider, same as an application that
-// never wired Part 2 up at all - this never throws on its own. Exported:
+// never wired a pubkey provider up at all - this never throws on its own. Exported:
 // reused by internalTransfer.ts for a split's own change output, the one
 // output of an internal transfer this wallet actually keeps for itself
 // (the other output names the recipient's pk_i directly - see
 // payInternalTransfer).
 export const isUpgradedSecret = (k1: string): boolean => isCk1(k1) || isCw1(k1)
 
+// `role` picks which of 25.md's two WALLET-owned purposes a pubkey-bound
+// secret draws from: 'output' (purpose 0 - an ordinary rotate/merge result,
+// or a split's own resulting note) or 'change' (purpose 1 - a split's
+// change note only). The two are independent counters on the same branch
+// specifically so they never collide with each other - see
+// recoverableNotes.ts's NOTE_PURPOSE_* constants.
+export type OutputSecretRole = 'output' | 'change'
+
 export const generateOutputSecret = (
   domain: string,
-  preferPubkey: boolean
+  preferPubkey: boolean,
+  role: OutputSecretRole = 'output'
 ): string => {
   if (preferPubkey) {
-    const pubkeySecret = generatePubkeySecret(domain)
+    const pubkeySecret =
+      role === 'change'
+        ? generateChangePubkeySecret(domain)
+        : generatePubkeySecret(domain)
     if (pubkeySecret) return pubkeySecret
   }
   return generateSecret(domain)
@@ -618,7 +634,7 @@ export const rotateNote = async (
 // what an ordinary refresh/rotate should do). This is for the explicit
 // "Upgrade" action a holder picks for exactly that (see BearerCard.tsx) -
 // unlike generateOutputSecret's own soft preference, a caller here has
-// asked for the upgrade specifically, so a missing Part 2 provider (no
+// asked for the upgrade specifically, so a missing pubkey provider (no
 // seed loaded, or none configured at all) throws rather than silently
 // completing an ordinary same-kind rotate that isn't the upgrade it was
 // asked to do.
@@ -669,7 +685,7 @@ export const splitNote = async (
   const domain = serverOf(callback)
   const preferPubkey = k1s.every(isUpgradedSecret)
   const newK1 = generateOutputSecret(domain, preferPubkey)
-  const changeK1 = generateOutputSecret(domain, preferPubkey)
+  const changeK1 = generateOutputSecret(domain, preferPubkey, 'change')
   try {
     const result = await splitNoteWithHash(
       callback,

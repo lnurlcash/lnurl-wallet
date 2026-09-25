@@ -249,7 +249,7 @@ export const requireNoteK1 = (url: string): string => {
 // safe to show before contacting SERVICE but not to be trusted without a
 // matching signature (see signature.ts's verifyNoteSignature) or a fresh
 // online GET. A separate `amount` param is redundant (and omitted - see
-// withNewK1/withoutK1) whenever `sig` is already an amount-encoding cs1
+// withNewK1/withoutK1) whenever `c` is already an amount-encoding cs1
 // (25.md's "encode amount in offline sig"): its own human-readable part
 // carries the exact same value, so this falls back to decoding it from
 // there rather than duplicating it in the URL.
@@ -261,7 +261,7 @@ export const noteDeclaredAmount = (url: string): number | null => {
       const n = Number(raw)
       return Number.isFinite(n) ? n : null
     }
-    const sig = parsed.searchParams.get('sig')
+    const sig = parsed.searchParams.get('c')
     return sig ? (decodeCs1WithAmount(sig)?.amountMsat ?? null) : null
   } catch {
     return null
@@ -270,7 +270,7 @@ export const noteDeclaredAmount = (url: string): number | null => {
 
 export const noteSignature = (url: string): string | null => {
   try {
-    return new URL(url).searchParams.get('sig')
+    return new URL(url).searchParams.get('c')
   } catch {
     return null
   }
@@ -323,7 +323,7 @@ export const buildNoteUrl = (
 // noteDeclaredAmount's read-side fallback), so a separate `amount` param
 // next to one is never written. Truthy check, not `!== undefined`: matches
 // the `if (signature)` check every caller of this pairs it with below, so
-// an empty-string signature (never written as `sig` either) can't disagree
+// an empty-string signature (never written as `c` either) can't disagree
 // with itself and cause `amount` to be dropped with nothing to replace it.
 const amountIsImpliedBySignature = (signature?: string): boolean =>
   Boolean(signature) && isCs1WithAmount(signature!)
@@ -345,8 +345,8 @@ export const withNewK1 = (
   } else {
     newUrl.searchParams.set('amount', String(amountMsat))
   }
-  if (signature) newUrl.searchParams.set('sig', signature)
-  else newUrl.searchParams.delete('sig')
+  if (signature) newUrl.searchParams.set('c', signature)
+  else newUrl.searchParams.delete('c')
   return newUrl.toString()
 }
 
@@ -366,33 +366,33 @@ export const withoutK1 = (
   } else {
     newUrl.searchParams.set('amount', String(amountMsat))
   }
-  if (signature) newUrl.searchParams.set('sig', signature)
-  else newUrl.searchParams.delete('sig')
+  if (signature) newUrl.searchParams.set('c', signature)
+  else newUrl.searchParams.delete('c')
   return newUrl.toString()
 }
 
-// strips a note's own sig, if any, leaving k1/everything else untouched -
+// strips a note's own certificate (`c`), if any, leaving k1/everything else untouched -
 // for a holder who'd rather hand over a note that can't be checked offline
 // against a pinned mint key than keep disclosing which service issued it.
 // Offline verification (signature.ts) already treats a missing sig as
 // simply unverifiable, never as an error, so a stripped note remains an
 // otherwise ordinary bearer note to whoever receives it. `amount` needs
-// special care here: withNewK1/withoutK1 omit it whenever sig already
-// carries it (see amountIsImpliedBySignature above), so removing that sig
+// special care here: withNewK1/withoutK1 omit it whenever c already
+// carries it (see amountIsImpliedBySignature above), so removing that c
 // would silently drop the note's only declared value - backfilled as an
 // explicit param first, whenever there isn't one already.
 export const withoutSignature = (url: string): string => {
   const newUrl = new URL(url)
-  const sig = newUrl.searchParams.get('sig')
+  const sig = newUrl.searchParams.get('c')
   if (sig && !newUrl.searchParams.has('amount')) {
     const decoded = decodeCs1WithAmount(sig)
     if (decoded) newUrl.searchParams.set('amount', String(decoded.amountMsat))
   }
-  newUrl.searchParams.delete('sig')
+  newUrl.searchParams.delete('c')
   return newUrl.toString()
 }
 
-// This MUST be what every LUD-25 Part 2 seed-derived branch (cx1/cp1/ck1 -
+// This MUST be what every LUD-25 seed-derived branch (cx1/cp1/ck1 -
 // cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex, and this
 // package's own generatePubkeySecret/generateOutputSecret) derives its
 // domain from - the bare host, deliberately never the scheme/port-bearing

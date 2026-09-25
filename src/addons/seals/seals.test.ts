@@ -248,12 +248,12 @@ describe('seal consignment: build, parse, round-trip', () => {
     expect(parsed.states).toEqual([genesisNoDescription])
   })
 
-  it('strips k1/sig - one-time claim secrets, not part of a reusable template', () => {
+  it('strips k1/c - one-time claim secrets, not part of a reusable template', () => {
     const consignment = encodeSealConsignment(lockedNote, [genesis])!
     const parsed = decodeSealConsignment(consignment)!
     const url = new URL(parsed.urlTemplate)
     expect(url.searchParams.has('k1')).toBe(false)
-    expect(url.searchParams.has('sig')).toBe(false)
+    expect(url.searchParams.has('c')).toBe(false)
   })
 
   it('round-trips a multi-state history', () => {

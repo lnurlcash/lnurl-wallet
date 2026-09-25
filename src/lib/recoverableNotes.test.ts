@@ -23,7 +23,10 @@ import {
   decodeCx1,
   isCx1,
   deriveNotePubkey,
-  deriveNoteSecretKey
+  deriveNoteSecretKey,
+  NOTE_PURPOSE_WALLET,
+  NOTE_PURPOSE_CHANGE,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS
 } from './recoverableNotes'
 
 describe('bech32m codec', () => {
@@ -296,7 +299,7 @@ describe('deriveScriptPathCommitment / outputKeyOfCw1', () => {
   })
 })
 
-describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
+describe('cs1WithAmount (LUD-25 "encode amount in offline sig")', () => {
   const bytes = hexToBytes('cd'.repeat(65))
 
   it('round-trips signature and amount together', () => {
@@ -371,40 +374,40 @@ describe('cs1WithAmount (LUD-25 Part 2 "encode amount in offline sig")', () => {
 
 describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation.py", () => {
   // generated via: lnurl-mint/.venv/bin/python3, calling
-  // lnurl_mint.derivation.derive_pubkey(P, chain_code, index) directly for
-  // 3 real secp256k1 x-only pubkeys (from PrivateKey(bytes([s])*32) for
-  // s in 1,2,3) x 5 (chain_code, index) pairs - these are NOT self-
-  // generated fixtures, they're the actual mint's own output, so a match
-  // here means this wallet's derivation is byte-for-byte interoperable
-  // with the real service, not just internally consistent
+  // lnurl_mint.derivation.derive_pubkey(P, chain_code, PURPOSE_WALLET,
+  // index) directly for 3 real secp256k1 x-only pubkeys (from
+  // PrivateKey(bytes([s])*32) for s in 1,2,3) x 5 (chain_code, index) pairs
+  // - these are NOT self-generated fixtures, they're the actual mint's own
+  // output, so a match here means this wallet's derivation is byte-for-byte
+  // interoperable with the real service, not just internally consistent
   const VECTORS: {P: string; chainCode: string; index: number; pk: string}[] = [
     {
       P: '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 0,
-      pk: '4d8fb1b73a4780cd71a2e75e355aa5ebcba52be3ed1b98e0a6d236052198d50f'
+      pk: 'a32cea9bfa3c2fd8ba9185ec306bd4373471d0a6915858645acfada3ff814072'
     },
     {
       P: '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 1,
-      pk: '0bfed7d10dcbf66a4d66d2a23b96f42451c5247cfc57abefee09247a5f393599'
+      pk: 'ab96f0a837891286735fa5bf9fe59d20d7f00bc23b75292936d788b15415ba31'
     },
     {
       P: '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 255,
-      pk: '1bdeb2476a36a8ce6a1586a9053f7094d23fa08b79b52b2c9b2592c81ff3d470'
+      pk: 'a10547072442eec51530bdf29ec8f1267289d461cfd39b94121c742a6b11cd51'
     },
     {
       P: '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f',
       chainCode:
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       index: 4294967295,
-      pk: 'a2dabf6666197bbeed46108e36fca9788b7ad12add655e54b03aa5213e4c052b'
+      pk: '65e05e361b39d1fc2e448540742212db8829ed6aa002054f080c23f44d6b2342'
     },
     {
       P: '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f',
@@ -414,35 +417,35 @@ describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation
           64
         ),
       index: 42,
-      pk: '5201197658d719e2031303faa3e487ff731aea235d91f9e5b5f78d652d395d2e'
+      pk: '1c7b1789c0b7962ba484281a24bc57651eb9d966227f38e87812b64e8b0cd644'
     },
     {
       P: '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 0,
-      pk: '8789101ce4c81b2fd4ce755244bde884b52801e41784f46a22a8086e8034a7d0'
+      pk: '993002d8bd83d44f1a303c79a650e3f91f36d13cce0781f6d7425adddf6196ce'
     },
     {
       P: '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 1,
-      pk: 'c194417d8c5e5db1e292f3545eb3e9b900b3ea9880f9603c8bfba7e125a333ff'
+      pk: 'c9b1b2a277e4e02a82eef127d1c35b0fc02c1cb81c263c8c283dbfb3ef92abd4'
     },
     {
       P: '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 255,
-      pk: '942f0b6512dfd384cd2f4f18c0b6e850caa9bd46e9f704afe76b27658f659e99'
+      pk: 'aa9686d3acb53914d16882d9e3262e1711af10b21a30095007e5d2fff5fccc41'
     },
     {
       P: '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766',
       chainCode:
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       index: 4294967295,
-      pk: 'f49c6e1e3b56ba0111c2a06aceb1a68612e540927d322a20f36335875df3ec59'
+      pk: 'cdf00ce40118096bfb3183d9bf8a59e4bdf0d845853d9ebb1feeeadd152314e5'
     },
     {
       P: '4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766',
@@ -452,35 +455,35 @@ describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation
           64
         ),
       index: 42,
-      pk: '0aa26357fc467e42cf5e3b964dbef9965cbcd91d2d5bf47b8e2bf89128dbc4bc'
+      pk: '85bbe7df864b020fbc6f495a91caffe820436cadef69f68a58a152ccd3a77d5d'
     },
     {
       P: '531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 0,
-      pk: 'ac497f69c1f2782bb7d508a839d8457d6ec928c5955027ca104c7a38f5dcb873'
+      pk: 'e869c464a2362e6c46b4ea44dd34a9242e7e87cd5833ee31a2d194dccfba9ae5'
     },
     {
       P: '531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 1,
-      pk: '1c012788f539d4a92677933a032ba36b581ade3cc7b518e79ef506748a77e878'
+      pk: 'c8b6163974ff6036c900fbaa994f9c4eaf719782046b13bb2903df329ea9196f'
     },
     {
       P: '531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337',
       chainCode:
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       index: 255,
-      pk: '5e9c9c751cef23d2f6d84ba92fa5c5fd6ca1fe5c6c4debb142fa1743de36f75d'
+      pk: '5950166e0e6179b4544be0d310b2bcc41e22724d41d4ee1c10bb5709c9751c6d'
     },
     {
       P: '531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337',
       chainCode:
         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       index: 4294967295,
-      pk: '912f2878042de6b79d77cf08374d2e1e2970f1b9e85bd85656b228b2986ba889'
+      pk: '551c18ff38c5481aa0d86cea67b08342e32bacecf22709a9afd888eb41821cc3'
     },
     {
       P: '531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337',
@@ -490,17 +493,39 @@ describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation
           64
         ),
       index: 42,
-      pk: '35556c902d940c7e2a7370ee65e19af8e841563b23b590f5868eb3d2752fda22'
+      pk: '28df0c1bae37bf16ac4dfb6019be0a152d3bdb6a979a494236fd530a1d47e74c'
     }
   ]
 
   it("matches the mint's output for every cross-validated vector", () => {
     for (const v of VECTORS) {
       const got = bytesToHex(
-        deriveNotePubkey(hexToBytes(v.P), hexToBytes(v.chainCode), v.index)
+        deriveNotePubkey(
+          hexToBytes(v.P),
+          hexToBytes(v.chainCode),
+          NOTE_PURPOSE_WALLET,
+          v.index
+        )
       )
       expect(got).toBe(v.pk)
     }
+  })
+
+  it('a different purpose changes the derived pubkey at the same (P, chainCode, index)', () => {
+    const P = hexToBytes(
+      '1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f'
+    )
+    const chainCode = hexToBytes(
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    )
+    const keys = new Set(
+      [
+        NOTE_PURPOSE_WALLET,
+        NOTE_PURPOSE_CHANGE,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS
+      ].map(purpose => bytesToHex(deriveNotePubkey(P, chainCode, purpose, 0)))
+    )
+    expect(keys.size).toBe(3)
   })
 })
 
@@ -512,19 +537,27 @@ describe('deriveNoteSecretKey', () => {
       )
       const branchPubkeyXOnly = schnorr.getPublicKey(branchPrivateKey)
       const chainCode = hexToBytes('7'.repeat(64))
-      for (const index of [0, 1, 42, 255, 4294967295]) {
-        const secretKey = deriveNoteSecretKey(
-          branchPrivateKey,
-          chainCode,
-          index
-        )
-        const pubkeyFromSecret = schnorr.getPublicKey(secretKey)
-        const pubkeyWatchOnly = deriveNotePubkey(
-          branchPubkeyXOnly,
-          chainCode,
-          index
-        )
-        expect(bytesToHex(pubkeyFromSecret)).toBe(bytesToHex(pubkeyWatchOnly))
+      for (const purpose of [
+        NOTE_PURPOSE_WALLET,
+        NOTE_PURPOSE_CHANGE,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS
+      ]) {
+        for (const index of [0, 1, 42, 255, 4294967295]) {
+          const secretKey = deriveNoteSecretKey(
+            branchPrivateKey,
+            chainCode,
+            purpose,
+            index
+          )
+          const pubkeyFromSecret = schnorr.getPublicKey(secretKey)
+          const pubkeyWatchOnly = deriveNotePubkey(
+            branchPubkeyXOnly,
+            chainCode,
+            purpose,
+            index
+          )
+          expect(bytesToHex(pubkeyFromSecret)).toBe(bytesToHex(pubkeyWatchOnly))
+        }
       }
     }
   })
@@ -532,16 +565,36 @@ describe('deriveNoteSecretKey', () => {
   it('is deterministic', () => {
     const branchPrivateKey = schnorr.utils.randomSecretKey()
     const chainCode = hexToBytes('9'.repeat(64))
-    const a = deriveNoteSecretKey(branchPrivateKey, chainCode, 7)
-    const b = deriveNoteSecretKey(branchPrivateKey, chainCode, 7)
+    const a = deriveNoteSecretKey(
+      branchPrivateKey,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      7
+    )
+    const b = deriveNoteSecretKey(
+      branchPrivateKey,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      7
+    )
     expect(bytesToHex(a)).toBe(bytesToHex(b))
   })
 
   it('produces a different secret for a different index', () => {
     const branchPrivateKey = schnorr.utils.randomSecretKey()
     const chainCode = hexToBytes('9'.repeat(64))
-    const a = deriveNoteSecretKey(branchPrivateKey, chainCode, 0)
-    const b = deriveNoteSecretKey(branchPrivateKey, chainCode, 1)
+    const a = deriveNoteSecretKey(
+      branchPrivateKey,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      0
+    )
+    const b = deriveNoteSecretKey(
+      branchPrivateKey,
+      chainCode,
+      NOTE_PURPOSE_WALLET,
+      1
+    )
     expect(bytesToHex(a)).not.toBe(bytesToHex(b))
   })
 })

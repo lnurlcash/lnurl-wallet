@@ -11,6 +11,7 @@ import {
   encodeCx1,
   encodeCk1,
   encodeCs1WithAmount,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './recoverableNotes'
 import {AmbiguousMutationError} from './errors'
@@ -29,10 +30,10 @@ describe('parseInternalTransferHint', () => {
   }
   const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
 
-  it('parses a text/xpub entry into {cx1, startIndex}', () => {
+  it('parses a text/cpub entry into {cx1, startIndex}', () => {
     const metadata = JSON.stringify([
       ['text/plain', 'a mint'],
-      ['text/xpub', `${cx1}:7`]
+      ['text/cpub', `${cx1}:7`]
     ])
     expect(parseInternalTransferHint(metadata)).toEqual({
       cx1: branch,
@@ -40,7 +41,7 @@ describe('parseInternalTransferHint', () => {
     })
   })
 
-  it('is null for metadata with no text/xpub entry, or invalid JSON', () => {
+  it('is null for metadata with no text/cpub entry, or invalid JSON', () => {
     expect(
       parseInternalTransferHint(JSON.stringify([['text/plain', 'a mint']]))
     ).toBeNull()
@@ -50,16 +51,16 @@ describe('parseInternalTransferHint', () => {
 
   it('rejects a malformed cx1 or a non-integer/negative index', () => {
     expect(
-      parseInternalTransferHint(JSON.stringify([['text/xpub', `${cx1}:-1`]]))
+      parseInternalTransferHint(JSON.stringify([['text/cpub', `${cx1}:-1`]]))
     ).toBeNull()
     expect(
-      parseInternalTransferHint(JSON.stringify([['text/xpub', `${cx1}:abc`]]))
+      parseInternalTransferHint(JSON.stringify([['text/cpub', `${cx1}:abc`]]))
     ).toBeNull()
     expect(
-      parseInternalTransferHint(JSON.stringify([['text/xpub', 'cp1garbage:0']]))
+      parseInternalTransferHint(JSON.stringify([['text/cpub', 'cp1garbage:0']]))
     ).toBeNull()
     expect(
-      parseInternalTransferHint(JSON.stringify([['text/xpub', cx1]]))
+      parseInternalTransferHint(JSON.stringify([['text/cpub', cx1]]))
     ).toBeNull()
   })
 })
@@ -70,16 +71,23 @@ describe('payInternalTransfer', () => {
     chainCode: new Uint8Array(32).fill(0x7)
   }
   const cp1At = (index: number) =>
-    encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+    encodeCp1(
+      deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        index
+      )
+    )
 
   const okResponse = () =>
-    ({json: async () => ({status: 'OK', sig: SIG})}) as Response
+    ({json: async () => ({status: 'OK', c: SIG})}) as Response
   const okSplitResponse = () =>
     ({
       json: async () => ({
         status: 'OK',
-        sig: SIG,
-        sig2: SIG2
+        c: SIG,
+        c2: SIG2
       })
     }) as Response
   const errorResponse = (reason: string) =>

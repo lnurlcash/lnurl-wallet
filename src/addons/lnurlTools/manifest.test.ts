@@ -11,7 +11,7 @@ const {helpers} = lnurlToolsAddon
 const call = (fn: AddonHelper, ...args: unknown[]): unknown =>
   fn(...(args as never[]))
 
-// a real LUD-06 payRequest response, including this wallet's own text/xpub
+// a real LUD-06 payRequest response, including this wallet's own text/cpub
 // extension (see internalTransfer.ts), Nostr zap support (NIP-57), and two
 // text/plain metadata entries (LUD-06 doesn't forbid repeating a type)
 const PAY_REQUEST = {
@@ -22,7 +22,7 @@ const PAY_REQUEST = {
     minSendable: 14000,
     maxSendable: 200000000,
     metadata:
-      '[["text/plain", "Mint an lnurlcash bearer note on mint.lnurlcash.com"], ["text/identifier", "dni2@mint.lnurlcash.com"], ["text/xpub", "cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6"], ["text/plain", "Mint fees: 3000,2000"]]',
+      '[["text/plain", "Mint an lnurlcash bearer note on mint.lnurlcash.com"], ["text/identifier", "dni2@mint.lnurlcash.com"], ["text/cpub", "cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6"], ["text/plain", "Mint fees: 3000,2000"]]',
     withdrawLink: 'https://mint.lnurlcash.com/w',
     commentAllowed: 64,
     allowsNostr: true,
@@ -54,7 +54,7 @@ describe('lnurlTools: a real payRequest with LUD-06 metadata + Nostr zaps', () =
       },
       {label: 'Identifier', value: 'dni2@mint.lnurlcash.com'},
       {
-        label: 'Internal transfer xpub (LUD-25)',
+        label: 'Internal transfer cpub (LUD-25)',
         value:
           'cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6'
       },

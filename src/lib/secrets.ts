@@ -33,13 +33,13 @@ export const configureSecretProvider = (provider: SecretProvider): void => {
 // instead, once, at startup)
 export const generateSecret = (domain: string): string => secretProvider(domain)
 
-// LUD-25 Part 2 counterpart to SecretProvider above - a ck1 ownership
+// LUD-25 counterpart to SecretProvider above - a ck1 ownership
 // signature rather than a preimage, for a host that wants rotate/split/
 // merge to be able to REISSUE a pubkey-bound output too (see
 // request.ts's own use of this: it never downgrades an already pub/sig
 // note back to a legacy one just because it got rotated). Returns null
 // (never throws) whenever a pubkey-bound secret can't be produced right
-// now - unconfigured (a host that hasn't wired up Part 2 at all, the
+// now - unconfigured (a host that hasn't wired up a pubkey provider at all, the
 // default), or the underlying seed-derived key isn't currently available -
 // callers fall back to the legacy provider in either case.
 export type PubkeySecretProvider = (domain: string) => string | null
@@ -54,3 +54,22 @@ export const configurePubkeySecretProvider = (
 
 export const generatePubkeySecret = (domain: string): string | null =>
   pubkeySecretProvider(domain)
+
+// 25.md's Seed & derivation purpose 1 (change): a split's own change
+// output must never share an index with the wallet's ordinary purpose-0
+// notes (generatePubkeySecret above) - the two draw from independent
+// counters on the same branch, so a host that wants a seed-recoverable
+// change output wires this up separately (see request.ts's splitNote /
+// internalTransfer.ts's own changeK1, the only two callers - a rotate or
+// merge never produces "change"). Same null-means-fall-back contract as
+// generatePubkeySecret.
+let changePubkeySecretProvider: PubkeySecretProvider = () => null
+
+export const configureChangePubkeySecretProvider = (
+  provider: PubkeySecretProvider
+): void => {
+  changePubkeySecretProvider = provider
+}
+
+export const generateChangePubkeySecret = (domain: string): string | null =>
+  changePubkeySecretProvider(domain)

@@ -49,7 +49,7 @@ The root export includes:
 
 - LNURL and note parsing in `urls.ts`
 - BOLT-11 amount, hash and preimage checks in `bolt11.ts`
-- offline note signatures and Part 2 ownership proofs in `signature.ts`
+- offline note signatures and key-path ownership proofs in `signature.ts`
 - fee parsing and arithmetic in `fees.ts`
 - guarded network access in `net.ts`
 - note lookup, melt, rotate, split, merge and settlement in `request.ts`

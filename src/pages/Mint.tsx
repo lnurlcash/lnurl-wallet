@@ -634,8 +634,7 @@ const Mint: Component = () => {
       }
 
       if (!result) {
-        // prefers a LUD-25 Part 2 pubkey-bound output over the legacy
-        // hash-keyed one whenever the mint accepts it, with an automatic,
+        // prefers a key-path output over a bearer one whenever the mint accepts it, with an automatic,
         // invisible fallback otherwise - see requestMintInvoice's own
         // comment for why trying this is always safe
         const minted = await requestMintInvoice(
@@ -787,7 +786,7 @@ const Mint: Component = () => {
       const feePaidMsat = grossPaidMsat - noteInfo.maxWithdrawable
       const mintPubkey = noteInfo.mintPubkey
 
-      // LUD-25 Part 2: this note's own bearer secret already is a
+      // LUD-25: this note's own bearer secret already is a
       // signature proving key ownership - none of the legacy rotate-for-
       // a-certificate dance below applies (rotating would burn-and-
       // reissue under a fresh LEGACY secret, silently downgrading it back
@@ -899,15 +898,16 @@ const Mint: Component = () => {
         declaredUrl,
         noteInfo.k1,
         noteInfo.maxWithdrawable,
-        noteInfo.sig
+        noteInfo.c
       )
-      // SERVICE may already disclose this note's offline-verification sig
-      // right on this informational GET (see WithdrawRequestInfo's own
-      // comment) - skip the rotate-for-a-certificate dance entirely when
-      // it's already there. Only fall back to it (as in the minting
-      // diagram) when SERVICE doesn't yet disclose one this way.
+      // SERVICE may already disclose this note's offline-verification
+      // certificate right on this informational GET (see
+      // WithdrawRequestInfo's own comment) - skip the rotate-for-a-
+      // certificate dance entirely when it's already there. Only fall back
+      // to it (as in the minting diagram) when SERVICE doesn't yet disclose
+      // one this way.
       let rotationError: string | null = null
-      if (!noteInfo.sig) {
+      if (!noteInfo.c) {
         try {
           const rotated = await rotateNote(noteInfo.callback, noteInfo.k1)
           url = withNewK1(
@@ -1262,7 +1262,7 @@ const Mint: Component = () => {
               <For each={trustedMints()}>
                 {mint => {
                   // at most one registered address per mint server in
-                  // practice - a device's LUD-25 Part 2 registration is
+                  // practice - a device's LUD-25 registration is
                   // scoped to one seed-derived branch per server (see
                   // cashSecrets.ts's cashAddressBranch), so there's never
                   // more than one to pick between here

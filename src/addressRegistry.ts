@@ -2,7 +2,7 @@ import {createSignal} from 'solid-js'
 import {serviceOriginOf} from './lnurlcash'
 import {isValidNpub} from './nostrAddress'
 
-// LUD-25 Part 2 (see 25.md's "Seed & derivation") - usernames THIS wallet
+// LUD-25 (see 25.md's "Seed & derivation") - usernames THIS wallet
 // has registered for itself at a mint (GET /register), each backed by its
 // own watch-only branch (see cashSecrets.ts's cashAddressBranch). Distinct
 // from trustedMints.ts's own `username` field, which caches the local-part
@@ -33,7 +33,7 @@ export type RegisteredAddress = {
   // scanRegisteredAddress's own `nextScanIndex` return field for how this
   // advances: past whatever this device has itself confirmed used, and
   // past whatever index SERVICE's own payRequest metadata hints at
-  // (LUD-25 Part 2's text/xpub, internalTransfer.ts's
+  // (LUD-25's text/cpub, internalTransfer.ts's
   // parseInternalTransferHint) - never regresses
   nextScanIndex?: number
 }

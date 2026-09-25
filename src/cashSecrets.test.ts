@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {deriveNotePubkey} from './lib/recoverableNotes'
+import {deriveNotePubkey, NOTE_PURPOSE_WALLET} from './lib/recoverableNotes'
 
 // same in-memory localStorage stand-in as storage.test.ts/trustedMints.test.ts -
 // cashSecrets.ts persists per-SERVICE indices there, and a fresh module graph
@@ -37,7 +37,7 @@ const loadRoot = () => {
   return node
 }
 
-describe('LUD-25 Part 2: address branches (cashAddressBranch/cashAddressSecretAtIndex)', () => {
+describe('LUD-25: address branches (cashAddressBranch/cashAddressSecretAtIndex)', () => {
   it('are null with no root set', () => {
     expect(cashSecrets.cashAddressBranch('mint.example')).toBeNull()
     expect(cashSecrets.cashAddressSecretAtIndex('mint.example', 0)).toBeNull()
@@ -85,6 +85,7 @@ describe('LUD-25 Part 2: address branches (cashAddressBranch/cashAddressSecretAt
       const pubkeyWatchOnly = deriveNotePubkey(
         branch.pubkeyXOnly,
         branch.chainCode,
+        NOTE_PURPOSE_WALLET,
         index
       )
       expect(bytesToHex(pubkeyFromSecret)).toBe(bytesToHex(pubkeyWatchOnly))
@@ -99,7 +100,7 @@ describe('LUD-25 Part 2: address branches (cashAddressBranch/cashAddressSecretAt
   })
 })
 
-describe('LUD-25 Part 2: wallet-initiated secrets (nextCashAddressSecret)', () => {
+describe('LUD-25: wallet-initiated secrets (nextCashAddressSecret)', () => {
   it('persists a recoverable secret before returning it, as a ck1 string', () => {
     loadRoot()
     const secret =
@@ -200,10 +201,10 @@ describe('mergeCashAddressSecretIndices (backup restore)', () => {
   })
 })
 
-// Part 1's own reload-survival (see lnurlcash.ts's generateMintSecret) -
-// deliberately plain localStorage, not seed-derived (25.md's Part 1 defines
-// no derivation at all - see this module's own header comment)
-describe('pending mint secrets (Part 1 reload-survival)', () => {
+// A bearer note's own reload-survival (see lnurlcash.ts's generateMintSecret) -
+// deliberately plain localStorage, not seed-derived (25.md defines no
+// derivation for bearer notes - see this module's own header comment)
+describe('pending mint secrets (bearer note reload-survival)', () => {
   it('is empty for a domain nothing was ever recorded for', () => {
     expect(cashSecrets.pendingMintSecretsFor('mint.example')).toEqual([])
   })

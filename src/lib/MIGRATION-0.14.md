@@ -25,8 +25,8 @@ import {
 ```
 
 Do this during application startup, before any request. The defaults use
-platform `fetch`, admit requests, generate legacy outputs using Web Crypto and
-do not generate Part 2 public-key outputs.
+platform `fetch`, admit requests, generate bearer outputs using Web Crypto and
+do not generate key-path outputs.
 
 ## Removed high-level helpers
 
@@ -57,7 +57,7 @@ especially ambiguous results, before moving value with 0.14.
 
 ## New surface
 
-Version 0.14 adds the wallet's current Part 2 and LN address work, including
+Version 0.14 adds the wallet's current key-path note and LN address work, including
 `fetchNoteInfoByPubkey`, cp1/ck1/cs1/cx1 codecs and derivation,
 `registerUsername`, `scanForAddressNotes`, `configureTransport` and
 bound-mint receipt validation.

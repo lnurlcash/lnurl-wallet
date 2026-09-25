@@ -6,7 +6,12 @@ import {
   scanForAddressNotes,
   resolveScanStartIndex
 } from './addresses'
-import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
+import {
+  deriveNotePubkey,
+  encodeCp1,
+  NOTE_PURPOSE_WALLET,
+  type Cx1
+} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -139,7 +144,12 @@ describe('scanForAddressNotes', () => {
   }
 
   const pubkeyAt = (index: number) =>
-    deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index)
+    deriveNotePubkey(
+      branch.pubkeyXOnly,
+      branch.chainCode,
+      NOTE_PURPOSE_WALLET,
+      index
+    )
 
   it('finds notes at known indices and stops after the gap limit', async () => {
     // notes exist at index 0 and 2 only
@@ -169,6 +179,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 3}
     )
     expect(results.map(r => r.index)).toEqual([0, 2])
@@ -200,6 +211,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 2, onFound: r => seen.push(r.index)}
     )
     expect(seen).toEqual([0, 1, 2])
@@ -228,10 +240,15 @@ describe('scanForAddressNotes', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const progressed: number[] = []
-    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-      gapLimit: 2,
-      onProgress: index => progressed.push(index)
-    })
+    await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      NOTE_PURPOSE_WALLET,
+      {
+        gapLimit: 2,
+        onProgress: index => progressed.push(index)
+      }
+    )
     expect(progressed).toEqual([0, 1, 2])
   })
 
@@ -252,6 +269,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 1, rateLimitBackoffMs: 1}
     )
     expect(results).toEqual([])
@@ -291,6 +309,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 3, onSpent: index => spent.push(index)}
     )
     // the spent note at 0 is never returned as something to recover, but
@@ -310,9 +329,14 @@ describe('scanForAddressNotes', () => {
       })
     )
     await expect(
-      scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-        gapLimit: 5
-      })
+      scanForAddressNotes(
+        'https://mint.example.com/withdraw',
+        branch,
+        NOTE_PURPOSE_WALLET,
+        {
+          gapLimit: 5
+        }
+      )
     ).rejects.toThrow()
   })
 
@@ -350,6 +374,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 5, startIndex: 3, checkBehind: true}
     )
     expect(results.map(r => r.index)).toEqual([0])
@@ -364,6 +389,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {
         gapLimit: 5,
         startIndex: 10,
@@ -380,12 +406,17 @@ describe('scanForAddressNotes', () => {
   it('checkBehind clamps its window at 0 and never probes a negative index', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-      gapLimit: 5,
-      startIndex: 2,
-      checkBehind: true,
-      onProgress: index => probed.push(index)
-    })
+    await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      NOTE_PURPOSE_WALLET,
+      {
+        gapLimit: 5,
+        startIndex: 2,
+        checkBehind: true,
+        onProgress: index => probed.push(index)
+      }
+    )
     expect(Math.min(...probed)).toBe(0)
   })
 
@@ -394,6 +425,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 5, startIndex: 3}
     )
     expect(results).toEqual([])
@@ -406,6 +438,7 @@ describe('scanForAddressNotes', () => {
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
       branch,
+      NOTE_PURPOSE_WALLET,
       {gapLimit: 5, minIndex: 30}
     )
     expect(results.map(r => r.index)).toEqual([30])
@@ -414,11 +447,16 @@ describe('scanForAddressNotes', () => {
   it('minIndex forces coverage through exactly that index and no further once nothing is found', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-      gapLimit: 3,
-      minIndex: 10,
-      onProgress: index => probed.push(index)
-    })
+    await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      NOTE_PURPOSE_WALLET,
+      {
+        gapLimit: 3,
+        minIndex: 10,
+        onProgress: index => probed.push(index)
+      }
+    )
     // consecutiveUnknown keeps accumulating past gapLimit throughout the
     // forced stretch (it isn't reset at minIndex) - so the moment index
     // passes 10, the ordinary stop condition is already satisfied and the
@@ -435,21 +473,31 @@ describe('scanForAddressNotes', () => {
     // more indices past minIndex afterward, same as any other hit would
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([8]))
     const probed: number[] = []
-    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-      gapLimit: 3,
-      minIndex: 10,
-      onProgress: index => probed.push(index)
-    })
+    await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      NOTE_PURPOSE_WALLET,
+      {
+        gapLimit: 3,
+        minIndex: 10,
+        onProgress: index => probed.push(index)
+      }
+    )
     expect(probed).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
   })
 
   it('omitting minIndex behaves exactly as before (plain gapLimit stop)', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes('https://mint.example.com/withdraw', branch, {
-      gapLimit: 4,
-      onProgress: index => probed.push(index)
-    })
+    await scanForAddressNotes(
+      'https://mint.example.com/withdraw',
+      branch,
+      NOTE_PURPOSE_WALLET,
+      {
+        gapLimit: 4,
+        onProgress: index => probed.push(index)
+      }
+    )
     expect(probed).toEqual([0, 1, 2, 3])
   })
 })

@@ -121,7 +121,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   const [lnAddressText, setLnAddressText] = createSignal('')
   const [lnAddressAmountSats, setLnAddressAmountSats] = createSignal('')
   const [fetchingInvoice, setFetchingInvoice] = createSignal(false)
-  // LUD-25 Part 2's Internal transfer: burning a held note straight onto
+  // LUD-25's Internal transfer: burning a held note straight onto
   // the recipient's own registered branch, skipping Lightning entirely -
   // see payWithInternalTransfer below. A separate confirm/busy pair from
   // the ordinary melt flow's own (confirming/paying), since this never
@@ -515,7 +515,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
 
   const unspentBearers = createMemo(() => bearers().filter(b => !b.spent))
 
-  // LUD-25 Part 2's Internal transfer: eligible only if the looked-up
+  // LUD-25's Internal transfer: eligible only if the looked-up
   // address published a cx1 (Seed & derivation) AND this wallet holds a
   // verified, browser-held note at that SAME mint - device-backed notes
   // are excluded because the vault always generates its own output secret
