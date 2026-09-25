@@ -6,10 +6,12 @@ import {
   requireBoundMintQuote,
   validateBoundMintReceipt,
   requestInvoice,
+  requestInvoiceShort,
   fetchPayRequest
 } from './mintRequest'
 import {hashK1} from './signature'
-import {encodeCp1, encodeCx1} from './recoverableNotes'
+import {bearerNoteIdOfHash, bearerNoteIdOfPreimage} from './spend'
+import {encodeCp1, encodeCs1WithAmount, encodeCx1} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -17,13 +19,16 @@ const K1 = 'a'.repeat(64)
 
 // signed the same way LUD-13 signs its auth seed phrase - see
 // signature.test.ts for the full rationale behind each step here
-const signAsMint = (
+const signAsMint = (priv: Uint8Array, k1: string, amountMsat: number): string =>
+  signAsMintForId(priv, bearerNoteIdOfPreimage(k1), amountMsat)
+
+// a mint's cs1 certificate over "LNURLcash:<amount_msat>:<hex(Q)>"
+const signAsMintForId = (
   priv: Uint8Array,
-  k1: string,
+  idHex: string,
   amountMsat: number
 ): string => {
-  const k1Hash = bytesToHex(sha256(hexToBytes(k1)))
-  const message = utf8ToBytes(`LNURLcash:${amountMsat}:${k1Hash}`)
+  const message = utf8ToBytes(`LNURLcash:${amountMsat}:${idHex}`)
   const digest = sha256(
     sha256(
       new Uint8Array([...utf8ToBytes('Lightning Signed Message:'), ...message])
@@ -33,7 +38,10 @@ const signAsMint = (
     format: 'recovered',
     prehash: false
   })
-  return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
+  return encodeCs1WithAmount(
+    amountMsat,
+    new Uint8Array([...libSig.subarray(1), libSig[0]!])
+  )
 }
 
 describe('fetchPayRequest - LUD-25 Part 2 internal transfer hint', () => {
@@ -94,25 +102,26 @@ describe('bound-mint receipt authentication', () => {
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
     const amountMsat = 21000
     const h = hashK1(K1)
+    const q = bearerNoteIdOfPreimage(K1)
     const sig = signAsMint(priv, K1, amountMsat)
     const quote = {
       pr: 'lnbc21n1bound',
       verify: 'https://mint.example/verify/1',
       disposable: true,
       mintToHash: true,
-      mint: {h, amountMsat}
+      mint: {h: q, amountMsat}
     }
     const verification = {
       settled: true,
       preimage: 'ff'.repeat(32),
       pr: quote.pr.toUpperCase(),
-      mint: {h, amountMsat, signature: sig}
+      mint: {h: q, amountMsat, signature: sig}
     }
 
     expect(requireBoundMintQuote(quote, h, amountMsat)).toEqual(quote.mint)
     expect(
       validateBoundMintReceipt(quote, verification, h, amountMsat, pubHex)
-    ).toEqual({h, amountMsat, signature: sig})
+    ).toEqual({h: q, amountMsat, signature: sig})
     expect(() =>
       validateBoundMintReceipt(
         quote,
@@ -124,36 +133,11 @@ describe('bound-mint receipt authentication', () => {
     ).toThrow(/does not match/)
   })
 
-  // cs1's message is LNURLcash:<amount>:<hex(pk)> with the pubkey hex used
-  // DIRECTLY (no hashing) - unlike signAsMint above, which is only valid
-  // for a legacy h=sha256(secret) id
-  const signAsMintForId = (
-    priv: Uint8Array,
-    idHex: string,
-    amountMsat: number
-  ): string => {
-    const message = utf8ToBytes(`LNURLcash:${amountMsat}:${idHex}`)
-    const digest = sha256(
-      sha256(
-        new Uint8Array([
-          ...utf8ToBytes('Lightning Signed Message:'),
-          ...message
-        ])
-      )
-    )
-    const libSig = secp256k1.sign(digest, priv, {
-      format: 'recovered',
-      prehash: false
-    })
-    return bytesToHex(new Uint8Array([...libSig.subarray(1), libSig[0]!]))
-  }
-
-  it('accepts a cp1/cs1-encoded bound-mint receipt, normalized to plain hex', () => {
+  it('accepts a bound-mint receipt for a key-path note, named by its cp1', () => {
     // as it would actually arrive: parseBoundMintCommitment (inside
     // requestInvoice/fetchInvoiceVerification, not called directly here)
-    // already normalizes h/sig to plain hex before an InvoiceResult ever
-    // reaches these functions - a hand-built fixture must match that same
-    // already-normalized shape, not the raw wire encoding
+    // already normalizes h to the note's hex(Q) before an InvoiceResult ever
+    // reaches these functions
     const priv = secp256k1.utils.randomSecretKey()
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
     const amountMsat = 21000
@@ -161,7 +145,7 @@ describe('bound-mint receipt authentication', () => {
     const pkXOnly = schnorr.getPublicKey(notePubkey)
     const pkHex = bytesToHex(pkXOnly)
     const cp1 = encodeCp1(pkXOnly) // the wire form a caller's own expectedH may use
-    const sig = signAsMintForId(priv, pkHex, amountMsat) // pk hex signed directly, no hashing
+    const sig = signAsMintForId(priv, pkHex, amountMsat)
     const quote = {
       pr: 'lnbc21n1bound',
       verify: 'https://mint.example/verify/1',
@@ -201,16 +185,30 @@ describe('requestInvoice - LUD-25 Part 2 cp1 comment', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('still sends both comment and h for a legacy hash', async () => {
+  it("sends a bearer hash as its hashlock note's cp1", async () => {
     const hash = 'a'.repeat(64)
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      expect(request.searchParams.get('comment')).toBe(hash)
-      expect(request.searchParams.get('h')).toBe(hash)
+      expect(request.searchParams.get('comment')).toBe(
+        encodeCp1(hexToBytes(bearerNoteIdOfHash(hash)))
+      )
+      expect(request.searchParams.get('h')).toBeNull()
       return {json: async () => ({pr: 'lnbc1p0examplebech32data'})} as Response
     })
     vi.stubGlobal('fetch', fetchMock)
     await requestInvoice('https://mint.example.com/p/cb', 1000, hash)
+  })
+
+  it('requestInvoiceShort sends a bearer hash as its 64-hex short form', async () => {
+    const hash = 'a'.repeat(64)
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.get('comment')).toBe(hash)
+      return {json: async () => ({pr: 'lnbc1p0examplebech32data'})} as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await requestInvoiceShort('https://mint.example.com/p/cb', 1000, hash)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an output hash that is neither hex32 nor a pubkey commitment', async () => {

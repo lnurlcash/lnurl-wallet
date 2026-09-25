@@ -8,13 +8,27 @@ import {
   rotateNoteWithHash,
   splitNoteWithHash,
   mergeNotesWithHash,
+  rotateNoteWithHashShort,
+  splitNoteWithHashShort,
+  mergeNotesWithHashShort,
+  fetchNoteInfoByHash,
+  fetchNoteInfoByHashShort,
   rotateNote,
   upgradeNote,
   splitNote,
   mergeNotes
 } from './request'
 import {hashK1, signNoteOwnership, cp1FromCk1} from './signature'
-import {encodeCk1, encodeCp1, encodeCs1, encodeCw1} from './recoverableNotes'
+import {
+  encodeCk1,
+  encodeCp1,
+  encodeCs1WithAmount,
+  encodeCw1,
+  isCp1
+} from './recoverableNotes'
+import {noteRef} from './spend'
+
+const CS1 = encodeCs1WithAmount(1000, new Uint8Array(65).fill(0xab))
 import {
   AmbiguousMintError,
   AmbiguousMutationError,
@@ -33,7 +47,7 @@ describe('mandatory offline-verification fields', () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
       expect(request.searchParams.get('k1')).toBeNull()
-      expect(request.searchParams.get('h')).toBe(hashK1(K1))
+      expect(request.searchParams.get('p')).toBe(noteRef(hashK1(K1)))
       return {
         json: async () => ({
           tag: 'withdrawRequest',
@@ -50,7 +64,7 @@ describe('mandatory offline-verification fields', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to raw k1 only when an older SERVICE requires it', async () => {
+  it('never falls back to sending the raw k1', async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
       const k1 = request.searchParams.get('k1')
@@ -69,8 +83,10 @@ describe('mandatory offline-verification fields', () => {
       } as Response
     })
     vi.stubGlobal('fetch', fetchMock)
-    expect((await fetchNoteInfo(NOTE_URL)).k1).toBe(K1)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await expect(fetchNoteInfo(NOTE_URL)).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const sent = new URL(String(fetchMock.mock.calls[0]![0]))
+    expect(sent.searchParams.get('k1')).toBeNull()
   })
 
   it('does not reveal k1 after an unknown hash response', async () => {
@@ -129,7 +145,7 @@ describe('mandatory offline-verification fields', () => {
   })
 
   it('preserves a valid optional certificate on a plain-hash output', async () => {
-    const certificate = '00'.repeat(65)
+    const certificate = CS1
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -388,7 +404,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
       expect(request.searchParams.get('h')).toBeNull()
       expect(request.searchParams.get('p1')).toBe(cp1)
       return {
-        json: async () => ({status: 'OK', sig: '00'.repeat(65)})
+        json: async () => ({status: 'OK', sig: CS1})
       } as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -396,13 +412,13 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('mergeNotesWithHash sends h (not p1) for a legacy hash output', async () => {
+  it('mergeNotesWithHash sends a bearer hash output as its cp1 in p1', async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      expect(request.searchParams.get('p1')).toBeNull()
-      expect(request.searchParams.get('h')).toBe('b'.repeat(64))
+      expect(request.searchParams.get('h')).toBeNull()
+      expect(request.searchParams.get('p1')).toBe(noteRef('b'.repeat(64)))
       return {
-        json: async () => ({status: 'OK', sig: '00'.repeat(65)})
+        json: async () => ({status: 'OK', sig: CS1})
       } as Response
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -413,19 +429,18 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
     )
   })
 
-  it('splitNoteWithHash dispatches each output field independently by shape', async () => {
+  it("splitNoteWithHash sends a bearer hash's cp1 and a cp1 as p1/p2", async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      // first output legacy hash -> h, second output cp1 -> p2
-      expect(request.searchParams.get('h')).toBe('b'.repeat(64))
+      expect(request.searchParams.get('p1')).toBe(noteRef('b'.repeat(64)))
       expect(request.searchParams.get('p2')).toBe(cp1)
+      expect(request.searchParams.get('h')).toBeNull()
       expect(request.searchParams.get('h2')).toBeNull()
-      expect(request.searchParams.get('p1')).toBeNull()
       return {
         json: async () => ({
           status: 'OK',
-          sig: '00'.repeat(65),
-          sig2: '00'.repeat(65)
+          sig: CS1,
+          sig2: CS1
         })
       } as Response
     })
@@ -440,7 +455,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
   })
 
   it('preserves a cs1-encoded signature exactly as SERVICE sent it', async () => {
-    const cert = encodeCs1(new Uint8Array(65).fill(0xab))
+    const cert = CS1
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -458,7 +473,7 @@ describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
 })
 
 describe('WithdrawRequestInfo.sig: informational GET may already disclose one', () => {
-  it('captures a hex sig from the plain informational GET', async () => {
+  it('ignores a plain-hex sig on the informational GET: only a cs1 is a certificate', async () => {
     const sig = 'ab'.repeat(65)
     vi.stubGlobal(
       'fetch',
@@ -477,11 +492,11 @@ describe('WithdrawRequestInfo.sig: informational GET may already disclose one', 
       )
     )
     const info = await fetchNoteInfo(NOTE_URL)
-    expect(info.sig).toBe(sig)
+    expect(info.sig).toBeUndefined()
   })
 
   it('captures a cs1-encoded sig, preserved exactly as disclosed', async () => {
-    const cert = encodeCs1(new Uint8Array(65).fill(0xcd))
+    const cert = encodeCs1WithAmount(21000, new Uint8Array(65).fill(0xcd))
     vi.stubGlobal(
       'fetch',
       vi.fn(
@@ -565,7 +580,7 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
 
   const okResponse = () =>
     ({
-      json: async () => ({status: 'OK', sig: '00'.repeat(65)})
+      json: async () => ({status: 'OK', sig: CS1})
     }) as Response
 
   it('rotateNote reissues a ck1 input as a pubkey-bound output when a provider is configured', async () => {
@@ -607,8 +622,9 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
     configureSecretProvider(() => 'f'.repeat(64))
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      expect(request.searchParams.get('p1')).toBeNull()
-      expect(request.searchParams.get('h')).toBe(hashK1('f'.repeat(64)))
+      expect(request.searchParams.get('p1')).toBe(
+        noteRef(hashK1('f'.repeat(64)))
+      )
       return okResponse()
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -620,7 +636,9 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
     configurePubkeySecretProvider(() => ck1)
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      expect(request.searchParams.get('p1')).toBeNull()
+      expect(request.searchParams.get('p1')).toBe(
+        noteRef(hashK1('f'.repeat(64)))
+      )
       return okResponse()
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -635,14 +653,16 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
     configurePubkeySecretProvider(() => ck1)
     const fetchMock = vi.fn(async (input: string | URL) => {
       const request = new URL(input.toString())
-      // mixed batch (one legacy k1 among the inputs) - stays legacy
-      expect(request.searchParams.get('p1')).toBeNull()
-      expect(request.searchParams.get('p2')).toBeNull()
+      // mixed batch (one bearer k1 among the inputs) - stays bearer
+      const p1 = request.searchParams.get('p1')!
+      const p2 = request.searchParams.get('p2')!
+      expect(isCp1(p1) && isCp1(p2)).toBe(true)
+      expect([p1, p2]).not.toContain(cp1FromCk1(ck1))
       return {
         json: async () => ({
           status: 'OK',
-          sig: '00'.repeat(65),
-          sig2: '00'.repeat(65)
+          sig: CS1,
+          sig2: CS1
         })
       } as Response
     })
@@ -683,7 +703,7 @@ describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', 
 
   const okResponse = () =>
     ({
-      json: async () => ({status: 'OK', sig: '00'.repeat(65)})
+      json: async () => ({status: 'OK', sig: CS1})
     }) as Response
 
   it('reissues a plain legacy secret as a ck1, unlike an ordinary rotate', async () => {
@@ -722,5 +742,43 @@ describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', 
     await expect(
       upgradeNote('https://mint.example.com/w/cb', 'a'.repeat(64))
     ).rejects.toBeInstanceOf(AmbiguousMutationError)
+  })
+})
+
+describe('short-form variants', () => {
+  const h = 'b'.repeat(64)
+  const okBody = {status: 'OK', sig: CS1, sig2: CS1}
+  const capture = (seen: URL[], body: object) =>
+    vi.fn(async (input: string | URL) => {
+      seen.push(new URL(input.toString()))
+      return {json: async () => body} as Response
+    })
+
+  it('send a bearer hash as its 64-hex short form', async () => {
+    const seen: URL[] = []
+    vi.stubGlobal('fetch', capture(seen, okBody))
+    const cb = 'https://mint.example.com/w/cb'
+    await rotateNoteWithHashShort(cb, K1, h)
+    await mergeNotesWithHashShort(cb, [K1], h)
+    await splitNoteWithHashShort(cb, [K1], 1000, h, h.replace(/b/g, 'c'))
+    expect(seen.map(u => u.searchParams.get('p1'))).toEqual([h, h, h])
+    expect(seen[2]!.searchParams.get('p2')).toBe('c'.repeat(64))
+  })
+
+  it('look a note up by its short form, or by its cp1 by default', async () => {
+    const seen: URL[] = []
+    vi.stubGlobal(
+      'fetch',
+      capture(seen, {
+        tag: 'withdrawRequest',
+        callback: 'https://mint.example.com/w/cb',
+        minWithdrawable: 1000,
+        maxWithdrawable: 1000,
+        mintPubkey: MINT_KEY
+      })
+    )
+    await fetchNoteInfoByHash('https://mint.example.com/w', h)
+    await fetchNoteInfoByHashShort('https://mint.example.com/w', h)
+    expect(seen.map(u => u.searchParams.get('p'))).toEqual([noteRef(h), h])
   })
 })

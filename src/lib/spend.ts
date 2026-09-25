@@ -20,7 +20,7 @@
 import {sha256} from '@noble/hashes/sha2.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
-import {tapLeafHash, taprootTweakPubkey} from './recoverableNotes'
+import {encodeCp1, tapLeafHash, taprootTweakPubkey} from './recoverableNotes'
 import {fromLud17} from './urls'
 
 export const TAPLEAF_VERSION = 0xc0
@@ -186,3 +186,18 @@ export const bearerNoteIdOfHash = (hHex: string): string =>
 // hex(Q) of the bearer note a hex preimage k1 spends.
 export const bearerNoteIdOfPreimage = (k1Hex: string): string =>
   bytesToHex(bearerNote(sha256(hexToBytes(k1Hex.trim()))).outputKey)
+
+const HEX32 = /^[0-9a-f]{64}$/i
+
+// A note reference as sent where a cp1 goes (a mint comment, p1/p2, ?p=):
+// always the cp1 - a bearer note's 64-hex h becomes its hashlock note's
+// cp1<Q>, anything else passes through unchanged.
+export const noteRef = (value: string): string =>
+  HEX32.test(value.trim())
+    ? encodeCp1(bearerNote(hexToBytes(value.trim().toLowerCase())).outputKey)
+    : value
+
+// The same reference in LUD-25's short form: a bearer note's h stays 64-hex
+// (lowercased); a cp1 has no shorter form and passes through unchanged.
+export const shortNoteRef = (value: string): string =>
+  HEX32.test(value.trim()) ? value.trim().toLowerCase() : value

@@ -12,10 +12,9 @@
 //      or variable-length value types: cp1 (a note's taproot output key Q),
 //      ck1 (a key-path spend: a BIP-340 signature by Q over the canonical
 //      spend transaction's sighash, Q attached - the note's
-//      actual bearer secret; TODO(deprecated) still decodes the OLD bare
-//      recoverable-ECDSA shape too, see isLegacyCk1), cw1 (a script-path note's own
+//      actual bearer secret), cw1 (a script-path note's own
 //      script-path spend: leaf, control block, witness), cs1 (a SERVICE
-//      issuance certificate, still recoverable ECDSA - unchanged), cx1 (a
+//      issuance certificate, recoverable ECDSA, amount in its HRP), cx1 (a
 //      watch-only branch export: pubkey + chain code).
 //   2. The non-hardened, taproot-style per-note key tweak a watch-only cx1
 //      branch derives pk_i from - this is NOT standard BIP32 child
@@ -89,19 +88,7 @@ export const isPubkeyCommitment = (value: string): boolean => isCp1(value)
 // recovered from it. 96 bytes total.
 export const CK1_LENGTH = 96
 
-// TODO(deprecated): the OLD ck1 shape - a bare 65-byte recoverable ECDSA
-// signature (r || s || recovery-id), no embedded pubkey; a verifier had to
-// ecrecover it back out. Kept only so a note minted before this scheme
-// changed still decodes - see signature.ts's legacyRecoverNoteOwnershipPubkey
-// for the matching (deprecated) recovery path, and isLegacyCk1 below for the
-// check a UI uses to warn a holder and prompt a rotate. Once no such notes
-// are expected to remain in the wild, this whole legacy branch (here and in
-// signature.ts) can be deleted outright.
-export const CK1_LEGACY_LENGTH = 65
-
-export type DecodedCk1 =
-  | {legacy: true; signature: Uint8Array}
-  | {legacy: false; pubkeyXOnly: Uint8Array; signature: Uint8Array}
+export type DecodedCk1 = {pubkeyXOnly: Uint8Array; signature: Uint8Array}
 
 export const encodeCk1 = (
   pubkeyXOnly: Uint8Array,
@@ -124,27 +111,9 @@ const decodeCk1Bytes = (value: string): Uint8Array | null => {
 export const decodeCk1 = (value: string): DecodedCk1 | null => {
   const bytes = decodeCk1Bytes(value)
   if (!bytes) return null
-  if (bytes.length === CK1_LENGTH) {
-    return {
-      legacy: false,
-      pubkeyXOnly: bytes.slice(0, 32),
-      signature: bytes.slice(32)
-    }
-  }
-  if (bytes.length === CK1_LEGACY_LENGTH) {
-    return {legacy: true, signature: bytes}
-  }
-  return null
+  if (bytes.length !== CK1_LENGTH) return null
+  return {pubkeyXOnly: bytes.slice(0, 32), signature: bytes.slice(32)}
 }
-
-// TODO(deprecated): true iff `value` decodes as a ck1 under the OLD
-// recoverable-ECDSA shape (CK1_LEGACY_LENGTH) rather than the current
-// pk||sig one - a UI should treat this as "this note's bearer secret uses a
-// deprecated format" and prompt the holder to rotate it (see BearerCard.tsx),
-// closing the exposure and re-issuing it under the current scheme. Delete
-// alongside the rest of the legacy branch once it's no longer needed.
-export const isLegacyCk1 = (value: string): boolean =>
-  decodeCk1(value)?.legacy === true
 
 export const isCk1 = (value: string): boolean => decodeCk1(value) !== null
 
@@ -265,20 +234,7 @@ export const decodeCw1 = (value: string): Cw1 | null => {
 
 export const isCw1 = (value: string): boolean => decodeCw1(value) !== null
 
-// LEGACY, fixed-HRP form: a cs1 certificate with no amount encoded in it
-// at all (SERVICE and WALLET had to carry amount_msat alongside it
-// separately - see request.ts's own `amount` query param history). Kept
-// byte-for-byte as-is, only for interop with a SERVICE that hasn't
-// migrated to encodeCs1WithAmount below (25.md: "encode amount in offline
-// sig") - once none remain, this trio (and every decodeAnyCs1/isAnyCs1
-// fallback path that reaches it) can be deleted outright.
-export const encodeCs1 = (signature: Uint8Array): string =>
-  encodeFixed('cs', signature, 65)
-export const decodeCs1 = (value: string): Uint8Array | null =>
-  decodeFixed('cs', value, 65)
-export const isCs1 = (value: string): boolean => decodeCs1(value) !== null
-
-// CURRENT form: a cs1 certificate whose own human-readable part folds in
+// A cs1 certificate, whose human-readable part folds in
 // amount_msat the same way a BOLT-11 invoice's HRP does ("cs10n" for 1000
 // msat - see bolt11.ts's encodeBolt11AmountSuffix/decodeBolt11AmountSuffix,
 // which this wallet already had for parsing plain BOLT-11 invoices, and
@@ -309,20 +265,6 @@ export const decodeCs1WithAmount = (
 
 export const isCs1WithAmount = (value: string): boolean =>
   decodeCs1WithAmount(value) !== null
-
-// the one entry point most callers actually want: "give me the raw
-// 65-byte signature, whichever cs1 wire shape SERVICE happens to still
-// send" - tries the current amount-encoding form first, falls back to the
-// legacy fixed-HRP one, so this wallet stays interoperable with both an
-// unmigrated and a migrated SERVICE without call sites needing to know or
-// care which. See signature.ts's normalizeSignatureHex/
-// requireMutationSignature and mintRequest.ts's normalizeSignature for
-// where this actually matters.
-export const decodeAnyCs1 = (value: string): Uint8Array | null =>
-  decodeCs1WithAmount(value)?.signature ?? decodeCs1(value)
-
-export const isAnyCs1 = (value: string): boolean =>
-  isCs1WithAmount(value) || isCs1(value)
 
 export type Cx1 = {pubkeyXOnly: Uint8Array; chainCode: Uint8Array}
 

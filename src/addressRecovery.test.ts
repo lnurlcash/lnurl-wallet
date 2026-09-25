@@ -11,7 +11,8 @@ import {
   noteK1,
   noteSignature,
   recoverNoteOwnershipPubkey,
-  withNewK1
+  withNewK1,
+  encodeCs1WithAmount
 } from './lnurlcash'
 
 const store = new Map<string, string>()
@@ -111,12 +112,12 @@ describe('scanRegisteredAddress', () => {
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
     const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
-    expect(owner?.legacy).toBe(false)
+    expect(owner).not.toBeNull()
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
   })
 
   it('attaches an already-disclosed offline-verification sig immediately', async () => {
-    const sig = 'ab'.repeat(65)
+    const sig = encodeCs1WithAmount(5000, new Uint8Array(65).fill(0xab))
     vi.stubGlobal('fetch', fakeMint([0], sig) as unknown as typeof fetch)
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.recovered).toHaveLength(1)
