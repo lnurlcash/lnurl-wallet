@@ -203,7 +203,7 @@ const Vault: Component = () => {
   return (
     <div id="vault" class="page">
       <h2>LNURLvault</h2>
-      {/* LUD-25 Part 2 (recoverable-signature/pubkey-keyed notes - see
+      {/* LUD-25 key-path notes (pubkey-keyed - see
       src/lib/recoverableNotes.ts) is deliberately browser-only for now: it
       needs the device firmware to derive a note's own keypair and sign the
       fixed ck1 ownership message itself, which no vault firmware does yet.
@@ -225,10 +225,10 @@ const Vault: Component = () => {
         }
       >
         <p class="warning">
-          This vault has not been migrated to LUD-25 Part 2's pubkey-based notes
-          yet - it only generates and holds legacy hash-keyed secrets. Address
-          page registrations and any other pubkey-keyed notes stay browser-only
-          for now; keep using this device for its existing note types.
+          This vault has not been migrated to LUD-25 key-path notes yet - it
+          only generates and holds bearer (hash preimage) secrets. Address page
+          registrations and any other pubkey-keyed notes stay browser-only for
+          now; keep using this device for its existing note types.
         </p>
         {/* the pairing call to action has to go once a vault is paired -
           left standing next to "No notes on this device yet" it reads as

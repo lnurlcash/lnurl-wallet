@@ -66,7 +66,7 @@ describe('bolt11 invoice', () => {
   })
 })
 
-describe('bolt11 amount suffix (LUD-25 Part 2 cs1 amount encoding)', () => {
+describe('bolt11 amount suffix (LUD-25 cs1 amount encoding)', () => {
   it('picks the coarsest multiplier that represents the amount exactly', () => {
     // cross-checked against lnurl-mint's own bech32m.py doctring example
     // (via the real `bolt11` Python package's msat_to_amount)

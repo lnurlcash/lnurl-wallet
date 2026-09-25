@@ -166,14 +166,15 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     addon: {id: 'musig2', name: 'MuSig2 Playground'}
   })
 
-  // 25.md's own published "Test vector 1" - pk_0's x-only form, and the
-  // same underlying key encoded two self-contained ways (a cp1 note
-  // address directly, and index 0 of its own branch's cx1 export) - see
-  // src/lib/specVectors.test.ts for the byte-exact cross-check these are
-  // drawn from.
+  // 25.md's own published "Test vector 1", purpose 0 (wallet) - pk_0's
+  // x-only form, and the same underlying key encoded two self-contained
+  // ways (a cp1 note address directly, and purpose-0 index 0 of its own
+  // branch's cx1 export, which is what note.resolveAddressPubkey derives a
+  // cx1 into - see src/lib/specVectors.test.ts for the byte-exact
+  // cross-check these are drawn from).
   const PK0_XONLY =
-    'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
-  const CP1 = 'cp14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6qh2fkky'
+    '690ac33892c64aa53874b0066ab1332f0ef45cb7c0e017eae0828916f52aa99f'
+  const CP1 = 'cp1dy9vxwyjce922wr5kqrx4vfn9u80gh9hcrsp06hqs2y3daf24x0sxpcl6z'
   const CX1 =
     'cx1k7pa9ycdcpf6ju0sryz5efp70jw72rs8d80gwtw3mh096zl5e8g6hywvzxh28902dd3zj2npgl63aaq4p6l2qnn52ymmdpceugu0jpqes280t'
 

@@ -11,6 +11,7 @@ import {
   encodeCx1,
   encodeCk1,
   encodeCs1WithAmount,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './recoverableNotes'
 import {AmbiguousMutationError} from './errors'
@@ -70,7 +71,14 @@ describe('payInternalTransfer', () => {
     chainCode: new Uint8Array(32).fill(0x7)
   }
   const cp1At = (index: number) =>
-    encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, index))
+    encodeCp1(
+      deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        index
+      )
+    )
 
   const okResponse = () =>
     ({json: async () => ({status: 'OK', sig: SIG})}) as Response

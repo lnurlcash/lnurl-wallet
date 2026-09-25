@@ -11,6 +11,7 @@ import {
   decodeCp1,
   decodeCx1,
   deriveNotePubkey,
+  NOTE_PURPOSE_WALLET,
   parseInternalTransferHint,
   requireNoteK1,
   rotateNoteWithHash,
@@ -182,7 +183,7 @@ export const VERBS: Record<string, VerbHandler> = {
     }
     if (bearer.deviceId) {
       throw new Error(
-        'A vault-backed note cannot be locked to a pubkey yet - LUD-25 Part 2 pubkey-based notes are browser-only for now.'
+        'A vault-backed note cannot be locked to a pubkey yet - key-path notes are browser-only for now.'
       )
     }
     const pubkeyHex = String(args.pubkeyHex ?? '')
@@ -657,14 +658,19 @@ export const VERBS: Record<string, VerbHandler> = {
       // the closest thing to a stable per-branch identity key; unlike a
       // payment there is no "next unused" to race against here, so
       // there's no reason to prefer any other index
-      const pubkey = deriveNotePubkey(cx1.pubkeyXOnly, cx1.chainCode, 0)
+      const pubkey = deriveNotePubkey(
+        cx1.pubkeyXOnly,
+        cx1.chainCode,
+        NOTE_PURPOSE_WALLET,
+        0
+      )
       return `02${bytesToHex(pubkey)}`
     }
 
     // shared by the full-Lightning-Address path (any domain) and the
     // bare-username-at-a-known-mint path below - both end the same way,
     // once the actual "user@domain" string to resolve is in hand: fetch
-    // its payRequest, read the LUD-25 Part 2 branch it may have
+    // its payRequest, read the LUD-25 branch it may have
     // registered (parseInternalTransferHint), and derive that branch's
     // own stable index-0 pubkey (same reasoning as the cx1 branch above)
     const resolveLud25Pubkey = async (
@@ -691,6 +697,7 @@ export const VERBS: Record<string, VerbHandler> = {
       const pubkey = deriveNotePubkey(
         hint.cx1.pubkeyXOnly,
         hint.cx1.chainCode,
+        NOTE_PURPOSE_WALLET,
         0
       )
       return `02${bytesToHex(pubkey)}`

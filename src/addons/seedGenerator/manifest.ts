@@ -1,4 +1,4 @@
-import {HARDENED_OFFSET, type HDKey} from '@scure/bip32'
+import type {HDKey} from '@scure/bip32'
 import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {
   generateSeedPhrase,
@@ -6,10 +6,15 @@ import {
   deriveLud25CashRootNode,
   lud05PathSuffix
 } from '../../keys'
-import {deriveNotePubkey, encodeCp1, encodeCx1} from '../../lnurlcash'
+import {
+  deriveNotePubkey,
+  encodeCp1,
+  encodeCx1,
+  NOTE_PURPOSE_WALLET
+} from '../../lnurlcash'
 import {trustedMints} from '../../trustedMints'
 
-// A throwaway-seed sandbox for exploring LUD-25 Part 2's own derivation
+// A throwaway-seed sandbox for exploring LUD-25's own derivation
 // (see cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex) without
 // touching this wallet's real seed at all - "Generate new seed" makes a
 // fresh BIP39 mnemonic entirely in the browser, held only in this addon's
@@ -24,19 +29,24 @@ import {trustedMints} from '../../trustedMints'
 // branch's own public key + chain code (deriveNotePubkey, the same
 // watch-only math a mint uses against a cx1 export) rather than via each
 // index's private key, so there is no private scalar to accidentally show.
+// Shows NOTE_PURPOSE_WALLET only (the ordinary notes a wallet mints/rotates/
+// merges for itself) - not purpose 1 (change) or 2 (Lightning Address),
+// which is what this wallet's own recovery scans (recovery.ts,
+// addressRecovery.ts) additionally walk.
 const KEYPAIR_COUNT = 10
 
 const trimmedString = (value: unknown): string => String(value ?? '').trim()
 
-// mirrors cashSecrets.ts's own addressDomainNode (m/139'/1'/d1/d2/d3/d4) -
-// see this file's own header comment for why it's reimplemented here
-// rather than imported
+// mirrors cashSecrets.ts's own addressDomainNode (m/139'/d1/d2/d3/d4) - see
+// this file's own header comment for why it's reimplemented here rather
+// than imported. No extra purpose hop beyond cashRoot itself: 25.md's
+// Seed & derivation puts `purpose` in the per-note tweak (deriveNotePubkey's
+// own argument below), not in the branch path.
 const addressDomainNode = (cashRoot: HDKey, domain: string): HDKey | null => {
-  const addressRoot = cashRoot.deriveChild(1 + HARDENED_OFFSET) // m/139'/1'
-  const hashingNode = addressRoot.deriveChild(0)
+  const hashingNode = cashRoot.deriveChild(0)
   if (!hashingNode.privateKey) return null
   const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = addressRoot
+  let node = cashRoot
   for (const index of suffix) node = node.deriveChild(index)
   return node
 }
@@ -68,7 +78,12 @@ const keypairsForSeed = (
   if (!branch) return []
   const rows: SeedPubkeyRow[] = []
   for (let i = 0; i < KEYPAIR_COUNT; i++) {
-    const pubkey = deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, i)
+    const pubkey = deriveNotePubkey(
+      branch.pubkeyXOnly,
+      branch.chainCode,
+      NOTE_PURPOSE_WALLET,
+      i
+    )
     rows.push({index: i, pubkey: encodeCp1(pubkey)})
   }
   return rows
@@ -107,7 +122,7 @@ const seedGeneratorManifest: AddonManifest = {
   version: '1',
   icon: 'key',
   description:
-    "Generates a fresh, ephemeral seed phrase (never connected to this wallet's own seed) and derives the first 10 LUD-25 Part 2 pubkeys (cp1) plus the watch-only branch export (cx1) for one of your trusted mints - for exploring the derivation, not for holding real funds.",
+    "Generates a fresh, ephemeral seed phrase (never connected to this wallet's own seed) and derives the first 10 LUD-25 note pubkeys (cp1) plus the watch-only branch export (cx1) for one of your trusted mints - for exploring the derivation, not for holding real funds.",
   permissions: [],
   nav: {position: 'right', icon: 'key', label: 'Seeds'},
   state: {

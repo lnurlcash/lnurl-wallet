@@ -261,7 +261,7 @@ export const recoverNoteOwnershipPubkey = (
   }
 }
 
-// ---- LUD-25 Part 2: un-/registering a Lightning Address (Seed & derivation) ----
+// ---- LUD-25: un-/registering a Lightning Address (Seed & derivation) ----
 //
 // Proof that SERVICE requires before overwriting an already-claimed
 // username, or before unregistering one at all (25.md: "Registering, or
@@ -329,7 +329,7 @@ export const signAddressProof = (
 
 // the public commitment a wallet-generated ck1 secret names, computed
 // purely locally (no SERVICE round trip) - lets a caller that only has a
-// note's bearer secret (e.g. a wallet-initiated Part 2 mint, before the
+// note's bearer secret (e.g. a wallet-initiated key-path mint, before the
 // note even exists yet) get the exact same cp1 value the mint's own
 // dispatch-by-shape comment handling expects, without separately tracking
 // which branch/index it came from. Null (never throws) on anything that

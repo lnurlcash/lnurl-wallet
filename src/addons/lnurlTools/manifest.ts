@@ -99,7 +99,7 @@ const METADATA_LABELS: Record<string, string> = {
   'text/identifier': 'Identifier',
   'image/png;base64': 'Image (PNG, base64)',
   'image/jpeg;base64': 'Image (JPEG, base64)',
-  // this wallet's own LUD-25 Part 2 extension - see internalTransfer.ts's
+  // this wallet's own LUD-25 extension - see internalTransfer.ts's
   // parseInternalTransferHint, `cx1<...>:<i>`
   'text/xpub': 'Internal transfer xpub (LUD-25)'
 }

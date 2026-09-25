@@ -260,7 +260,7 @@ describe('mint address node identity', () => {
   })
 })
 
-describe('LUD-25 Part 2: cp1/ck1/cs1 dual-mode support', () => {
+describe('LUD-25: cp1/ck1/cs1 dual-mode support', () => {
   const secretKey = schnorr.utils.randomSecretKey()
   const pubkeyXOnly = schnorr.getPublicKey(secretKey)
   const ownership = signNoteOwnership(secretKey, 'mint.example')

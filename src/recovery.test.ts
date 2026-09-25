@@ -5,7 +5,8 @@ import {
   encodeCp1,
   noteK1,
   recoverNoteOwnershipPubkey,
-  encodeCs1WithAmount
+  encodeCs1WithAmount,
+  NOTE_PURPOSE_WALLET
 } from './lnurlcash'
 import type {Bearer} from './storage'
 
@@ -53,7 +54,7 @@ const MINT_PUBKEY = '02' + 'cd'.repeat(32)
 const jsonResponse = (body: unknown) =>
   Promise.resolve({json: async () => body} as unknown as Response)
 
-// a minimal LUD-25 Part 2 mint fake, mirroring addressRecovery.test.ts's own
+// a minimal LUD-25 mint fake, mirroring addressRecovery.test.ts's own
 // fakeMint: `liveIndices`' pubkeys are live outstanding notes, `spentIndex`
 // (if given) is already spent, every other index was never minted - enough
 // to exercise recovery/spent/gap-limit handling without pulling in
@@ -65,7 +66,14 @@ const fakeMint = (
 ) => {
   const branch = cashSecrets.cashAddressBranch(SERVER)!
   const cp1At = (i: number) =>
-    encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, i))
+    encodeCp1(
+      deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        NOTE_PURPOSE_WALLET,
+        i
+      )
+    )
   const liveCp1 = new Set(liveIndices.map(cp1At))
   const spentCp1 = spentIndex === null ? null : cp1At(spentIndex)
   return (input: string | URL) => {
@@ -113,7 +121,12 @@ describe('scanMintForNotes', () => {
     // recovers to the same index's derived pubkey
     const branch = cashSecrets.cashAddressBranch(SERVER)!
     const expectedPk = bytesToHex(
-      deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, 0)
+      deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        NOTE_PURPOSE_WALLET,
+        0
+      )
     )
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
@@ -205,11 +218,17 @@ describe('scanMintForNotes', () => {
     expect(result.error).toBeTruthy()
   })
 
-  it('reports progress before every probe', async () => {
+  it('reports progress before every probe, across both the wallet and change scans', async () => {
     vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
     const seen: number[] = []
     await recovery.scanMintForNotes(`mint@${SERVER}`, index => seen.push(index))
-    expect(seen.length).toBe(gapLimit.gapLimit())
+    // scanMintForNotes now walks NOTE_PURPOSE_WALLET then NOTE_PURPOSE_CHANGE
+    // (25.md's Seed & derivation: two independent counters on the same
+    // branch), each its own full gap-limited pass since nothing is
+    // outstanding on either
+    expect(seen.length).toBe(2 * gapLimit.gapLimit())
     expect(seen[0]).toBe(0)
+    // the second pass (change) restarts its own progress count at 0 too
+    expect(seen[gapLimit.gapLimit()]).toBe(0)
   })
 })

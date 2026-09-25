@@ -27,5 +27,6 @@ export {
   configureSecretProvider,
   type SecretProvider,
   configurePubkeySecretProvider,
+  configureChangePubkeySecretProvider,
   type PubkeySecretProvider
 } from './secrets'

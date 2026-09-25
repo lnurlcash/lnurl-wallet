@@ -61,7 +61,7 @@ OP_EQUAL` leaf, whose 64-hex short forms are the preimage as `k1` and `h`
   run of unknowns (it's a bounded window, not an open-ended search).
   `lnurl-wallet`'s own `addressRecovery.ts`/`recovery.ts` now pass this on
   every scan.
-- Add `resolveScanStartIndex` to `addresses.ts`: the LUD-25 Part 2 rule for
+- Add `resolveScanStartIndex` to `addresses.ts`: the LUD-25 rule for
   combining a caller's own already-confirmed scan floor with a
   SERVICE-advertised `text/xpub` index hint, factored out of
   `lnurl-wallet`'s own `addressRecovery.ts` after a real bug there let the
@@ -72,12 +72,12 @@ OP_EQUAL` leaf, whose 64-hex short forms are the preimage as `k1` and `h`
   itself. See the function's own doc comment.
 - Publish the protocol library maintained and exercised by `lnurl-wallet`
   directly from the wallet repository.
-- Include LN address registration and recovery scanning, Part 2 public-key
+- Include LN address registration and recovery scanning, key-path
   notes, configurable transports, offline note verification, fee handling,
   and bound mint receipts.
 - Add `branchDerivation.ts`: the LUD-25 `m/139'`-rooted domain-branch walk
   (`deriveDomainBranchNode`, `CASH_ROOT_PURPOSE`, `lud05PathSuffix`),
-  exported so another LUD-25 Part 2 implementation can reproduce a wallet's
+  exported so another LUD-25 implementation can reproduce a wallet's
   watch-only branch for a given seed and domain byte-for-byte rather than
   reverse-engineering it - see `branchDerivation.test.ts`'s vector, pinning
   the literal `25.md` "Seed & derivation" path (`m/139'/d1/d2/d3/d4`, no
