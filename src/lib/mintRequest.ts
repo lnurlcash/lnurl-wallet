@@ -40,7 +40,7 @@ export type PayRequestInfo = {
   // accepts the matching `h` field and may offer an authenticated receipt;
   // it never substitutes for commentAllowed above.
   mintToHash?: boolean
-  // LUD-25 Part 2 (optional): parsed from metadata (see
+  // LUD-25 (optional): parsed from metadata (see
   // internalTransfer.ts's parseInternalTransferHint) - present when this
   // payee registered a cx1 branch (Seed & derivation) that SERVICE will
   // credit directly, letting a payer already holding a note at the same

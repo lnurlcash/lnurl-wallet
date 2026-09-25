@@ -89,8 +89,8 @@ describe("VERBS['note.split']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: CS1,
-            sig2: CS1
+            c: CS1,
+            c2: CS1
           })
         } as Response
       }
@@ -166,14 +166,15 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     addon: {id: 'musig2', name: 'MuSig2 Playground'}
   })
 
-  // 25.md's own published "Test vector 1" - pk_0's x-only form, and the
-  // same underlying key encoded two self-contained ways (a cp1 note
-  // address directly, and index 0 of its own branch's cx1 export) - see
-  // src/lib/specVectors.test.ts for the byte-exact cross-check these are
-  // drawn from.
+  // 25.md's own published "Test vector 1", purpose 0 (wallet) - pk_0's
+  // x-only form, and the same underlying key encoded two self-contained
+  // ways (a cp1 note address directly, and purpose-0 index 0 of its own
+  // branch's cx1 export, which is what note.resolveAddressPubkey derives a
+  // cx1 into - see src/lib/specVectors.test.ts for the byte-exact
+  // cross-check these are drawn from).
   const PK0_XONLY =
-    'aad3a0e36c083eb0d2d92ec0860977dc46d10c952f31830e6443b1faa1997634'
-  const CP1 = 'cp14tf6pcmvpqltp5ke9mqgvzthm3rdzry49uccxrnygwcl4gvewc6qh2fkky'
+    '690ac33892c64aa53874b0066ab1332f0ef45cb7c0e017eae0828916f52aa99f'
+  const CP1 = 'cp1dy9vxwyjce922wr5kqrx4vfn9u80gh9hcrsp06hqs2y3daf24x0sxpcl6z'
   const CX1 =
     'cx1k7pa9ycdcpf6ju0sryz5efp70jw72rs8d80gwtw3mh096zl5e8g6hywvzxh28902dd3zj2npgl63aaq4p6l2qnn52ymmdpceugu0jpqes280t'
 
@@ -208,7 +209,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("resolves a username against the picked note's own mint, via its published LUD-25 text/xpub hint - always at index 0, not the hint's own next-payable index", async () => {
+  it("resolves a username against the picked note's own mint, via its published LUD-25 text/cpub hint - always at index 0, not the hint's own next-payable index", async () => {
     const fetchMock = vi.fn(async (input: string | URL) => {
       expect(new URL(input.toString()).toString()).toBe(
         `${BASE}/.well-known/lnurlp/alice`
@@ -221,7 +222,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
           maxSendable: 100000000,
           metadata: JSON.stringify([
             ['text/plain', 'pay alice'],
-            ['text/xpub', `${CX1}:3`]
+            ['text/cpub', `${CX1}:3`]
           ])
         })
       } as Response
@@ -256,7 +257,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
           maxSendable: 100000000,
           metadata: JSON.stringify([
             ['text/plain', 'pay alice'],
-            ['text/xpub', `${CX1}:3`]
+            ['text/cpub', `${CX1}:3`]
           ])
         })
       } as Response
@@ -273,7 +274,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects a Lightning Address whose mint never published a LUD-25 address (no text/xpub)', async () => {
+  it('rejects a Lightning Address whose mint never published a LUD-25 address (no text/cpub)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -294,7 +295,7 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     ).rejects.toThrow(/LUD-25 address/)
   })
 
-  it('rejects a username whose mint never published a LUD-25 address (no text/xpub)', async () => {
+  it('rejects a username whose mint never published a LUD-25 address (no text/cpub)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -408,7 +409,7 @@ describe("VERBS['note.lockToPubkey']", () => {
         const params = new URL(input.toString()).searchParams
         seen.push(params)
         return {
-          json: async () => ({status: 'OK', sig: certify(TARGET_HEX, AMOUNT)})
+          json: async () => ({status: 'OK', c: certify(TARGET_HEX, AMOUNT)})
         } as Response
       })
     )
@@ -467,7 +468,7 @@ describe("VERBS['note.lockToPubkey']", () => {
         return {
           json: async () => ({
             status: 'OK',
-            sig: encodeCs1WithAmount(
+            c: encodeCs1WithAmount(
               AMOUNT,
               new Uint8Array([...sig.subarray(1), sig[0]!])
             )

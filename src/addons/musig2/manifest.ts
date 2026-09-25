@@ -751,7 +751,7 @@ const musigBuilderUi: UiNode[] = [
       {
         type: 'Text',
         value:
-          'Or add someone else by their Lightning Address (preferred), a cp1/cx1 address, or a username - resolves their pubkey via a LUD-25 Part 2 registered branch, no copying 66 hex characters back and forth. A bare username has no mint of its own, so pick one of your own notes first to name one (a full Lightning Address or a cp1/cx1 address ignores it, both are already self-contained):'
+          'Or add someone else by their Lightning Address (preferred), a cp1/cx1 address, or a username - resolves their pubkey via a LUD-25 registered branch, no copying 66 hex characters back and forth. A bare username has no mint of its own, so pick one of your own notes first to name one (a full Lightning Address or a cp1/cx1 address ignores it, both are already self-contained):'
       },
       {
         type: 'NotePicker',

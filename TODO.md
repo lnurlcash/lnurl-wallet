@@ -1,0 +1,2 @@
+- [ ] explorer addon, query mint trees and visualize (maybe offer a mint endpoint to tecontructs the sigchain)
+- [ ] script types in wallet, generic script is there, but detect script like hashlocks, timelock, htlcs, etc and handle them differenty on the wallet, also each one should have its own icon

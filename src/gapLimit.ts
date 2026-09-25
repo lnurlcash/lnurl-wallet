@@ -4,7 +4,7 @@ import {createSignal} from 'solid-js'
 // SERVICE after some gap limit of consecutive unknown indices, the same
 // convention HD wallets already use for address recovery" - shared by
 // recovery.ts (legacy hash-based mint rescan) and addressRecovery.ts
-// (LUD-25 Part 2 registered-address scan), so a holder picks one number
+// (LUD-25 registered-address scan), so a holder picks one number
 // that applies to both. A module-level signal, same reasoning as
 // autoLock.ts/currency.ts: plain utility code (recovery.ts,
 // addressRecovery.ts), not just Settings.tsx, needs to read it.

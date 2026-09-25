@@ -358,7 +358,7 @@ export const planBet = (
 // cw1/cs1/cx1/ck1 family (variable-length parts use that same file's cw1
 // convention: u16 length prefix, then the bytes) - but deliberately kept
 // addon-local, not added to that shared file: cp1/ck1/cw1/cs1/cx1 are
-// all genuine LUD-25 Part 2 wire types any Part-2-aware peer needs to
+// all genuine LUD-25 wire types any LUD-25 peer needs to
 // speak, while a DLC oracle's announcement shape is this addon's own
 // application-layer construct, not a spec-level primitive - bundling it
 // into the published @lnurlcash/kit package would leak betlocker-specific
@@ -688,7 +688,7 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
     // optional - see BetReceipt.signature's own doc comment for why a
     // receipt with no offline-verification sig is still a perfectly valid
     // receipt, not a malformed one
-    const signature = url.searchParams.get('sig')
+    const signature = url.searchParams.get('c')
     const dlcRaw = url.searchParams.get('dlc')
     if (!amountRaw || !dlcRaw) return null
     const amountMsat = Number(amountRaw)
@@ -701,7 +701,7 @@ export const parseBetReceipt = (value: unknown): BetReceipt | null => {
     const outcomes = normalizedOutcomes(dlc.outcomes)
     if (outcomes.length < MIN_OUTCOMES) return null
     url.searchParams.delete('amount')
-    url.searchParams.delete('sig')
+    url.searchParams.delete('c')
     url.searchParams.delete('dlc')
     return {
       urlTemplate: url.toString(),

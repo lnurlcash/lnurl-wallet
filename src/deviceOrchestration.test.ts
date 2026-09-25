@@ -845,7 +845,7 @@ describe('deviceMint', () => {
     expect(result.deviceHash).toBe(staged.h)
     expect(result.callback).toBe('')
     expect(result.url).not.toContain('k1=')
-    expect(result.url).toContain(`sig=${signature}`)
+    expect(result.url).toContain(`c=${signature}`)
     expect(await client.exportSecret(staged.deviceId)).toHaveLength(64)
   })
 

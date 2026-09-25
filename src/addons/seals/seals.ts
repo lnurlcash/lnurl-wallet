@@ -422,7 +422,7 @@ export const encodeSealConsignment = (
     try {
       const url = new URL(urlTemplate)
       url.searchParams.delete('k1')
-      url.searchParams.delete('sig')
+      url.searchParams.delete('c')
       urlTemplate = url.toString()
     } catch {
       // not a URL at all - pass it through untouched rather than fail the

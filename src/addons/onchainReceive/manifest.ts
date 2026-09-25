@@ -74,7 +74,7 @@ const onchainReceiveManifest: AddonManifest = {
   icon: 'link',
   experimental: true,
   description:
-    'Derives the same LUD-25 Part 2 note keypair (cp1) this wallet already uses for a SERVICE/index, wrapped in the standard BIP341/BIP86 Taproot key-path tweak so it is ALSO a real mainnet bc1p... onchain address - the exact same underlying note, receivable either way.',
+    'Derives the same LUD-25 key-path note keypair (cp1) this wallet already uses for a SERVICE/index, wrapped in the standard BIP341/BIP86 Taproot key-path tweak so it is ALSO a real mainnet bc1p... onchain address - the exact same underlying note, receivable either way.',
   permissions: [],
   nav: {position: 'right', icon: 'link', label: 'Onchain'},
   state: {

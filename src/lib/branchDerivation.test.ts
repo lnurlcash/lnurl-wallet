@@ -11,7 +11,8 @@ import {
 import {
   deriveNotePubkey,
   deriveNoteSecretKey,
-  encodeCp1
+  encodeCp1,
+  NOTE_PURPOSE_WALLET
 } from './recoverableNotes'
 
 describe('deriveDomainBranchNode', () => {
@@ -55,7 +56,7 @@ describe('deriveDomainBranchNode', () => {
 // ("https://mint.lnurlcash.com" rather than the bare host) - two deviations
 // that happened to cancel out for that one test. This vector intentionally
 // does NOT reproduce it; it pins the literal spec text instead.
-describe('LUD-25 Part 2 branch derivation - literal spec-path vector', () => {
+describe('LUD-25 branch derivation - literal spec-path vector', () => {
   const MNEMONIC =
     'dragon spell warfare girl patrol false erase surprise satisfy lucky curious ill'
   const MINT_DOMAIN = 'mint.lnurlcash.com'
@@ -121,13 +122,14 @@ describe('LUD-25 Part 2 branch derivation - literal spec-path vector', () => {
     const notePubkey0 = deriveNotePubkey(
       branch.publicKey!.slice(1),
       branch.chainCode!,
+      NOTE_PURPOSE_WALLET,
       0
     )
     expect(bytesToHex(notePubkey0)).toBe(
-      '6fb7c0137fc17fccb337947b361580b7686219f2eeab9d47ed52a49191d5136c'
+      'be5f31ff0b2bc0329961bcb08722b3033ab77a8bb35c776236a15d35afd911ab'
     )
     expect(encodeCp1(notePubkey0)).toBe(
-      'cp1d7muqymlc9luevehj3anv9vqka5xyx0ja64e63ld22jfryw4zdkqqnr3tq'
+      'cp1he0nrlct90qr9xtphjcgwg4nqvatw75tkdw8wc3k59wntt7ezx4ssr0vem'
     )
   })
 
@@ -138,14 +140,20 @@ describe('LUD-25 Part 2 branch derivation - literal spec-path vector', () => {
     const noteSecretKey0 = deriveNoteSecretKey(
       branch.privateKey!,
       branch.chainCode!,
+      NOTE_PURPOSE_WALLET,
       0
     )
     expect(bytesToHex(noteSecretKey0)).toBe(
-      'cc344cc254e7669037cb1c2311ba5c57be92ffbcd0ebeb4b575da709babfda64'
+      '96dd2859f09d747bc0913083056d371509bd5e03dcfe472fdf8cc17f7c3c9798'
     )
     expect(bytesToHex(schnorr.getPublicKey(noteSecretKey0))).toBe(
       bytesToHex(
-        deriveNotePubkey(branch.publicKey!.slice(1), branch.chainCode!, 0)
+        deriveNotePubkey(
+          branch.publicKey!.slice(1),
+          branch.chainCode!,
+          NOTE_PURPOSE_WALLET,
+          0
+        )
       )
     )
   })

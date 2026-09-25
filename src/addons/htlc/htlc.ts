@@ -26,7 +26,7 @@
 //      note.resolveAddressPubkey verb, same as betlocker's counterparty
 //      flow - NOT optional here, unlike betlocker's race-to-claim default,
 //      since a bare hashlock-only leaf with no key would be a public
-//      bearer secret the instant it's shared, same as a plain Part-1
+//      bearer secret the instant it's shared, same as a plain bearer
 //      preimage note - the whole point of pairing it with CHECKSIG is
 //      restricting redemption to one named party who ALSO needs the
 //      secret). htlcReceiptUrl then builds the shareable link - hash and
@@ -327,7 +327,7 @@ export const parseHtlcReceipt = (value: unknown): HtlcReceipt | null => {
     }
     if (!isU32(refundLocktime)) return null
     url.searchParams.delete('amount')
-    url.searchParams.delete('sig')
+    url.searchParams.delete('c')
     url.searchParams.delete('hash')
     url.searchParams.delete('claim')
     url.searchParams.delete('refundPubkey')

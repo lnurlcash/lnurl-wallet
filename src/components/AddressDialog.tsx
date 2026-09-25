@@ -31,7 +31,7 @@ export type AddressDialogProps = {
   onClose: () => void
 }
 
-// LUD-25 Part 2's cx1 registration (see 25.md's Seed & derivation) AND
+// LUD-25's cx1 registration (see 25.md's Seed & derivation) AND
 // managing an already-claimed one - npub, unclaiming - scoped to one mint
 // at a time and opened from that mint's own "@" button on the Mint page.
 // Address IDENTITY only: checking for new notes, and the auto-check

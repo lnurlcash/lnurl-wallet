@@ -17,7 +17,7 @@ export const configureNetworkGuard = (guard: NetworkGuard): void => {
 // Defaults to fetch with redirects exposed to this module; a host configures
 // this once at startup. A custom transport is trusted to do the same rather
 // than following a redirect before its destination has passed the URL policy.
-// `method` defaults to GET at every call site except the LUD-25 Part 2 username
+// `method` defaults to GET at every call site except the LUD-25 username
 // registration endpoints (addresses.ts), the one place in this kit that isn't
 // a plain k1-bearing GET callback (see 25.md's Seed & derivation).
 export type Transport = (

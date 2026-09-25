@@ -1,4 +1,4 @@
-// LUD-25 Part 2: cx1 registration & the recovery scan that goes with it.
+// LUD-25: cx1 registration & the recovery scan that goes with it.
 // Registration is a one-time online action (see registerUsername);
 // everything a registered address later receives arrives with zero
 // wallet involvement at payment time (the SERVICE auto-derives and mints
@@ -23,6 +23,14 @@ import {
 import {fetchNoteInfoByPubkey, type HashWithdrawRequestInfo} from './request'
 import {deriveNotePubkey, encodeCp1, type Cx1} from './recoverableNotes'
 import {signAddressProof, type AddressProofAction} from './signature'
+
+// 25.md's Seed & derivation: which of a branch's three independent
+// counters a scan walks - purpose 0 (wallet-initiated notes) or purpose 1
+// (a split's change), both scanned by recovery.ts, or purpose 2 (whatever
+// landed on a registered Lightning Address, see addressRecovery.ts). Each
+// purpose has its own counter, so a caller scans them one at a time rather
+// than expecting one call to cover more than one.
+export type ScanPurpose = 0 | 1 | 2
 
 // the bare, lowercase hostname a SERVICE checks a proof's `domain` against
 // (lnurl-mint's router.py resolves this from its own configured base_url/
@@ -137,8 +145,8 @@ export type AddressScanOptions = {
   // forces the forward walk to keep going through indices <= this one even
   // after gapLimit consecutive unknowns would otherwise have stopped it -
   // the normal gapLimit-based stop applies again as soon as index passes
-  // it. For a SERVICE-advertised next-index hint (25.md Part 2's
-  // text/xpub, see resolveScanStartIndex's own doc comment on why the hint
+  // it. For a SERVICE-advertised next-index hint (25.md's
+  // text/cpub, see resolveScanStartIndex's own doc comment on why the hint
   // alone is never trustworthy as a *floor*), this is the complementary
   // guarantee at the other end: a caller doing a full, from-scratch walk
   // wants to know it reached at least as far as SERVICE says it has handed
@@ -173,17 +181,18 @@ const DEFAULT_RATE_LIMIT_BACKOFF_MS = 2000
 const isRateLimited = (err: unknown): boolean =>
   err instanceof ServiceError && /rate.?limit/i.test(err.reason)
 
-// re-derives pk_0, pk_1, ... off a registered branch (cx1's own payload -
-// see cashSecrets.ts's cashAddressBranch for where WALLET gets this) and
-// checks each via an informational GET (fetchNoteInfoByPubkey) - never a
-// ck1 secret, so a scan alone can never itself let anyone else redeem what
-// it finds. `withdrawUrl` is the mint's own informational withdraw
+// re-derives pk_0, pk_1, ... on the given `purpose` off a branch (cx1's own
+// payload - see cashSecrets.ts's cashAddressBranch for where WALLET gets
+// this) and checks each via an informational GET (fetchNoteInfoByPubkey) -
+// never a ck1 secret, so a scan alone can never itself let anyone else
+// redeem what it finds. `withdrawUrl` is the mint's own informational withdraw
 // endpoint (the same one an existing note's own url already points a
 // browser at for this mint - see urls.ts/mintAddressUrl for how a caller
 // resolves one for a given trusted mint).
 export const scanForAddressNotes = async (
   withdrawUrl: string,
   branch: Cx1,
+  purpose: ScanPurpose,
   opts: AddressScanOptions = {}
 ): Promise<AddressScanResult[]> => {
   const gapLimit = opts.gapLimit ?? DEFAULT_GAP_LIMIT
@@ -203,6 +212,7 @@ export const scanForAddressNotes = async (
       const pubkey = deriveNotePubkey(
         branch.pubkeyXOnly,
         branch.chainCode,
+        purpose,
         index
       )
       const cp1 = encodeCp1(pubkey)
@@ -255,8 +265,8 @@ export const scanForAddressNotes = async (
   return found
 }
 
-// LUD-25 Part 2's own resume-floor rule for combining a caller's own
-// already-confirmed floor with a SERVICE-advertised `text/xpub` index hint
+// LUD-25's own resume-floor rule for combining a caller's own
+// already-confirmed floor with a SERVICE-advertised `text/cpub` index hint
 // (25.md's Internal mint transfers metadata - see internalTransfer.ts's
 // parseInternalTransferHint for the identical wire format). The hint names
 // the next index SERVICE will hand out - it advances the moment SERVICE

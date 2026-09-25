@@ -1,4 +1,4 @@
-// LUD-25 Part 2 domain-branch derivation - the BIP32 hop from a wallet's own
+// LUD-25 domain-branch derivation - the BIP32 hop from a wallet's own
 // m/139' LUD-25 root down to the per-SERVICE branch a domain's cx1/cp1/ck1
 // values are derived under. "seed phrase -> m/139' root" is deliberately NOT
 // here (see this package's README: nothing seed/mnemonic-specific lives in
@@ -17,7 +17,7 @@
 //
 //   deriveDomainBranchNode(cashRoot, domain) -> m/139'/d1/d2/d3/d4
 //
-// (25.md's own Part 1 - plain bearer notes - defines no derivation at all;
+// (25.md defines no derivation for plain bearer notes;
 // a WALLET is free to generate that secret however it likes. lnurl-wallet
 // does so with plain randomness, not a seed-derived branch, so there is no
 // second scheme competing for this same path.)

@@ -12,7 +12,8 @@ import {
   noteSignature,
   recoverNoteOwnershipPubkey,
   withNewK1,
-  encodeCs1WithAmount
+  encodeCs1WithAmount,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS
 } from './lnurlcash'
 
 const store = new Map<string, string>()
@@ -62,7 +63,14 @@ const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
   const branch = cashSecrets.cashAddressBranch(HOST)!
   const liveCp1 = new Set(
     liveIndices.map(i =>
-      encodeCp1(deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, i))
+      encodeCp1(
+        deriveNotePubkey(
+          branch.pubkeyXOnly,
+          branch.chainCode,
+          NOTE_PURPOSE_LIGHTNING_ADDRESS,
+          i
+        )
+      )
     )
   )
   return (input: string | URL) => {
@@ -73,7 +81,7 @@ const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
         callback: `${SERVER}/p/cb?username=${USERNAME}`,
         minSendable: 1000,
         maxSendable: 100_000_000,
-        metadata: xpubHint ? JSON.stringify([['text/xpub', xpubHint]]) : '[]',
+        metadata: xpubHint ? JSON.stringify([['text/cpub', xpubHint]]) : '[]',
         withdrawLink: `${SERVER}/w`
       })
     }
@@ -86,7 +94,7 @@ const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
           mintPubkey: MINT_PUBKEY,
           minWithdrawable: 21000,
           maxWithdrawable: 21000,
-          ...(sig ? {sig} : {})
+          ...(sig ? {c: sig} : {})
         })
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
@@ -107,7 +115,12 @@ describe('scanRegisteredAddress', () => {
     // recovers to the same index's derived pubkey
     const branch = cashSecrets.cashAddressBranch(HOST)!
     const expectedPk = bytesToHex(
-      deriveNotePubkey(branch.pubkeyXOnly, branch.chainCode, 0)
+      deriveNotePubkey(
+        branch.pubkeyXOnly,
+        branch.chainCode,
+        NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        0
+      )
     )
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
@@ -152,7 +165,7 @@ describe('scanRegisteredAddress', () => {
     // its old ck1 (Q || sig over sha256("LNURLcash")): a rescan re-derives
     // today's ck1 for the same Q, which must not be recovered a second time
     vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
-    const secretKey = cashSecrets.cashAddressSecretAtIndex(HOST, 0)!
+    const secretKey = cashSecrets.addressSecretAtIndex(HOST, 0)!
     const oldCk1 = encodeCk1(
       schnorr.getPublicKey(secretKey),
       schnorr.sign(
@@ -251,7 +264,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(100)
   })
 
-  it("never lets SERVICE's own text/xpub metadata hint skip a fresh device's unscanned floor", async () => {
+  it("never lets SERVICE's own text/cpub metadata hint skip a fresh device's unscanned floor", async () => {
     const branch = cashSecrets.cashAddressBranch(HOST)!
     const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
     vi.stubGlobal(

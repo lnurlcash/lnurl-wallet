@@ -32,7 +32,7 @@ export type SendToPubkeyDialogProps = {
   onClose: () => void
 }
 
-// LUD-25 Part 2's own p1/p2 mechanism (request.ts's outputFieldName/
+// LUD-25's own p1/p2 mechanism (request.ts's outputFieldName/
 // mutationSignature), pointed at a cp1 pasted in by hand instead of one this
 // wallet derived from a registered cx1 branch the way internalTransfer.ts's
 // payInternalTransfer does. Whoever holds the matching private key can prove

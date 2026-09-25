@@ -1,9 +1,9 @@
-// LUD-25 "Part 2: Recoverable signatures" - pure protocol math, no wallet
+// LUD-25 notes - pure protocol math, no wallet
 // dependency (same principle as the rest of src/lib - see its README, and
 // its own deliberately narrow package.json dependency list: this file
 // hand-rolls the couple of BIP341 primitives it needs from @noble/curves
 // alone below, rather than pulling in a full transaction-building library
-// just for those). Covers the three pieces every Part-2-aware peer
+// just for those). Covers the three pieces every LUD-25 peer
 // (wallet or SERVICE) computes the same way regardless of how either side
 // happens to derive its own keys:
 //
@@ -283,13 +283,21 @@ export const isCx1 = (value: string): boolean => decodeCx1(value) !== null
 
 // ---- per-note key tweak ----
 //
-//   t     = tagged_hash("LNURLcash/derive", P || chain_code || ser32(i))
+//   t     = tagged_hash("LNURLcash/derive", P || chain_code || ser32(purpose) || ser32(i))
 //   Q     = lift_x(P) + t·G
 //   pk_i  = x(Q)
 //
 // ser32(i) is a 4-byte BIG-ENDIAN index - lnurl-mint's own derivation.py
 // flags this width choice as "genuinely interoperability-critical" since
-// the spec text doesn't pin it; this must match exactly.
+// the spec text doesn't pin it; this must match exactly. `purpose` (added
+// alongside `i`, same ser32 width) splits a branch into three independent
+// counters, so a WALLET's own indices and a SERVICE's auto-minted ones can
+// never collide by coincidence, and each kind of note restores on its own
+// (25.md's Seed & derivation):
+export const NOTE_PURPOSE_WALLET = 0
+export const NOTE_PURPOSE_CHANGE = 1
+export const NOTE_PURPOSE_LIGHTNING_ADDRESS = 2
+
 const NOTE_DERIVE_TAG = 'LNURLcash/derive'
 
 const ser32BE = (index: number): Uint8Array => {
@@ -311,12 +319,14 @@ const CURVE_ORDER = schnorr.Point.CURVE().n
 const tweakScalar = (
   branchPubkeyXOnly: Uint8Array,
   chainCode: Uint8Array,
+  purpose: number,
   index: number
 ): bigint => {
   const t = schnorr.utils.taggedHash(
     NOTE_DERIVE_TAG,
     branchPubkeyXOnly,
     chainCode,
+    ser32BE(purpose),
     ser32BE(index)
   )
   return bytesToNumberBE(t) % CURVE_ORDER
@@ -328,9 +338,10 @@ const tweakScalar = (
 export const deriveNotePubkey = (
   branchPubkeyXOnly: Uint8Array,
   chainCode: Uint8Array,
+  purpose: number,
   index: number
 ): Uint8Array => {
-  const t = tweakScalar(branchPubkeyXOnly, chainCode, index)
+  const t = tweakScalar(branchPubkeyXOnly, chainCode, purpose, index)
   const branchPoint = schnorr.utils.lift_x(bytesToNumberBE(branchPubkeyXOnly))
   const notePoint = branchPoint.add(schnorr.Point.BASE.multiply(t))
   return schnorr.utils.pointToBytes(notePoint)
@@ -350,10 +361,11 @@ export const deriveNotePubkey = (
 export const deriveNoteSecretKey = (
   branchPrivateKey: Uint8Array,
   chainCode: Uint8Array,
+  purpose: number,
   index: number
 ): Uint8Array => {
   const branchPubkeyXOnly = schnorr.getPublicKey(branchPrivateKey)
-  const t = tweakScalar(branchPubkeyXOnly, chainCode, index)
+  const t = tweakScalar(branchPubkeyXOnly, chainCode, purpose, index)
   const rawScalar = bytesToNumberBE(branchPrivateKey)
   const branchFullPoint = schnorr.Point.BASE.multiply(rawScalar)
   const evenYScalar =
