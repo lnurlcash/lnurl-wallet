@@ -3,7 +3,7 @@ import {test, expect} from '@playwright/test'
 import {setUpWallet, enableAddon} from './helpers'
 
 // the exact payRequest a holder reported earlier: two duplicate text/plain
-// metadata entries, this wallet's own text/xpub (LUD-25 internal transfer)
+// metadata entries, this wallet's own text/cpub (LUD-25 internal transfer)
 // extension, and NIP-57 zap fields - the response formatLnurlResponse /
 // metadataEntries (src/addons/lnurlTools/manifest.ts) need to handle
 const PAY_REQUEST_BODY = {
@@ -12,7 +12,7 @@ const PAY_REQUEST_BODY = {
   minSendable: 14000,
   maxSendable: 200000000,
   metadata:
-    '[["text/plain", "Mint an lnurlcash bearer note on mint.lnurlcash.com"], ["text/identifier", "dni2@mint.lnurlcash.com"], ["text/xpub", "cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6"], ["text/plain", "Mint fees: 3000,2000"]]',
+    '[["text/plain", "Mint an lnurlcash bearer note on mint.lnurlcash.com"], ["text/identifier", "dni2@mint.lnurlcash.com"], ["text/cpub", "cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6"], ["text/plain", "Mint fees: 3000,2000"]]',
   withdrawLink: 'https://mint.lnurlcash.com/w',
   commentAllowed: 64,
   allowsNostr: true,
@@ -53,13 +53,13 @@ test.describe('LNURL Tools addon', () => {
 
     await expect(page.getByText('Nostr zaps (NIP-57): allowed')).toBeVisible()
 
-    // duplicate text/plain entries disambiguated, LUD-25 xpub entry
+    // duplicate text/plain entries disambiguated, LUD-25 cpub entry
     // labelled, in source order, as a real <ol>
     const items = page.locator('.addon-list-block li')
     await expect(items).toHaveCount(4)
     await expect(items.nth(0)).toContainText('Description 1:')
     await expect(items.nth(1)).toContainText('Identifier:')
-    await expect(items.nth(2)).toContainText('Internal transfer xpub (LUD-25):')
+    await expect(items.nth(2)).toContainText('Internal transfer cpub (LUD-25):')
     await expect(items.nth(3)).toContainText('Description 2:')
 
     // JsonDisplay's syntax-coloured raw dump
