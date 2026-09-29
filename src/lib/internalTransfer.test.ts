@@ -15,7 +15,7 @@ import {
   type Cx1
 } from './recoverableNotes'
 import {AmbiguousMutationError} from './errors'
-import {configurePubkeySecretProvider} from './secrets'
+import {configureChangePubkeySecretProvider} from './secrets'
 import {signNoteOwnership} from './signature'
 
 const SIG = encodeCs1WithAmount(1000, new Uint8Array(65).fill(0xaa))
@@ -161,7 +161,7 @@ describe('payInternalTransfer', () => {
         .signature
     )
     const seenDomains: string[] = []
-    configurePubkeySecretProvider(domain => {
+    configureChangePubkeySecretProvider(domain => {
       seenDomains.push(domain)
       return null // falls back to the legacy provider - only the domain matters here
     })
@@ -180,7 +180,7 @@ describe('payInternalTransfer', () => {
       )
       expect(seenDomains).toEqual(['mint.example.com:8443'])
     } finally {
-      configurePubkeySecretProvider(() => null)
+      configureChangePubkeySecretProvider(() => null)
     }
   })
 

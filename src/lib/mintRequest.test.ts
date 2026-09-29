@@ -45,7 +45,7 @@ const signAsMintForId = (
 }
 
 describe('fetchPayRequest - LUD-25 internal transfer hint', () => {
-  it('wires a text/xpub metadata entry through to internalTransfer', async () => {
+  it('wires a text/cpub metadata entry through to internalTransfer', async () => {
     const cx1 = encodeCx1(
       schnorr.getPublicKey(schnorr.utils.randomSecretKey()),
       hexToBytes('ab'.repeat(32))
@@ -62,7 +62,7 @@ describe('fetchPayRequest - LUD-25 internal transfer hint', () => {
               maxSendable: 1_000_000,
               metadata: JSON.stringify([
                 ['text/plain', 'alice@mint.example.com'],
-                ['text/xpub', `${cx1}:3`]
+                ['text/cpub', `${cx1}:3`]
               ])
             })
           }) as Response
@@ -73,7 +73,7 @@ describe('fetchPayRequest - LUD-25 internal transfer hint', () => {
     expect(info.internalTransfer?.cx1).toBeDefined()
   })
 
-  it('leaves internalTransfer undefined without a text/xpub entry', async () => {
+  it('leaves internalTransfer undefined without a text/cpub entry', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(
