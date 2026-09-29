@@ -37,7 +37,7 @@
     "@playwright/test": "^1.63.0",
     "@types/qrcode": "^1.5.6",
     "prettier": "^3.9.8",
-    "sass": "^1.104.1",
+    "sass": "^1.105.0",
     "solid-icons": "^1.2.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
