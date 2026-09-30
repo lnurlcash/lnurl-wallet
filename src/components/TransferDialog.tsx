@@ -26,6 +26,7 @@ import {
   describeMintFee,
   probeBurnedNote,
   sameInvoice,
+  requestInvoice,
   requestMintInvoice,
   requireMintComment,
   PendingNoteError,
@@ -68,7 +69,14 @@ const TRANSFER_POLL_SECONDS = 5
 // its invoice settles - via the destination's own LUD-21 verify if it has
 // one, same as Mint.tsx's own payment flow, since we're in exactly the
 // position that convenience is meant for (the legitimate payer checking on
-// its own payment, not a third party snooping the verify endpoint)
+// its own payment, not a third party snooping the verify endpoint).
+//
+// A destination that is someone's registered Lightning Address (its
+// payRequest advertises a LUD-25 `text/cpub`) is a payment rather than a
+// move: that address's mint always auto-mints onto the owner's own branch
+// and ignores any comment, so the invoice is requested without one and
+// there is no destination note for this wallet to claim - the transfer is
+// done once the payment is confirmed.
 const TransferDialog: Component<TransferDialogProps> = props => {
   const {addBearer, updateBearer, logActivity} = useWallet()
   const {client: deviceClient} = useDevice()
@@ -101,6 +109,10 @@ const TransferDialog: Component<TransferDialogProps> = props => {
   }
 
   const sourceK1 = () => requireNoteK1(props.sourceBearer.url)
+
+  const payingAddress = createMemo(
+    () => payRequest()?.internalTransfer !== undefined
+  )
 
   const lookup = async () => {
     const url = resolveMintInput(mintInput())
@@ -201,15 +213,23 @@ const TransferDialog: Component<TransferDialogProps> = props => {
     if (!info?.withdrawLink) return
     setBusy(true)
     try {
-      // Refuse before requesting the destination invoice or spending the
-      // source note unless the output can be bound to our own secret.
-      requireMintComment(info)
-      const {result, secret} = await requestMintInvoice(
-        info.callback,
-        props.sourceBearer.amount,
-        serverOf(info.withdrawLink || info.callback)
-      )
-      setMintSecret(secret)
+      let result
+      if (payingAddress()) {
+        // the owner's mint derives the output from their advertised cpub -
+        // a comment is at most optional there and never names the output
+        result = await requestInvoice(info.callback, props.sourceBearer.amount)
+      } else {
+        // Refuse before requesting the destination invoice or spending the
+        // source note unless the output can be bound to our own secret.
+        requireMintComment(info)
+        const minted = await requestMintInvoice(
+          info.callback,
+          props.sourceBearer.amount,
+          serverOf(info.withdrawLink || info.callback)
+        )
+        setMintSecret(minted.secret)
+        result = minted.result
+      }
       if (props.sourceBearer.deviceId) {
         await deviceMeltRequest(
           requireDeviceClient(deviceClient()),
@@ -223,6 +243,13 @@ const TransferDialog: Component<TransferDialogProps> = props => {
       await updateBearer(props.sourceBearer.id, {spent: true})
       setInvoice(result.pr)
       if (result.verify) setVerifyUrl(result.verify)
+      // neither a verify endpoint nor a rotate probe (see checkTransfer)
+      // can confirm a device-backed payment - the accepted melt is all
+      // there is to go on
+      if (payingAddress() && !result.verify && props.sourceBearer.deviceId) {
+        await finishAddressPayment()
+        return
+      }
       notify(
         'Melting the note to fund the transfer - confirming...',
         NotifyKind.LOADING
@@ -428,6 +455,28 @@ const TransferDialog: Component<TransferDialogProps> = props => {
     }
   }
 
+  // a payment to a Lightning Address has nothing to claim: once it's
+  // confirmed (destination settled, or the source note burned) it's done
+  const finishAddressPayment = async () => {
+    setClaimed(true)
+    stopPolling()
+    if (props.sourceBearer.deviceId) {
+      await markDeviceNoteSpent(deviceClient(), props.sourceBearer.deviceId)
+    }
+    const address = mintInput().trim()
+    logActivity(
+      'transfer',
+      `Sent ${msatToSats(props.sourceBearer.amount)} sats from ${serverOf(props.sourceBearer.url)} to ${address}.`,
+      props.sourceBearer.label
+    )
+    notify(
+      `Sent ${msatToSats(props.sourceBearer.amount)} sats to ${address}.`,
+      NotifyKind.SUCCESS
+    )
+    navigate('/wallet')
+    props.onClose()
+  }
+
   // once claimed, or once there's neither a destination verify endpoint to
   // poll NOR an unconfirmed source left to rotate-probe, a tick of
   // checkTransfer has nothing left it can do - the destination side is
@@ -472,6 +521,10 @@ const TransferDialog: Component<TransferDialogProps> = props => {
                 "The destination mint's verify response is for a different invoice than requested - this transfer's state is uncertain; check both notes before retrying.",
                 NotifyKind.ERROR
               )
+              return
+            }
+            if (result.settled && payingAddress()) {
+              await finishAddressPayment()
               return
             }
             if (result.settled) {
@@ -548,6 +601,8 @@ const TransferDialog: Component<TransferDialogProps> = props => {
             )
           } else if (!(err instanceof PendingNoteError)) {
             setSourceConfirmed(true)
+            // the source burning is the melt having paid the invoice
+            if (payingAddress()) await finishAddressPayment()
           }
         }
       }
@@ -583,10 +638,11 @@ const TransferDialog: Component<TransferDialogProps> = props => {
       <>
         <h4>
           Transfer {msatToSats(props.sourceBearer.amount)} sats
-          <FiatValue msat={props.sourceBearer.amount} /> to another mint
+          <FiatValue msat={props.sourceBearer.amount} />{' '}
+          {payingAddress() ? 'to a Lightning Address' : 'to another mint'}
         </h4>
         <Show when={!invoice()}>
-          <label>Destination mint (LNURL or Lightning Address)</label>
+          <label>Destination mint or Lightning Address (or LNURL)</label>
           <input
             type="text"
             placeholder="lnurl1... or mint@example.com"
@@ -641,18 +697,30 @@ const TransferDialog: Component<TransferDialogProps> = props => {
                   {fee => (
                     <p class="warning">
                       {serverOf(info().callback)} withholds a fee on minting:{' '}
-                      {describeMintFee(fee())}. The note you end up holding
-                      there will be worth less than the one you're melting.
+                      {describeMintFee(fee())}. The note that ends up there will
+                      be worth less than the one you're melting.
                     </p>
                   )}
                 </Show>
                 <p class="bearer-hint">
-                  Transfer exactly {msatToSats(props.sourceBearer.amount)} sats
-                  to {serverOf(info().callback)}? The source note is melted to
-                  fund it - this can't be undone.
+                  <Show
+                    when={payingAddress()}
+                    fallback={
+                      <>
+                        Transfer exactly {msatToSats(props.sourceBearer.amount)}{' '}
+                        sats to {serverOf(info().callback)}?
+                      </>
+                    }
+                  >
+                    Send exactly {msatToSats(props.sourceBearer.amount)} sats to{' '}
+                    {mintInput().trim()}? It lands as a note owned by that
+                    address, not by this wallet.
+                  </Show>{' '}
+                  The source note is melted to fund it - this can't be undone.
                   <Show when={info().mintFee}>
                     {' '}
-                    You'll end up with ~{msatToSats(expectedNet())} sats there.
+                    {payingAddress() ? "They'll" : "You'll"} end up with ~
+                    {msatToSats(expectedNet())} sats there.
                   </Show>
                 </p>
                 <div class="btns">
