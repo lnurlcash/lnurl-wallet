@@ -1895,7 +1895,9 @@ nav {
 
 // BearerCard's unveil dialog - now sits in its own .qr-toggle-row below
 // the QR rather than here, but keeps this same inline/pointer shape
-.strip-sig-toggle {
+.strip-sig-toggle,
+// the "Plain secret" opt-in on Mint and the wallet's split/combine controls
+.plain-secret-toggle {
   display: flex;
   align-items: center;
   font-size: 0.9em;

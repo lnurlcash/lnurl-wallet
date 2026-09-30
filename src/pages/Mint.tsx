@@ -157,6 +157,9 @@ const Mint: Component = () => {
   const [showMintKeyboard, setShowMintKeyboard] = createSignal(false)
   const [payRequest, setPayRequest] = createSignal<PayRequestInfo | null>(null)
   const [amountSats, setAmountSats] = createSignal('')
+  // mint a plain bearer preimage (64-hex short-form h) instead of a
+  // seed-derived key-path output - see requestMintInvoice's `plain`
+  const [plainSecret, setPlainSecret] = createSignal(false)
   const [invoice, setInvoice] = createSignal<string | null>(null)
   // net note value the holder asked for, and the (possibly grossed-up, see
   // amountBreakdown) gross msat actually invoiced for it - both needed at
@@ -640,7 +643,8 @@ const Mint: Component = () => {
         const minted = await requestMintInvoice(
           info.callback,
           amount.grossMsat,
-          mintServer
+          mintServer,
+          plainSecret()
         )
         result = minted.result
         setMintSecret(minted.secret)
@@ -1870,6 +1874,19 @@ const Mint: Component = () => {
                           </Show>
                         )}
                       </Show>
+                      <label
+                        class="plain-secret-toggle"
+                        title="Mint a plain random bearer secret, sent as its 64-hex short-form hash, instead of a seed-derived key - not recoverable from your seed"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={plainSecret()}
+                          onChange={e =>
+                            setPlainSecret(e.currentTarget.checked)
+                          }
+                        />
+                        &nbsp;Plain secret
+                      </label>
                       <div class="btns">
                         <button
                           disabled={busy() || offlineMode()}

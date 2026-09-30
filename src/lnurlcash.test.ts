@@ -143,4 +143,24 @@ describe('requestMintInvoice (key-path vs bearer dispatch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(comments[0]).toBe(bearerCp1(secret))
   })
+
+  it('plain: skips the key-path attempt and sends a short-form hash', async () => {
+    const comments: string[] = []
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      comments.push(new URL(input.toString()).searchParams.get('comment')!)
+      return {json: async () => ({pr: 'lnbc1testinvoice'})} as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const {result, secret} = await lnurlcash.requestMintInvoice(
+      CALLBACK,
+      1000,
+      'mint.example.com',
+      true
+    )
+    expect(isPreimage(secret)).toBe(true)
+    expect(result.pr).toBe('lnbc1testinvoice')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(comments[0]).toBe(hashK1(secret))
+  })
 })

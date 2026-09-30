@@ -145,6 +145,9 @@ const Wallet: Component = () => {
   const [splitSingleSats, setSplitSingleSats] = createSignal('')
   const [splitSingleTimes, setSplitSingleTimes] = createSignal('1')
   const [splittingSingle, setSplittingSingle] = createSignal(false)
+  // split/combine outputs as plain bearer preimages (64-hex short-form h)
+  // instead of seed-derived key-path notes - see splitNote's MutationOptions
+  const [plainSecret, setPlainSecret] = createSignal(false)
   const [showLabelInput, setShowLabelInput] = createSignal(false)
   const [labelInputValue, setLabelInputValue] = createSignal('')
   // Label/Mark spent/Export/QR live behind this toggle instead of the
@@ -1002,7 +1005,8 @@ const Wallet: Component = () => {
             logActivity,
             deviceClient,
             requireDeviceClient
-          }
+          },
+          {plain: plainSecret()}
         )
       const feeNote =
         totalFeeMsat > 0
@@ -1069,7 +1073,8 @@ const Wallet: Component = () => {
         try {
           const merged = await mergeNotes(
             base.callback,
-            picked.map(b => requireNoteK1(b.url))
+            picked.map(b => requireNoteK1(b.url)),
+            {plain: plainSecret()}
           )
           mergedK1 = merged.k1
           mergedSignature = merged.signature
@@ -1235,7 +1240,8 @@ const Wallet: Component = () => {
           const result = await splitNote(
             base.callback,
             picked.map(b => requireNoteK1(b.url)),
-            msat
+            msat,
+            {plain: plainSecret()}
           )
           partK1 = result.k1
           partSignature = result.signature
@@ -1926,6 +1932,17 @@ const Wallet: Component = () => {
                     </Show>
                     <span class="btn-label">&nbsp;Combine &amp; split</span>
                   </button>
+                  <label
+                    class="plain-secret-toggle"
+                    title="Split/combine into plain random bearer secrets, sent as their 64-hex short-form hash, instead of seed-derived keys - not recoverable from your seed"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={plainSecret()}
+                      onChange={e => setPlainSecret(e.currentTarget.checked)}
+                    />
+                    &nbsp;Plain secret
+                  </label>
                   <button
                     class="icon-btn transfer-btn"
                     disabled={!canTransfer() || offlineMode()}
@@ -2094,6 +2111,17 @@ const Wallet: Component = () => {
                       this mint charges a fee, it's deducted from the change,
                       not the amount split off.
                     </p>
+                    <label
+                      class="plain-secret-toggle"
+                      title="Split/combine into plain random bearer secrets, sent as their 64-hex short-form hash, instead of seed-derived keys - not recoverable from your seed"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={plainSecret()}
+                        onChange={e => setPlainSecret(e.currentTarget.checked)}
+                      />
+                      &nbsp;Plain secret
+                    </label>
                     <div class="btns">
                       <button
                         disabled={splitting() || offlineMode()}
@@ -2192,6 +2220,17 @@ const Wallet: Component = () => {
                         again for the rest.
                       </p>
                     </Show>
+                    <label
+                      class="plain-secret-toggle"
+                      title="Split/combine into plain random bearer secrets, sent as their 64-hex short-form hash, instead of seed-derived keys - not recoverable from your seed"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={plainSecret()}
+                        onChange={e => setPlainSecret(e.currentTarget.checked)}
+                      />
+                      &nbsp;Plain secret
+                    </label>
                     <div class="btns">
                       <button
                         disabled={splittingSingle() || offlineMode()}

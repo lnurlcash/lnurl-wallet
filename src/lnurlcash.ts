@@ -149,11 +149,25 @@ configureChangePubkeySecretProvider(nextChangeSecret)
 // (Mint.tsx, TransferDialog.tsx) already required commentAllowed >= 64
 // (requireMintComment) before reaching this point, and a cp1 value is
 // only 61 characters, so it always fits.
+//
+// `plain` skips the key-path attempt entirely: a random bearer preimage,
+// disclosed as its 64-hex short-form h rather than a cp1.
 export const requestMintInvoice = async (
   callback: string,
   amountMsat: number,
-  domain: string
+  domain: string,
+  plain = false
 ): Promise<{result: InvoiceResult; secret: string}> => {
+  if (plain) {
+    const secret = generateMintSecret(domain)
+    const result = await requestInvoice(
+      callback,
+      amountMsat,
+      hashK1(secret),
+      true
+    )
+    return {result, secret}
+  }
   try {
     const secret = generateMintPubkeySecret(domain)
     const cp1 = cp1FromCk1(secret)

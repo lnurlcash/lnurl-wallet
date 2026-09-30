@@ -10,7 +10,8 @@ import {
   probeBurnedNote,
   NoteSpentError,
   AmbiguousMutationError,
-  serverOf
+  serverOf,
+  type MutationOptions
 } from './lnurlcash'
 import {deviceSplit, deviceSettle} from './deviceOrchestration'
 import {msatToSats, notify, NotifyKind} from './helpers'
@@ -66,7 +67,8 @@ export type SplitContext = {
 export const splitBearerIntoAmounts = async (
   bearer: Bearer,
   targets: SplitTarget[],
-  ctx: SplitContext
+  ctx: SplitContext,
+  options: MutationOptions = {}
 ): Promise<SplitOutcome> => {
   const totalMsat = targets.reduce((sum, t) => sum + t.amountMsat, 0)
   if (totalMsat >= bearer.amount) {
@@ -162,7 +164,12 @@ export const splitBearerIntoAmounts = async (
     let changeSignature: string | undefined
     let splitError: Error | null = null
     try {
-      const result = await splitNote(currentCallback, [currentK1], msat)
+      const result = await splitNote(
+        currentCallback,
+        [currentK1],
+        msat,
+        options
+      )
       partK1 = result.k1
       partSignature = result.signature
       changeK1 = result.change

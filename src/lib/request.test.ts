@@ -688,6 +688,44 @@ describe('rotateNote/splitNote/mergeNotes: pub/sig outputs never silently downgr
     ])
     expect(result.k1).toBe(ck1)
   })
+
+  it('plain: splitNote skips the pubkey provider and sends short-form hashes', async () => {
+    configurePubkeySecretProvider(() => ck1)
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      const short = hashK1('f'.repeat(64))
+      expect(request.searchParams.get('p1')).toBe(short)
+      expect(request.searchParams.get('p2')).toBe(short)
+      return {
+        json: async () => ({status: 'OK', c: CS1, c2: CS1})
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await splitNote(
+      'https://mint.example.com/w/cb',
+      [otherCk1, ck1],
+      1000,
+      {plain: true}
+    )
+    expect(result.k1).toBe('f'.repeat(64))
+    expect(result.change).toBe('f'.repeat(64))
+  })
+
+  it('plain: mergeNotes skips the pubkey provider and sends a short-form hash', async () => {
+    configurePubkeySecretProvider(() => ck1)
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const request = new URL(input.toString())
+      expect(request.searchParams.get('p1')).toBe(hashK1('f'.repeat(64)))
+      return okResponse()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await mergeNotes(
+      'https://mint.example.com/w/cb',
+      [otherCk1, ck1],
+      {plain: true}
+    )
+    expect(result.k1).toBe('f'.repeat(64))
+  })
 })
 
 describe('upgradeNote: the explicit, holder-initiated plain -> pub/sig action', () => {

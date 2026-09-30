@@ -661,6 +661,12 @@ export const upgradeNote = async (
   }
 }
 
+// `plain`: skip any pubkey-bound (seed-derived) output and mint a plain
+// bearer preimage from the ordinary provider instead, disclosing its h in
+// the 64-hex short form rather than as a cp1 - a caller's explicit opt-out
+// of the key-path preference splitNote/mergeNotes otherwise apply.
+export type MutationOptions = {plain?: boolean}
+
 export type SplitResult = {
   k1: string
   signature?: string
@@ -680,10 +686,11 @@ export type SplitResult = {
 export const splitNote = async (
   callback: string,
   k1s: string[],
-  amountMsat: number
+  amountMsat: number,
+  options: MutationOptions = {}
 ): Promise<SplitResult> => {
   const domain = serverOf(callback)
-  const preferPubkey = k1s.every(isUpgradedSecret)
+  const preferPubkey = !options.plain && k1s.every(isUpgradedSecret)
   const newK1 = generateOutputSecret(domain, preferPubkey)
   const changeK1 = generateOutputSecret(domain, preferPubkey, 'change')
   try {
@@ -692,7 +699,8 @@ export const splitNote = async (
       k1s,
       amountMsat,
       disclosedValue(newK1),
-      disclosedValue(changeK1)
+      disclosedValue(changeK1),
+      !!options.plain
     )
     return {
       k1: newK1,
@@ -718,17 +726,19 @@ export const splitNote = async (
 // pubkey preference as splitNote above (isUpgradedSecret).
 export const mergeNotes = async (
   callback: string,
-  k1s: string[]
+  k1s: string[],
+  options: MutationOptions = {}
 ): Promise<RotateResult> => {
   const newK1 = generateOutputSecret(
     serverOf(callback),
-    k1s.every(isUpgradedSecret)
+    !options.plain && k1s.every(isUpgradedSecret)
   )
   try {
     const result = await mergeNotesWithHash(
       callback,
       k1s,
-      disclosedValue(newK1)
+      disclosedValue(newK1),
+      !!options.plain
     )
     return {k1: newK1, signature: result.signature}
   } catch (err) {
