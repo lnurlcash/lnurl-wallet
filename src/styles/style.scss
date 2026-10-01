@@ -2190,6 +2190,34 @@ nav {
   max-width: none;
 }
 
+// Point of Sale (src/addons/pos): the big running total, and a 3x4
+// phone-style keypad of the Renderer's own plain Buttons
+.addon-pos-amount {
+  font-size: 2.2rem;
+  font-weight: 700;
+  text-align: center;
+  margin: 12px 0;
+}
+
+.addon-pos-paid {
+  font-size: 1.8rem;
+  font-weight: 700;
+  text-align: center;
+  color: #6c6;
+}
+
+.addon-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+  > button {
+    margin: 0;
+    padding: 16px 0;
+    font-size: 1.4rem;
+  }
+}
+
 .addon-field {
   min-width: 0;
   // block for a text/number/datetime input or a select (label above, full-

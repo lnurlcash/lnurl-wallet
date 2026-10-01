@@ -85,6 +85,17 @@ export type UiNode =
   // with indentation and syntax colouring - the generic counterpart to
   // hand-rolling a JSON.stringify Text block per addon
   | {type: 'JsonDisplay'; value: Expr}
+  // pick one of THIS wallet's own registered Lightning Addresses
+  // (addressRegistry.ts) - binds `{address, server, username}`, the same
+  // public "user@host" anyone paying it already sees, never anything
+  // seed-derived
+  | {type: 'AddressPicker'; bind: string; label?: string}
+  // renders nothing; runs `onTick` once as soon as `when` turns truthy,
+  // then every `every` seconds (clamped to POLL_MIN_SECONDS) for as long
+  // as it stays truthy and this node stays mounted - never overlapping a
+  // still-running tick. The only timer an addon gets, e.g. polling an
+  // invoice's LUD-21 verify until it settles
+  | {type: 'Poll'; every: number; when: Expr; onTick: Action}
 
 export type Permission = {verb: string; scope?: string; reason: string}
 

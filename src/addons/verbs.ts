@@ -24,8 +24,13 @@ import {
   generateOutputSecret,
   hashK1,
   outputKeyOfCw1,
-  noteMintOf
+  noteMintOf,
+  fetchPayRequest,
+  requestInvoice,
+  fetchInvoiceVerification,
+  sameInvoice
 } from '../lnurlcash'
+import {hasCashRoot} from '../cashSecrets'
 import {copyToClipboard} from '../helpers'
 import {splitBearerIntoAmounts, type SplitTarget} from '../noteSplitting'
 import {hexToBytes, bytesToHex} from '@noble/hashes/utils.js'
@@ -609,6 +614,118 @@ export const VERBS: Record<string, VerbHandler> = {
       throw new Error("Enter the server's URL and an address first.")
     }
     return fetchAddressUtxos(baseUrl, address)
+  },
+
+  // Point of Sale: asks a Lightning Address (LUD-16 -> LUD-06) for an
+  // invoice of `amountSat` - the exact request any payer's wallet would
+  // make, so it needs nothing of this wallet's own (no note, no secret).
+  // No comment is sent: a registered address's own callback already names
+  // its branch, and the mint derives the next note key itself.
+  'lnaddress.invoice': async args => {
+    const address = String(args.address ?? '').trim()
+    const amountSat = Number(args.amountSat)
+    if (!isLightningAddress(address)) {
+      throw new Error('Pick a Lightning Address first.')
+    }
+    if (!Number.isSafeInteger(amountSat) || amountSat <= 0) {
+      throw new Error('Enter an amount first.')
+    }
+    const url = resolveLnurlInput(address)
+    if (!url) throw new Error(`Could not resolve ${address}.`)
+    const payRequest = await fetchPayRequest(url)
+    const amountMsat = amountSat * 1000
+    if (
+      amountMsat < payRequest.minSendable ||
+      amountMsat > payRequest.maxSendable
+    ) {
+      throw new Error(
+        `${address} accepts between ${Math.ceil(payRequest.minSendable / 1000).toLocaleString()} and ${Math.floor(payRequest.maxSendable / 1000).toLocaleString()} sats.`
+      )
+    }
+    const invoice = await requestInvoice(payRequest.callback, amountMsat)
+    return {
+      address,
+      amountSat,
+      pr: invoice.pr,
+      verify: invoice.verify ?? null
+    }
+  },
+
+  // Point of Sale: one poll of an lnaddress.invoice result's LUD-21 verify
+  // URL. Once settled, and if the address is one THIS wallet registered,
+  // also runs the same "check notes" pass AddressAutoScanner does, so the
+  // payment lands in the wallet without a trip to the Mint page. Every
+  // outcome echoes `pr`, so a stale result from an earlier sale can never
+  // be mistaken for this one's. A failed fetch comes back as `error`
+  // rather than a throw: this runs on a timer, and a flaky connection
+  // shouldn't stack up a toast per tick.
+  'lnaddress.checkPayment': async (args, ctx) => {
+    const invoice = args.invoice as {
+      address?: string
+      pr?: string
+      verify?: string | null
+    } | null
+    const pr = String(invoice?.pr ?? '')
+    if (!pr) throw new Error('No invoice to check.')
+    if (!invoice?.verify) {
+      throw new Error(
+        "This mint doesn't report payment status (LUD-21 verify) for its invoices."
+      )
+    }
+    let settled: boolean
+    try {
+      const result = await fetchInvoiceVerification(invoice.verify)
+      if (!sameInvoice(result.pr, pr)) {
+        return {
+          pr,
+          settled: false,
+          mismatch: true,
+          error:
+            "The mint's payment status is for a different invoice than the one shown - don't trust this sale as paid until you've checked it on the Mint page."
+        }
+      }
+      settled = result.settled
+    } catch (err) {
+      return {pr, settled: false, error: (err as Error).message}
+    }
+    if (!settled) return {pr, settled: false}
+
+    // imported lazily: addressRegistry reads localStorage the moment it
+    // loads, which every other verb (and every test importing VERBS) would
+    // otherwise pay for
+    const [{registeredAddresses}, {runAddressScan}] = await Promise.all([
+      import('../addressRegistry'),
+      import('../addressRecovery')
+    ])
+    const registered = registeredAddresses().find(
+      a => `${a.username}@${serverOf(a.server)}` === invoice.address
+    )
+    if (!registered || !hasCashRoot()) {
+      return {pr, settled: true, claimedSats: null}
+    }
+    try {
+      const scan = await runAddressScan(
+        registered.server,
+        registered.username,
+        ctx.bearers(),
+        {addBearer: ctx.addBearer, logActivity: ctx.logActivity},
+        {startIndex: registered.nextScanIndex ?? 0}
+      )
+      const claimedMsat = scan.recovered.reduce((sum, n) => sum + n.amount, 0)
+      return {
+        pr,
+        settled: true,
+        claimedSats: Math.floor(claimedMsat / 1000),
+        ...(scan.error && {claimError: scan.error})
+      }
+    } catch (err) {
+      return {
+        pr,
+        settled: true,
+        claimedSats: null,
+        claimError: (err as Error).message
+      }
+    }
   },
 
   // resolves a THIRD PARTY's LUD-25 pubkey from a cp1/cx1 address, a full

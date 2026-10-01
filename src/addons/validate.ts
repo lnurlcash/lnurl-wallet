@@ -122,7 +122,9 @@ const UI_NODE_TYPES = new Set([
   'Show',
   'QrDisplay',
   'List',
-  'JsonDisplay'
+  'JsonDisplay',
+  'AddressPicker',
+  'Poll'
 ])
 
 const isUiNode = (v: unknown, path: string): string | null => {
@@ -165,6 +167,15 @@ const isUiNode = (v: unknown, path: string): string | null => {
       )
     case 'JsonDisplay':
       return isExpr(v.value, `${path}.value`)
+    case 'AddressPicker':
+      return typeof v.bind === 'string' ? null : `${path}.bind must be a string`
+    case 'Poll':
+      if (typeof v.every !== 'number' || !(v.every > 0)) {
+        return `${path}.every must be a positive number of seconds`
+      }
+      return (
+        isExpr(v.when, `${path}.when`) ?? isAction(v.onTick, `${path}.onTick`)
+      )
   }
 }
 

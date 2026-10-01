@@ -2,6 +2,7 @@ import type {Component} from 'solid-js'
 import {createSignal, createMemo, Index, For, Show} from 'solid-js'
 import type {Action, Expr, UiNode} from './types'
 import {VERBS} from './verbs'
+import {POLL_MIN_SECONDS} from './Renderer'
 import {
   type NodePath,
   type ExprMode,
@@ -37,7 +38,9 @@ const NODE_TYPES: UiNode['type'][] = [
   'Show',
   'QrDisplay',
   'List',
-  'JsonDisplay'
+  'JsonDisplay',
+  'AddressPicker',
+  'Poll'
 ]
 
 // pure documentation, not a schema - the actual args stay a scoped JSON
@@ -649,6 +652,54 @@ const NodeInspector: Component<NodeInspectorProps> = props => {
             expr={n().value}
             onChange={value => update({...n(), value})}
           />
+        )
+      }
+      case 'AddressPicker': {
+        const n = () => node() as Extract<UiNode, {type: 'AddressPicker'}>
+        return (
+          <>
+            <label>Bind (state path)</label>
+            <input
+              type="text"
+              value={n().bind}
+              onInput={e => update({...n(), bind: e.currentTarget.value})}
+            />
+            <label>Label (optional)</label>
+            <input
+              type="text"
+              value={n().label ?? ''}
+              onInput={e =>
+                update({...n(), label: e.currentTarget.value || undefined})
+              }
+            />
+          </>
+        )
+      }
+      case 'Poll': {
+        const n = () => node() as Extract<UiNode, {type: 'Poll'}>
+        return (
+          <>
+            <label>Every (seconds, minimum {POLL_MIN_SECONDS})</label>
+            <input
+              type="number"
+              min={POLL_MIN_SECONDS}
+              value={n().every}
+              onInput={e => {
+                const every = Number(e.currentTarget.value)
+                if (every > 0) update({...n(), every})
+              }}
+            />
+            <ExprEditor
+              label="When (keep polling while true)"
+              expr={n().when}
+              onChange={when => update({...n(), when})}
+            />
+            <label>On tick</label>
+            <ActionEditor
+              action={n().onTick}
+              onChange={onTick => update({...n(), onTick})}
+            />
+          </>
         )
       }
     }

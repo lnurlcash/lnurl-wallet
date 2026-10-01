@@ -1,11 +1,20 @@
 import type {Component, JSX} from 'solid-js'
-import {Show, For, ErrorBoundary} from 'solid-js'
+import {
+  Show,
+  For,
+  ErrorBoundary,
+  createEffect,
+  createMemo,
+  onCleanup,
+  untrack
+} from 'solid-js'
 import {createStore, produce} from 'solid-js/store'
 import {A} from '@solidjs/router'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
 import {requireDeviceClient} from '../deviceOrchestration'
 import {noteMintOf, serverOf} from '../lnurlcash'
+import {registeredAddresses} from '../addressRegistry'
 import {notify, NotifyKind} from '../helpers'
 import Qr from '../components/Qr'
 import {evaluate, type EvalContext} from './expr'
@@ -74,6 +83,11 @@ const tryParseJson = (text: string): unknown => {
 }
 
 const JSON_INDENT = '  '
+
+// floor for a 'Poll' node's own `every` - a manifest asking for a tighter
+// loop than this gets this instead, so no addon can hammer a service (or
+// this wallet's own UI thread) faster than a human could tell apart
+export const POLL_MIN_SECONDS = 2
 
 // pure recursive pretty-printer for 'JsonDisplay' - no external syntax
 // highlighter, just span classes the stylesheet colours (see .addon-json-*
@@ -512,6 +526,89 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
 
       case 'QrDisplay':
         return <Qr value={String(resolveExpr(node.value, vars) ?? '')} />
+
+      case 'AddressPicker': {
+        // same lazy-read rule as NotePicker above - and the same "bind a
+        // small public summary, never the record itself" shape: the
+        // "user@host" a payer already sees, plus the server/username pair
+        // a verb needs to find this wallet's own record again
+        const readSelected = () =>
+          readBind(node.bind, vars) as {address: string} | null
+        const addressOf = (a: {server: string; username: string}) =>
+          `${a.username}@${serverOf(a.server)}`
+        return (
+          <Show
+            when={registeredAddresses().length > 0}
+            fallback={
+              <p class="addon-form-note">
+                No Lightning Address registered yet - claim one on a mint's card
+                on the <A href="/mint">Mint</A> page first.
+              </p>
+            }
+          >
+            <label class="addon-field">
+              <Show when={node.label}>{node.label}</Show>
+              <select
+                value={readSelected()?.address ?? ''}
+                onChange={e => {
+                  const value = e.currentTarget.value
+                  const found = registeredAddresses().find(
+                    a => addressOf(a) === value
+                  )
+                  writeBind(
+                    node.bind,
+                    found
+                      ? {
+                          address: addressOf(found),
+                          server: found.server,
+                          username: found.username
+                        }
+                      : null,
+                    vars
+                  )
+                }}
+              >
+                <option value="">Select an address...</option>
+                <For each={registeredAddresses()}>
+                  {a => <option value={addressOf(a)}>{addressOf(a)}</option>}
+                </For>
+              </select>
+            </label>
+          </Show>
+        )
+      }
+
+      case 'Poll': {
+        // a memo, so the effect below only restarts on a real falsy/truthy
+        // flip - not every time some value `when` happens to read changes
+        // while it stays truthy
+        const active = createMemo(() => Boolean(resolveExpr(node.when, vars)))
+        let busy = false
+        let timer: ReturnType<typeof setInterval> | undefined
+        const tick = async () => {
+          if (busy) return
+          busy = true
+          try {
+            await runAction(node.onTick, vars)
+          } finally {
+            busy = false
+          }
+        }
+        createEffect(() => {
+          clearInterval(timer)
+          timer = undefined
+          if (!active()) return
+          // untracked: runAction resolves its args synchronously, and
+          // those reads must not become this effect's own dependencies
+          untrack(() => void tick())
+          timer = setInterval(
+            () => void tick(),
+            Math.max(POLL_MIN_SECONDS, node.every) * 1000
+          )
+        })
+        onCleanup(() => clearInterval(timer))
+        return null
+      }
     }
   }
 

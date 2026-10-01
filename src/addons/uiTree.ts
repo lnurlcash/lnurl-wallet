@@ -147,6 +147,15 @@ export const defaultNodeFor = (type: UiNode['type']): UiNode => {
       return {type: 'List', each: [], children: []}
     case 'JsonDisplay':
       return {type: 'JsonDisplay', value: ''}
+    case 'AddressPicker':
+      return {type: 'AddressPicker', bind: ''}
+    case 'Poll':
+      return {
+        type: 'Poll',
+        every: 5,
+        when: false,
+        onTick: {action: 'set', path: '', value: ''}
+      }
   }
 }
 
@@ -186,6 +195,10 @@ export const describeNode = (node: UiNode): string => {
       return `${node.ordered ? 'List (ordered)' : 'List'} each ${describeExprShort(node.each)}`
     case 'JsonDisplay':
       return `JsonDisplay ${describeExprShort(node.value)}`
+    case 'AddressPicker':
+      return `AddressPicker -> ${node.bind || '(unbound)'}`
+    case 'Poll':
+      return `Poll every ${node.every}s when ${describeExprShort(node.when)}`
   }
 }
 
@@ -261,7 +274,9 @@ const UI_NODE_TYPES = new Set([
   'Show',
   'QrDisplay',
   'List',
-  'JsonDisplay'
+  'JsonDisplay',
+  'AddressPicker',
+  'Poll'
 ])
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>

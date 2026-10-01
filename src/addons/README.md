@@ -99,16 +99,18 @@ A fixed component vocabulary, deliberately named after Solid's own
 control-flow primitives so `Renderer.tsx` maps each node onto a real Solid
 component instead of reinventing rendering:
 
-| Type         | Purpose                                                            |
-| ------------ | ------------------------------------------------------------------ |
-| `View`       | a `<div>`; `style` picks a CSS class (`addon-<style>`)             |
-| `Text`       | renders one `Expr` as text                                         |
-| `Input`      | text/number/checkbox, two-way bound via `bind`                     |
-| `NotePicker` | pick a held note; binds `{id, amountSat}` - never the note's url   |
-| `Button`     | `onClick` runs one `Action`                                        |
-| `For`        | iterate an array `Expr`; `item`/`index` in scope for its children  |
-| `Show`       | render children when an `Expr` is truthy                           |
-| `QrDisplay`  | renders an `Expr`'s value as a QR code (wraps `components/Qr.tsx`) |
+| Type            | Purpose                                                                              |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `View`          | a `<div>`; `style` picks a CSS class (`addon-<style>`)                               |
+| `Text`          | renders one `Expr` as text                                                           |
+| `Input`         | text/number/checkbox, two-way bound via `bind`                                       |
+| `NotePicker`    | pick a held note; binds `{id, amountSat}` - never the note's url                     |
+| `Button`        | `onClick` runs one `Action`                                                          |
+| `For`           | iterate an array `Expr`; `item`/`index` in scope for its children                    |
+| `Show`          | render children when an `Expr` is truthy                                             |
+| `QrDisplay`     | renders an `Expr`'s value as a QR code (wraps `components/Qr.tsx`)                   |
+| `AddressPicker` | pick one of your registered Lightning Addresses; binds `{address, server, username}` |
+| `Poll`          | renders nothing; runs `onTick` while `when` is truthy, every `every` s (min 2)       |
 
 New components are added here, in this file, when a real need shows up -
 never by an addon manifest.
@@ -208,6 +210,11 @@ addon's own `helpers`, not here.
   the addon itself asked for - this is a host guarantee an addon cannot opt
   out of or spoof, so Wallet.tsx's own tag filter can always find
   "everything this addon made," by id (survives a name change) or by name.
+- **`lnaddress.invoice`** / **`lnaddress.checkPayment`** - ask a Lightning
+  Address for an invoice, then poll its LUD-21 `verify`; once settled,
+  `checkPayment` runs `addressRecovery.ts`'s `runAddressScan` for that
+  address (only if this wallet registered it) so the note gets claimed.
+  Used by the Point of Sale addon below.
 - **`file.download`** - saves a `Blob` via a synthetic `<a download>`, same
   pattern `storage.ts`'s backup download already uses.
 
@@ -334,3 +341,27 @@ enforces the date (a custodial policy, see lnurl-mint's `spend.py`).
   offline-verification signature.
 - Any LUD-25 mint redeems it: every mint accepts every leaf script, with
   Bitcoin Core's own interpreter (`lnurlcash-kernel`) as the judge.
+
+## Bundled addon: Point of Sale
+
+`pos/` is a keypad till. Pick one of your registered Lightning Addresses
+(the `AddressPicker`, defaulting to the one set in its Settings section),
+type an amount, and **Charge** asks that address for an invoice
+(`lnaddress.invoice`). That is the same LUD-16 request any payer's wallet
+makes, so the customer can pay from any Lightning wallet.
+
+- A `Poll` node calls `lnaddress.checkPayment` every 3 seconds while the
+  invoice is on screen. Once the mint's LUD-21 `verify` reports it settled,
+  the same call runs a "check notes" pass on that address, so the new note
+  lands in the wallet without visiting the Mint page.
+- A mint that doesn't advertise `verify` still issues the invoice. The till
+  just can't tell when it's paid, says so, and leaves claiming to the Mint
+  page's "Check notes".
+- Every status result echoes the invoice's `pr`, and `keypad.ts` ignores a
+  status whose `pr` doesn't match the invoice on screen. So the previous
+  sale's "paid" can never show against the next one. A `verify` answer for
+  a _different_ invoice stops polling and is shown as a warning, never as
+  paid.
+- The customer pays the gross amount. The note claimed is that amount
+  minus whatever mint fee the address's mint charges, which is why the
+  claimed sats are shown separately from the charged amount.
