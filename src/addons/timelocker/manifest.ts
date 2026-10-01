@@ -37,7 +37,7 @@ type LockedNote = {
 // the shareable link: the mint's own url template with the plan's already-
 // signed cw1 as k1 - a complete, ordinary note, nothing left to fill in at
 // redeem time. `lnurlw://` per LUD-17 (never the bare `https://` callback
-// form), optionally the classic LUD-01 bech32 encoding on top, optionally
+// form), or the classic LUD-01 bech32 encoding of the https URL, optionally
 // without the mint's offline-verification certificate. Only ever built for
 // the very plan that was locked.
 const timelockNoteUrl = (
@@ -50,15 +50,14 @@ const timelockNoteUrl = (
   const p = plan as TimelockPlan | null
   if (!locked || !p || locked.groupPubkeyHex !== p.outputKeyHex) return null
   try {
-    const plain = toLud17w(
-      withNewK1(
-        locked.urlTemplate,
-        p.cw1,
-        locked.amountMsat,
-        offlineSig ? locked.signature : undefined
-      )
+    const url = withNewK1(
+      locked.urlTemplate,
+      p.cw1,
+      locked.amountMsat,
+      offlineSig ? locked.signature : undefined
     )
-    return bech32 ? toBech32Lnurl(plain) : plain
+    // LUD-01 bech32 wraps the https URL, never the lnurlw:// form
+    return bech32 ? toBech32Lnurl(url) : toLud17w(url)
   } catch {
     return null
   }

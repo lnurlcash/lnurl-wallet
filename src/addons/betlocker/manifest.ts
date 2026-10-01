@@ -98,8 +98,9 @@ type LockedNote = {
   groupPubkeyHex: string
 }
 
-// lnurlw:// (LUD-17), optionally the classic LUD-01 bech32 encoding - same
-// pair of toggles the sibling timelocker addon offers, same reasoning.
+// lnurlw:// (LUD-17), or the classic LUD-01 bech32 encoding of the https
+// URL - same pair of toggles the sibling timelocker addon offers, same
+// reasoning.
 // stripSig, when set, strips the underlying note's own offline-verification
 // sig first (src/lib/urls.ts's withoutSignature - same toggle/reasoning as
 // BearerCard.tsx's own "Offline verified" checkbox): the receipt's own
@@ -115,8 +116,8 @@ const receiptUrlFor = (
   const url = betReceiptUrl(lockedNote, plan)
   if (!url) return null
   const stripped = stripSig ? withoutSignature(url) : url
-  const plain = toLud17w(stripped)
-  return bech32 ? toBech32Lnurl(plain) : plain
+  // LUD-01 bech32 wraps the https URL, never the lnurlw:// form
+  return bech32 ? toBech32Lnurl(stripped) : toLud17w(stripped)
 }
 
 const receiptText = (
