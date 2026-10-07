@@ -313,7 +313,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
     }
     setFetchingInvoice(true)
     try {
-      const result = await requestInvoice(info.callback, msat)
+      const result = await requestInvoice(info, msat)
       setPastedInvoice(result.pr)
       // LUD-11: this address says it's meant to be reused for future
       // melts (not this one invoice, which is spent once paid regardless)

@@ -8,6 +8,8 @@ import {
   isBolt11Invoice,
   decodeBolt11AmountMsat,
   decodeBolt11PaymentHash,
+  decodeBolt11DescriptionHash,
+  invoiceMatchesMetadata,
   verifyMeltPreimage,
   encodeBolt11AmountSuffix,
   decodeBolt11AmountSuffix
@@ -144,5 +146,36 @@ describe('bolt11 payment hash', () => {
   it('rejects a malformed preimage outright', () => {
     const pr = buildFakeInvoice('ab'.repeat(32))
     expect(verifyMeltPreimage(pr, 'not-hex')).toBe(false)
+  })
+})
+
+describe('bolt11 description hash (LUD-06)', () => {
+  // BOLT-11's own description_hash example
+  const SPEC_PR =
+    'lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqscc6gd6ql3jrc5yzme8v4ntcewwz5cnw92tz0pc8qcuufvq7khhr8wpald05e92xw006sq94mg8v2ndf4sefvf9sygkshp5zfem29trqq2yxxz7'
+  const SPEC_TEXT =
+    'One piece of chocolate cake, one icecream cone, one pickle, one slice of swiss cheese, one slice of salami, one lollypop, one piece of cherry pie, one sausage, one cupcake, and one slice of watermelon'
+  // one with a plain description ('d') instead
+  const SPEC_PR_D =
+    'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp'
+
+  it('reads the description hash, and null for an invoice with a plain description', () => {
+    expect(decodeBolt11PaymentHash(SPEC_PR)).toBe(
+      '0001020304050607080900010203040506070809000102030405060708090102'
+    )
+    expect(decodeBolt11DescriptionHash(SPEC_PR)).toBe(
+      bytesToHex(sha256(new TextEncoder().encode(SPEC_TEXT)))
+    )
+    expect(decodeBolt11PaymentHash(SPEC_PR_D)).toBe(
+      '0001020304050607080900010203040506070809000102030405060708090102'
+    )
+    expect(decodeBolt11DescriptionHash(SPEC_PR_D)).toBeNull()
+    expect(decodeBolt11DescriptionHash('not an invoice')).toBeNull()
+  })
+
+  it('matches only the metadata the hash commits to', () => {
+    expect(invoiceMatchesMetadata(SPEC_PR, SPEC_TEXT)).toBe(true)
+    expect(invoiceMatchesMetadata(SPEC_PR, SPEC_TEXT + ' ')).toBe(false)
+    expect(invoiceMatchesMetadata(SPEC_PR_D, 'anything')).toBe(true)
   })
 })

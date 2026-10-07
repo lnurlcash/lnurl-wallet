@@ -89,17 +89,16 @@ export const decodeBolt11AmountMsat = (pr: string): number | null => {
 // charset index of the letter the spec names it after (e.g. 'p' is index 1
 // in "qpzry9x8gf2tvdw0s3jn54khce6mua7l"), not an arbitrary enum
 const BOLT11_TAG_PAYMENT_HASH = 1
+const BOLT11_TAG_DESCRIPTION_HASH = 23
 
 // full bech32 decode this time (decodeBolt11AmountMsat above only reads the
-// human-readable part) - walks the tagged-field section to pull out
-// payment_hash ('p', always exactly 52 5-bit words = 260 bits = the 256-bit
-// hash plus 4 padding bits) so a disclosed melt/mint preimage can be
-// checked against the actual invoice it claims to settle, not just trusted
-// on the service's word. Layout after the checksum-stripped data words:
+// human-readable part) - walks the tagged-field section for a 32-byte field
+// ('p' or 'h', always exactly 52 5-bit words = 260 bits = the 256-bit hash
+// plus 4 padding bits). Layout after the checksum-stripped data words:
 // [7 words timestamp][tagged fields: 1 word type + 2 words length + data]
 // [104 words signature] - the signature isn't tagged, so the field loop
 // stops 104 words short of the end rather than trying to parse it as one
-export const decodeBolt11PaymentHash = (pr: string): string | null => {
+const decodeBolt11Hash32 = (pr: string, wantTag: number): string | null => {
   const trimmed = pr.trim().toLowerCase()
   try {
     const decoded = bech32.decode(trimmed as `${string}1${string}`, 2048)
@@ -112,7 +111,7 @@ export const decodeBolt11PaymentHash = (pr: string): string | null => {
       const start = pos + 3
       const end = start + len
       if (end > fieldsEnd) break
-      if (tag === BOLT11_TAG_PAYMENT_HASH && len === 52) {
+      if (tag === wantTag && len === 52) {
         return bytesToHex(
           bech32.fromWords(words.slice(start, end)).slice(0, 32)
         )
@@ -123,6 +122,29 @@ export const decodeBolt11PaymentHash = (pr: string): string | null => {
   } catch {
     return null
   }
+}
+
+// so a disclosed melt/mint preimage can be checked against the actual
+// invoice it claims to settle, not just trusted on the service's word
+export const decodeBolt11PaymentHash = (pr: string): string | null =>
+  decodeBolt11Hash32(pr, BOLT11_TAG_PAYMENT_HASH)
+
+// the invoice's description_hash ('h'), or null for one carrying a plain
+// description ('d') instead
+export const decodeBolt11DescriptionHash = (pr: string): string | null =>
+  decodeBolt11Hash32(pr, BOLT11_TAG_DESCRIPTION_HASH)
+
+// LUD-06: an invoice committing to a description hash must commit to
+// sha256(metadata). One with a plain description passes - lnurl-mint's own
+// lnd/cln mints and every spark one issue those
+export const invoiceMatchesMetadata = (
+  pr: string,
+  metadata: string
+): boolean => {
+  const h = decodeBolt11DescriptionHash(pr)
+  return (
+    h === null || h === bytesToHex(sha256(new TextEncoder().encode(metadata)))
+  )
 }
 
 // true only when preimage is well-formed AND actually hashes to the exact

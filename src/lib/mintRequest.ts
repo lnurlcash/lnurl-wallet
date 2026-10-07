@@ -2,7 +2,12 @@ import {lnurlFetch} from './net'
 import type {MintFee} from './fees'
 import {parseMintFee, withinMintFeeBand} from './fees'
 import {verifyNoteSignatureForKey} from './signature'
-import {decodeBolt11AmountMsat, isPreimage, sameInvoice} from './bolt11'
+import {
+  decodeBolt11AmountMsat,
+  invoiceMatchesMetadata,
+  isPreimage,
+  sameInvoice
+} from './bolt11'
 import {
   isPubkeyCommitment,
   decodeCp1,
@@ -141,13 +146,18 @@ export type InvoiceResult = {
 // ordinary Lightning payment, or for minting to a cx1-registered address
 // via its own callback (which already carries `?username=`) and letting
 // the mint auto-derive the next key itself.
+//
+// Pass the payRequest itself rather than its callback to have the invoice
+// checked against its metadata (LUD-06; see invoiceMatchesMetadata).
 export const requestInvoice = async (
-  payCallback: string,
+  payRequest: string | {callback: string; metadata?: string},
   amountMsat: number,
   outputHash?: string,
   short = false
 ): Promise<InvoiceResult> => {
-  const cbUrl = new URL(payCallback)
+  const {callback, metadata} =
+    typeof payRequest === 'string' ? {callback: payRequest} : payRequest
+  const cbUrl = new URL(callback)
   cbUrl.searchParams.set('amount', String(amountMsat))
   if (outputHash !== undefined) {
     const value = outputHash.trim().toLowerCase()
@@ -176,6 +186,14 @@ export const requestInvoice = async (
       `Service returned an invoice for ${invoiceMsat} msat, not the ${amountMsat} requested.`
     )
   }
+  if (
+    typeof metadata === 'string' &&
+    !invoiceMatchesMetadata(body.pr, metadata)
+  ) {
+    throw new Error(
+      "Service returned an invoice that does not commit to its payRequest's metadata."
+    )
+  }
   return {
     pr: body.pr,
     verify: typeof body.verify === 'string' ? body.verify : undefined,
@@ -188,11 +206,11 @@ export const requestInvoice = async (
 // requestInvoice, sending a bearer note's h as its 64-hex short form
 // instead of its cp1
 export const requestInvoiceShort = (
-  payCallback: string,
+  payRequest: string | {callback: string; metadata?: string},
   amountMsat: number,
   outputHash: string
 ): Promise<InvoiceResult> =>
-  requestInvoice(payCallback, amountMsat, outputHash, true)
+  requestInvoice(payRequest, amountMsat, outputHash, true)
 
 export type VerifyResult = {
   settled: boolean

@@ -2,6 +2,10 @@
 
 ## 0.14.0 - unreleased
 
+- `requestInvoice`/`requestInvoiceShort` take the payRequest itself as well
+  as its callback, and then refuse an invoice whose description hash is not
+  `sha256(metadata)` (LUD-06). One with a plain description still passes.
+  New `decodeBolt11DescriptionHash` and `invoiceMatchesMetadata`.
 - **Breaking:** the old `h`/`h2` field names are gone, and a bearer note's
   hex `h` goes on the wire as its hashlock note's `cp1<Q>` by default - as
   `comment` (`requestInvoice`), `p` (`fetchNoteInfoByHash`) and `p1`/`p2`

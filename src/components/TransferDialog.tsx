@@ -217,13 +217,13 @@ const TransferDialog: Component<TransferDialogProps> = props => {
       if (payingAddress()) {
         // the owner's mint derives the output from their advertised cpub -
         // a comment is at most optional there and never names the output
-        result = await requestInvoice(info.callback, props.sourceBearer.amount)
+        result = await requestInvoice(info, props.sourceBearer.amount)
       } else {
         // Refuse before requesting the destination invoice or spending the
         // source note unless the output can be bound to our own secret.
         requireMintComment(info)
         const minted = await requestMintInvoice(
-          info.callback,
+          info,
           props.sourceBearer.amount,
           serverOf(info.withdrawLink || info.callback)
         )

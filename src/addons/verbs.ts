@@ -642,7 +642,7 @@ export const VERBS: Record<string, VerbHandler> = {
         `${address} accepts between ${Math.ceil(payRequest.minSendable / 1000).toLocaleString()} and ${Math.floor(payRequest.maxSendable / 1000).toLocaleString()} sats.`
       )
     }
-    const invoice = await requestInvoice(payRequest.callback, amountMsat)
+    const invoice = await requestInvoice(payRequest, amountMsat)
     return {
       address,
       amountSat,

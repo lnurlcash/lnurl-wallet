@@ -153,7 +153,7 @@ configureChangePubkeySecretProvider(nextChangeSecret)
 // `plain` skips the key-path attempt entirely: a random bearer preimage,
 // disclosed as its 64-hex short-form h rather than a cp1.
 export const requestMintInvoice = async (
-  callback: string,
+  callback: string | {callback: string; metadata?: string},
   amountMsat: number,
   domain: string,
   plain = false

@@ -217,3 +217,38 @@ describe('requestInvoice - LUD-25 cp1 comment', () => {
     ).rejects.toThrow(/cp1 output key/)
   })
 })
+
+describe('requestInvoice - LUD-06 description hash', () => {
+  // BOLT-11's own description_hash example, for 2_000_000_000 msat
+  const PR =
+    'lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqscc6gd6ql3jrc5yzme8v4ntcewwz5cnw92tz0pc8qcuufvq7khhr8wpald05e92xw006sq94mg8v2ndf4sefvf9sygkshp5zfem29trqq2yxxz7'
+  const METADATA =
+    'One piece of chocolate cake, one icecream cone, one pickle, one slice of swiss cheese, one slice of salami, one lollypop, one piece of cherry pie, one sausage, one cupcake, and one slice of watermelon'
+  const callback = 'https://mint.example.com/p/cb'
+  const answering = () =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({json: async () => ({pr: PR})}) as Response)
+    )
+
+  it('accepts an invoice committing to the payRequest metadata', async () => {
+    answering()
+    const result = await requestInvoice(
+      {callback, metadata: METADATA},
+      2_000_000_000
+    )
+    expect(result.pr).toBe(PR)
+  })
+
+  it('refuses one committing to anything else', async () => {
+    answering()
+    await expect(
+      requestInvoice({callback, metadata: '[]'}, 2_000_000_000)
+    ).rejects.toThrow(/does not commit to its payRequest's metadata/)
+  })
+
+  it('cannot check without the metadata', async () => {
+    answering()
+    expect((await requestInvoice(callback, 2_000_000_000)).pr).toBe(PR)
+  })
+})

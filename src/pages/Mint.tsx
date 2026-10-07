@@ -582,7 +582,7 @@ const Mint: Component = () => {
           }
 
           const candidate = await requestInvoice(
-            info.callback,
+            info,
             amount.grossMsat,
             staged.h
           )
@@ -641,7 +641,7 @@ const Mint: Component = () => {
         // invisible fallback otherwise - see requestMintInvoice's own
         // comment for why trying this is always safe
         const minted = await requestMintInvoice(
-          info.callback,
+          info,
           amount.grossMsat,
           mintServer,
           plainSecret()
