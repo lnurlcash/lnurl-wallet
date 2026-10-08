@@ -2,11 +2,19 @@ import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
 import {
+  decodeCr1WithAmount,
+  encodeCr1WithAmount
+} from '../../lib/recoverableNotes'
+import {serverOf} from '../../lib/urls'
+import {
   consignmentProblem,
   decodeSealConsignment,
   encodeSealConsignment,
   genesisState,
   planSealLock,
+  sealCertificateProblem,
+  sealStateHash,
+  type SealCertificate,
   type SealState
 } from './seals'
 
@@ -340,16 +348,190 @@ const nextConsignment = (
   transitionResult: unknown
 ): string | null => {
   const parsed = decodeSealConsignment(consignmentInput)
-  const result = transitionResult as {
-    urlTemplate: string
-    amountMsat: number
-    state: SealState
-  } | null
+  const result = transitionResult as TransitionResult | null
   if (!parsed || !result) return null
+  // Every certificate the history already carried, plus the mint's own for
+  // this transition when it issued one (see verbs.ts's seal.transition).
+  // A consignment holds a certificate's signature and ONE amount for all of
+  // them, so the carried ones are re-labelled with the amount the mint
+  // itself just reported rather than the one the old header claimed: a
+  // header that was wrong must not cost the holder the new consignment of
+  // a transition that has already landed.
+  const carried = parsed.certificates.flatMap(
+    (certificate): SealCertificate[] => {
+      const decoded = decodeCr1WithAmount(certificate.cr1)
+      return decoded
+        ? [
+            {
+              stateIndex: certificate.stateIndex,
+              cr1: encodeCr1WithAmount(result.amountMsat, decoded.signature)
+            }
+          ]
+        : []
+    }
+  )
+  const certificates = result.certificate
+    ? [
+        ...carried,
+        {stateIndex: result.state.stateIndex, cr1: result.certificate}
+      ]
+    : carried
   return encodeSealConsignment(
     {urlTemplate: result.urlTemplate, amountMsat: result.amountMsat},
-    [...parsed.states, result.state]
+    [...parsed.states, result.state],
+    certificates
   )
+}
+
+type TransitionResult = {
+  urlTemplate: string
+  amountMsat: number
+  state: SealState
+  certificate: string | null
+  // '' when certified; 'missing' when the mint sent no certificate (twice),
+  // 'invalid' when it sent one that is not its own for this step
+  certificateProblem: '' | 'missing' | 'invalid'
+}
+
+// Whether this transition result belongs to the consignment being managed
+// right now: its state is the very next one after that history's last. A
+// holder who goes on to paste another seal must not see the last one's
+// "Transitioned" under it - and a transition that DID land for this one
+// must show whatever else goes wrong afterwards.
+const transitionFollows = (
+  consignmentInput: unknown,
+  transitionResult: unknown
+): boolean => {
+  const current = currentStateOf(consignmentInput)
+  const next = (transitionResult as TransitionResult | null)?.state
+  return (
+    !!current &&
+    !!next &&
+    next.assetId === current.assetId &&
+    next.stateIndex === current.stateIndex + 1 &&
+    next.prevStateHash === sealStateHash(current)
+  )
+}
+
+const transitionCertificateLine = (transitionResult: unknown): string => {
+  const result = transitionResult as TransitionResult | null
+  if (!result) return ''
+  if (result.certificate) {
+    return '✓ The mint certified this transition - the consignment below carries its certificate.'
+  }
+  return result.certificateProblem === 'invalid'
+    ? 'The mint answered with a certificate that is not its own for this step - its signing key may differ from the one this wallet has pinned for it. The transition landed, but this step goes on uncertified.'
+    : 'The mint did not certify this transition (not every mint issues rotation certificates). The history below still chains together, but nobody can check that this step was the only one.'
+}
+
+// the new state itself, for the one case nextConsignment cannot build a
+// consignment around it: the transition has landed, so the state must not
+// be lost with the page
+const transitionStateText = (transitionResult: unknown): string =>
+  JSON.stringify((transitionResult as TransitionResult | null)?.state ?? null)
+
+// which mint a consignment says its seal lives at - the one thing in it
+// nobody signed. Everything "Check at the mint" answers is that host's word.
+const consignmentHost = (consignmentInput: unknown): string => {
+  const urlTemplate = decodeSealConsignment(consignmentInput)?.urlTemplate
+  return urlTemplate ? serverOf(urlTemplate) : ''
+}
+
+// what verbs.ts's seal.check answered, as lines to show - only ever for
+// the consignment it was actually asked about: a holder who pastes a
+// different one afterwards must not see the previous one's answer under it
+type CheckResult = {
+  consignment: string
+  host: string
+  live: boolean
+  reason?: string
+  amountMsat?: number
+  mintPubkey: string | null
+  mintPubkeyPinned: boolean
+  // another mint this wallet has pinned the same key for, if any
+  keyKnownAs: string | null
+  transitions: number
+  // null when there was no key to check the certificates against
+  certified: boolean | null
+  certificateProblem: string
+}
+
+const checkReport = (
+  consignmentInput: unknown,
+  checkResult: unknown,
+  transitionResult: unknown
+): string[] => {
+  const result = checkResult as CheckResult | null
+  if (!result || result.consignment !== String(consignmentInput ?? '').trim()) {
+    return []
+  }
+  // a transition that has landed since spent the very note this answer was
+  // about - "unspent" would be a lie by now. An answer that already says
+  // the note is gone stays: it cannot have been made stale by that.
+  if (result.live && transitionFollows(consignmentInput, transitionResult)) {
+    return []
+  }
+  const {host, mintPubkeyPinned: pinned} = result
+  const lines = [`Asked ${host}.`]
+  if (!result.live) {
+    lines.push(`✗ ${result.reason ?? 'Not live at the mint.'}`)
+  } else if (pinned) {
+    lines.push(
+      `✓ Live at ${host} - its current note is unspent and worth ${result.amountMsat} msat.`
+    )
+  } else {
+    lines.push(
+      `${host} says its current note is unspent and worth ${result.amountMsat} msat.`
+    )
+  }
+  if (!result.transitions) {
+    lines.push(
+      'Never transferred - there is no transition for the mint to certify yet.'
+    )
+  } else if (result.certified === null) {
+    lines.push(
+      `Its ${result.transitions} transition(s) could not be checked: this wallet has no key pinned for ${host}.`
+    )
+  } else if (!result.certified) {
+    lines.push(`✗ Not fully certified - ${result.certificateProblem}`)
+  } else if (pinned) {
+    lines.push(
+      `✓ Every one of its ${result.transitions} transition(s) is certified by the key this wallet has pinned for ${host}: each note is the only one its predecessor was burned into.`
+    )
+  } else {
+    lines.push(
+      `Every one of its ${result.transitions} transition(s) is certified by the key ${host} names as its own.`
+    )
+  }
+  if (result.mintPubkey) lines.push(`Key: ${result.mintPubkey}`)
+  if (result.keyKnownAs) {
+    lines.push(
+      `⚠ This wallet knows that key as ${result.keyKnownAs}'s. ${host} is another address: a server can name any key, and a history certified at one mint proves nothing at another.`
+    )
+  }
+  if (!pinned) {
+    lines.push(
+      `⚠ This wallet has no key pinned for ${host}, so all of the above is ${host}'s word alone - anyone can run a server that answers this way. Only rely on it if ${host} is the mint this seal was issued at.`
+    )
+  }
+  return lines
+}
+
+// the offline half: the certificates against a mint key the holder already
+// trusts and types in - no network, and no word of any server
+const offlineCertificateLine = (
+  consignmentInput: unknown,
+  mintKeyInput: unknown
+): string => {
+  const key = String(mintKeyInput ?? '').trim()
+  const parsed = decodeSealConsignment(consignmentInput)
+  if (!key || !parsed) return ''
+  const problem = sealCertificateProblem(parsed, key)
+  if (problem) return `✗ ${problem}`
+  const transitions = parsed.states.length - 1
+  return transitions
+    ? `✓ Every one of its ${transitions} transition(s) is certified by this key. Whether its current note is still unspent only the mint can say.`
+    : 'Never transferred - there is no transition to certify yet.'
 }
 
 const manageUi: UiNode[] = [
@@ -390,6 +572,68 @@ const manageUi: UiNode[] = [
         each: {helper: 'parsedStatesOf', args: [{var: 'consignmentInput'}]},
         children: [
           {type: 'Text', value: {helper: 'stateLine', args: [{var: 'item'}]}}
+        ]
+      },
+      {
+        type: 'Text',
+        value: {
+          cat: [
+            'This consignment says the seal lives at ',
+            {helper: 'consignmentHost', args: [{var: 'consignmentInput'}]},
+            '. Nobody signed that line: make sure it is the mint you expect before you rely on anything it answers.'
+          ]
+        }
+      },
+      {
+        type: 'Text',
+        value:
+          'The history above only shows it is self-consistent. Whether its current note is still unspent, and whether the mint certified every transition, is one question to that mint - by the note’s public key alone, nothing that could spend it.'
+      },
+      {
+        type: 'Button',
+        label: 'Check at the mint',
+        onClick: {
+          verb: 'seal.check',
+          args: {consignment: {var: 'consignmentInput'}},
+          result: 'checkResult'
+        }
+      },
+      {
+        type: 'List',
+        each: {
+          helper: 'checkReport',
+          args: [
+            {var: 'consignmentInput'},
+            {var: 'checkResult'},
+            {var: 'transitionResult'}
+          ]
+        },
+        children: [{type: 'Text', value: {var: 'item'}}]
+      },
+      {
+        type: 'Text',
+        value:
+          'Or check the certificates offline, against a mint key you already trust:'
+      },
+      {
+        type: 'Input',
+        bind: 'mintKeyInput',
+        label: 'Mint signing key (66 hex characters, optional)'
+      },
+      {
+        type: 'Show',
+        when: {
+          helper: 'offlineCertificateLine',
+          args: [{var: 'consignmentInput'}, {var: 'mintKeyInput'}]
+        },
+        children: [
+          {
+            type: 'Text',
+            value: {
+              helper: 'offlineCertificateLine',
+              args: [{var: 'consignmentInput'}, {var: 'mintKeyInput'}]
+            }
+          }
         ]
       },
       {type: 'Text', value: 'Is this seal currently yours?'},
@@ -450,81 +694,99 @@ const manageUi: UiNode[] = [
           }
         ]
       },
-      {type: 'Text', value: 'Transition to a new owner', style: 'subheading'},
-      {
-        type: 'Text',
-        value:
-          'Only possible if you hold the CURRENT owner’s own secret key. Never transmitted anywhere; used only to sign locally.'
-      },
-      {
-        type: 'Input',
-        bind: 'ownerSecretKeyHex',
-        label: 'Your secret key (32-byte hex)'
-      },
       {
         type: 'Show',
         when: {
-          helper: 'canTransition',
-          args: [{var: 'consignmentInput'}, {var: 'ownerSecretKeyHex'}]
+          helper: 'not',
+          args: [
+            {
+              helper: 'transitionFollows',
+              args: [{var: 'consignmentInput'}, {var: 'transitionResult'}]
+            }
+          ]
         },
         children: [
           {
-            type: 'Input',
-            bind: 'nextOwnerAddress',
-            label: 'Next owner’s address'
+            type: 'Text',
+            value: 'Transition to a new owner',
+            style: 'subheading'
           },
           {
-            type: 'Button',
-            label: 'Resolve next owner pubkey',
-            onClick: {
-              verb: 'note.resolveAddressPubkey',
-              args: {address: {var: 'nextOwnerAddress'}},
-              result: 'nextOwnerPubkeyHex'
-            }
+            type: 'Text',
+            value:
+              'Only possible if you hold the CURRENT owner’s own secret key. Never transmitted anywhere; used only to sign locally.'
+          },
+          {
+            type: 'Input',
+            bind: 'ownerSecretKeyHex',
+            label: 'Your secret key (32-byte hex)'
           },
           {
             type: 'Show',
-            when: {var: 'nextOwnerPubkeyHex'},
+            when: {
+              helper: 'canTransition',
+              args: [{var: 'consignmentInput'}, {var: 'ownerSecretKeyHex'}]
+            },
             children: [
               {
-                type: 'Text',
-                value: {
-                  cat: [
-                    'Next owner: ',
-                    {
-                      helper: 'xOnlyPubkeyHex',
-                      args: [{var: 'nextOwnerPubkeyHex'}]
-                    }
-                  ]
-                },
-                style: 'response-block'
+                type: 'Input',
+                bind: 'nextOwnerAddress',
+                label: 'Next owner’s address'
               },
               {
                 type: 'Button',
-                label: 'Transition',
+                label: 'Resolve next owner pubkey',
                 onClick: {
-                  verb: 'seal.transition',
-                  args: {
-                    urlTemplate: {
-                      helper: 'consignmentUrlTemplateOf',
-                      args: [{var: 'consignmentInput'}]
-                    },
-                    currentState: {
-                      helper: 'currentStateOf',
-                      args: [{var: 'consignmentInput'}]
-                    },
-                    ownerSecretKeyHex: {var: 'ownerSecretKeyHex'},
-                    amountMsat: {
-                      helper: 'consignmentAmountOf',
-                      args: [{var: 'consignmentInput'}]
-                    },
-                    nextOwnerPubkeyHex: {
-                      helper: 'xOnlyPubkeyHex',
-                      args: [{var: 'nextOwnerPubkeyHex'}]
-                    }
-                  },
-                  result: 'transitionResult'
+                  verb: 'note.resolveAddressPubkey',
+                  args: {address: {var: 'nextOwnerAddress'}},
+                  result: 'nextOwnerPubkeyHex'
                 }
+              },
+              {
+                type: 'Show',
+                when: {var: 'nextOwnerPubkeyHex'},
+                children: [
+                  {
+                    type: 'Text',
+                    value: {
+                      cat: [
+                        'Next owner: ',
+                        {
+                          helper: 'xOnlyPubkeyHex',
+                          args: [{var: 'nextOwnerPubkeyHex'}]
+                        }
+                      ]
+                    },
+                    style: 'response-block'
+                  },
+                  {
+                    type: 'Button',
+                    label: 'Transition',
+                    onClick: {
+                      verb: 'seal.transition',
+                      args: {
+                        urlTemplate: {
+                          helper: 'consignmentUrlTemplateOf',
+                          args: [{var: 'consignmentInput'}]
+                        },
+                        currentState: {
+                          helper: 'currentStateOf',
+                          args: [{var: 'consignmentInput'}]
+                        },
+                        ownerSecretKeyHex: {var: 'ownerSecretKeyHex'},
+                        amountMsat: {
+                          helper: 'consignmentAmountOf',
+                          args: [{var: 'consignmentInput'}]
+                        },
+                        nextOwnerPubkeyHex: {
+                          helper: 'xOnlyPubkeyHex',
+                          args: [{var: 'nextOwnerPubkeyHex'}]
+                        }
+                      },
+                      result: 'transitionResult'
+                    }
+                  }
+                ]
               }
             ]
           }
@@ -532,9 +794,51 @@ const manageUi: UiNode[] = [
       },
       {
         type: 'Show',
-        when: {var: 'transitionResult'},
+        when: {
+          helper: 'transitionFollows',
+          args: [{var: 'consignmentInput'}, {var: 'transitionResult'}]
+        },
         children: [
           {type: 'Text', value: '✓ Transitioned', style: 'subheading'},
+          {
+            type: 'Text',
+            value:
+              'The seal has moved: its old note is spent. This page is done with it - what follows is the only record of where it went.'
+          },
+          {
+            type: 'Show',
+            when: {
+              helper: 'not',
+              args: [
+                {
+                  helper: 'nextConsignment',
+                  args: [{var: 'consignmentInput'}, {var: 'transitionResult'}]
+                }
+              ]
+            },
+            children: [
+              {
+                type: 'Text',
+                value:
+                  'The new consignment could not be built here. The transition has landed all the same - copy the new state below and keep it with the consignment you pasted:'
+              },
+              {
+                type: 'Text',
+                value: {
+                  helper: 'transitionStateText',
+                  args: [{var: 'transitionResult'}]
+                },
+                style: 'response-block'
+              }
+            ]
+          },
+          {
+            type: 'Text',
+            value: {
+              helper: 'transitionCertificateLine',
+              args: [{var: 'transitionResult'}]
+            }
+          },
           {
             type: 'Text',
             value:
@@ -582,7 +886,8 @@ const docsUi: UiNode[] = [
       'Issue: name an asset, resolve its first owner’s pubkey, and lock one of your own notes to it - that note becomes the seal’s own bearer anchor, committed via a taproot leaf (the same `hashlock` template this wallet’s taproot addon already uses).',
       'Hand the consignment to the owner - the mint’s own note details plus the full state history, nothing secret.',
       'Anyone - the owner, a future buyer, an auditor - can validate that whole history themselves, offline, for free: does it chain together correctly, does the asset’s own identity ever change (it must not).',
-      'To transition, the current owner reveals their own current state and signs with their own key, in the same step rotating the note directly into a fresh leaf committing to the next owner. A new consignment goes out carrying the extended history.'
+      'To transition, the current owner reveals their own current state and signs with their own key, in the same step rotating the note directly into a fresh leaf committing to the next owner. A new consignment goes out carrying the extended history.',
+      'The mint answers that rotate with a rotation certificate: its signature that this note was burned into exactly that one. The consignment carries one per transition, so the next holder can check offline that no step is a look-alike note minted on the side, or one half of a split.'
     ],
     children: [{type: 'Text', value: {var: 'item'}}]
   },
@@ -594,7 +899,12 @@ const docsUi: UiNode[] = [
   {
     type: 'Text',
     value:
-      'Honest limits: transfers always name a specific next owner - there is no race-to-claim path here. An unredeemed transition is a promise, not a guarantee, until it actually lands at the mint - the underlying note can still only be redeemed once. And today’s consignment proves the presented history is internally self-consistent, not yet that every past transition was independently mint-certified.'
+      'Honest limits: transfers always name a specific next owner - there is no race-to-claim path here. An unredeemed transition is a promise, not a guarantee, until it actually lands at the mint - the underlying note can still only be redeemed once. A certified history is as good as the mint that signed it: the mint could sign a second history, and only the mint knows whether the last note is still unspent - "Check at the mint" asks it. A seal from a mint that issues no rotation certificates stays valid, but its history is only self-consistent, not certified.'
+  },
+  {
+    type: 'Text',
+    value:
+      'Two things no certificate says. Which mint: a consignment names its own mint, unsigned, and any server can answer "unspent" and name any key - a history is only worth what the mint you know says about it. And who issued it: certificates start at the first transfer, so anyone can issue another seal with the same name. What tells two apart is the mint and the owner of state #0.'
   }
 ]
 
@@ -622,6 +932,11 @@ const sealsManifest: AddonManifest = {
       reason:
         'Transition a seal you currently own to a new owner, once you enter your own secret key'
     },
+    {
+      verb: 'seal.check',
+      reason:
+        'Ask a seal’s own mint whether its current note is still unspent, and check the mint’s certificate for every transition'
+    },
     {verb: 'clipboard.copy', reason: 'Copy a consignment'},
     {verb: 'file.download', reason: 'Save a consignment file'}
   ],
@@ -635,6 +950,8 @@ const sealsManifest: AddonManifest = {
     genesisPlan: null,
     issuedNote: null,
     consignmentInput: '',
+    checkResult: null,
+    mintKeyInput: '',
     myAddress: '',
     myResolvedPubkeyHex: '',
     ownerSecretKeyHex: '',
@@ -677,7 +994,13 @@ const sealsHelpers: Record<string, AddonHelper> = {
   canTransition: canTransition as AddonHelper,
   consignmentUrlTemplateOf: consignmentUrlTemplateOf as AddonHelper,
   consignmentAmountOf: consignmentAmountOf as AddonHelper,
-  nextConsignment: nextConsignment as AddonHelper
+  nextConsignment: nextConsignment as AddonHelper,
+  transitionFollows: transitionFollows as AddonHelper,
+  transitionCertificateLine: transitionCertificateLine as AddonHelper,
+  transitionStateText: transitionStateText as AddonHelper,
+  consignmentHost: consignmentHost as AddonHelper,
+  checkReport: checkReport as AddonHelper,
+  offlineCertificateLine: offlineCertificateLine as AddonHelper
 }
 
 export const sealsAddon: Addon = {

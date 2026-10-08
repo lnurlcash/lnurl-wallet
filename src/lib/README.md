@@ -49,13 +49,14 @@ The root export includes:
 
 - LNURL and note parsing in `urls.ts`
 - BOLT-11 amount, hash and preimage checks in `bolt11.ts`
-- offline note signatures and key-path ownership proofs in `signature.ts`
+- offline note signatures, rotation certificates and key-path ownership
+  proofs in `signature.ts`
 - fee parsing and arithmetic in `fees.ts`
 - guarded network access in `net.ts`
 - note lookup, melt, rotate, split, merge and settlement in `request.ts`
 - mint invoice and bound-receipt checks in `mintRequest.ts`
 - LN address registration and gap-limit recovery scans in `addresses.ts`
-- cp1, ck1, cs1 and cx1 codecs and derivation in `recoverableNotes.ts`
+- cp1, ck1, cs1, cr1 and cx1 codecs and derivation in `recoverableNotes.ts`
 - the `m/139'`-rooted domain-branch derivation in `branchDerivation.ts`
 - injectable output-secret providers in `secrets.ts`
 
