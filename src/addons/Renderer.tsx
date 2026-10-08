@@ -20,6 +20,14 @@ import Qr from '../components/Qr'
 import {evaluate, type EvalContext} from './expr'
 import {VERBS, type VerbContext} from './verbs'
 import {GLOBAL_HELPERS} from './globalHelpers'
+import {
+  IMAGE_MAX_BYTES,
+  IMAGE_MIME,
+  imageDataUrl,
+  imageFormatOf,
+  isImageDataUrl,
+  type PickedImage
+} from './imageData'
 import type {Action, Addon, Expr, UiNode} from './types'
 
 export type AddonRendererProps = {
@@ -574,6 +582,80 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
                 </For>
               </select>
             </label>
+          </Show>
+        )
+      }
+
+      case 'ImagePicker': {
+        // same lazy-read rule as NotePicker above
+        const readPicked = () => readBind(node.bind, vars) as PickedImage | null
+        // two quick picks read their files in whatever order the disk
+        // answers: only the latest pick may bind, or the control would
+        // show one file and the state hold another
+        let latest = 0
+        const pick = async (input: HTMLInputElement) => {
+          const mine = ++latest
+          const file = input.files?.[0]
+          // a refused file must not linger in the control as if it had
+          // been accepted - and whatever was bound before is gone either
+          // way, the holder did pick something else
+          const refuse = (message: string) => {
+            input.value = ''
+            writeBind(node.bind, null, vars)
+            notify(message, NotifyKind.ERROR)
+          }
+          if (!file) return writeBind(node.bind, null, vars)
+          if (file.size > IMAGE_MAX_BYTES) {
+            return refuse(
+              `That picture is too large - ${Math.floor(IMAGE_MAX_BYTES / (1024 * 1024))} MB at most.`
+            )
+          }
+          // read here, in the page: the file never leaves the device. Its
+          // own bytes decide what it is, never its name or the type the
+          // browser reports for it
+          const bytes = new Uint8Array(await file.arrayBuffer())
+          if (mine !== latest) return
+          const format = imageFormatOf(bytes)
+          const dataUrl = imageDataUrl(bytes)
+          if (!format || !dataUrl) {
+            return refuse('Pick a JPG or PNG picture.')
+          }
+          const picked: PickedImage = {
+            name: file.name,
+            type: IMAGE_MIME[format],
+            size: bytes.length,
+            dataUrl
+          }
+          writeBind(node.bind, picked, vars)
+        }
+        return (
+          <label class="addon-field">
+            <Show when={node.label}>{node.label}</Show>
+            <input
+              type="file"
+              accept="image/jpeg,image/png"
+              onChange={e => void pick(e.currentTarget)}
+            />
+            <Show when={readPicked()?.name}>
+              <span class="addon-form-note">
+                {readPicked()!.name} - {readPicked()!.size.toLocaleString()}{' '}
+                bytes
+              </span>
+            </Show>
+          </label>
+        )
+      }
+
+      case 'Image': {
+        // a memo, so the (base64-decoding) check runs once per value, not
+        // once per read
+        const source = createMemo(() => {
+          const value = resolveExpr(node.value, vars)
+          return isImageDataUrl(value) ? value : null
+        })
+        return (
+          <Show when={source()}>
+            <img class="addon-image" src={source()!} alt="" />
           </Show>
         )
       }
