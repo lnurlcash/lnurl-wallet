@@ -29,7 +29,7 @@
     "jsqr": "^1.4.0",
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
-    "solid-js": "^1.9.15",
+    "solid-js": "^1.9.17",
     "solid-qr-code": "^0.1.11",
     "solid-toast": "^0.5.0"
   },
