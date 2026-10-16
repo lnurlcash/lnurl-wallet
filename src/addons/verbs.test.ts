@@ -8,6 +8,26 @@ import {buildTicketLabel, VERBS, type VerbContext} from './verbs'
 import {parseLabelTags} from '../noteTags'
 import {encodeCp1, encodeCs1WithAmount} from '../lnurlcash'
 
+// generateNoteSecret journals every plain output secret to localStorage
+// before disclosing its hash (cashSecrets.ts's recordPendingOutputSecret) -
+// an in-memory stand-in, assigned directly rather than via vi.stubGlobal so
+// this file's afterEach(unstubAllGlobals) leaves it in place
+const memoryStore = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => memoryStore.get(key) ?? null,
+    setItem: (key: string, value: string) =>
+      void memoryStore.set(key, String(value)),
+    removeItem: (key: string) => void memoryStore.delete(key),
+    clear: () => memoryStore.clear(),
+    key: () => null,
+    get length() {
+      return memoryStore.size
+    }
+  }
+})
+
 const CS1 = encodeCs1WithAmount(1000, new Uint8Array(65))
 import type {Bearer} from '../storage'
 

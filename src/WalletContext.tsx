@@ -43,7 +43,9 @@ import {
   setCashRoot,
   clearCashAddressSecretIndices,
   clearCashChangeSecretIndices,
-  clearPendingMintSecrets
+  clearPendingMintSecrets,
+  clearPendingOutputSecret,
+  clearPendingOutputSecrets
 } from './cashSecrets'
 import type {Bearer, ActivityEvent, ActivityKind} from './storage'
 import {
@@ -58,7 +60,7 @@ import {
   newActivityId,
   reencryptAllRecords
 } from './storage'
-import {serverOf, serviceOriginOf} from './lnurlcash'
+import {noteK1, serverOf, serviceOriginOf} from './lnurlcash'
 import type {TrustKeyResult} from './trustedMints'
 import {
   trustedMints,
@@ -322,6 +324,7 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
     clearCashAddressSecretIndices()
     clearCashChangeSecretIndices()
     clearPendingMintSecrets()
+    clearPendingOutputSecrets()
     clearAllBearers()
     clearAllActivity()
     clearTrustedMints()
@@ -376,6 +379,19 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
     return aesKey
   }
 
+  // a plain bearer output's secret now lives in an encrypted bearer record,
+  // so its plaintext journal entry (lnurlcash.ts's generateNoteSecret) has
+  // done its job. Only ever AFTER persistBearer resolved - never before.
+  const settlePendingOutput = (url: string) => {
+    const k1 = noteK1(url)
+    if (!k1) return
+    try {
+      clearPendingOutputSecret(k1)
+    } catch {
+      // a stale entry is harmless: reconcile finds the bearer and clears it
+    }
+  }
+
   const addBearer = async (note: NewBearer): Promise<Bearer> => {
     const now = Date.now()
     const bearer: Bearer = {
@@ -385,6 +401,7 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
       updatedAt: now
     }
     await persistBearer(requireKey(), bearer)
+    settlePendingOutput(bearer.url)
     setBearers(prev => [bearer, ...prev])
     // holding a bearer from this mint trusts it by default, whether it was
     // already trusted (from a lookup, a manual add, or another bearer) or
@@ -407,6 +424,7 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
     if (!current) return
     const updated: Bearer = {...current, ...changes, updatedAt: Date.now()}
     await persistBearer(requireKey(), updated)
+    if (changes.url !== undefined) settlePendingOutput(updated.url)
     setBearers(prev => prev.map(b => (b.id === id ? updated : b)))
     // only a fresh url (a rotated/settled k1 from a live response) actually
     // corroborates this mint's key - a bare {spent: true}/{label: ...}

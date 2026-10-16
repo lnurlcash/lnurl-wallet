@@ -2,6 +2,7 @@ import {bytesToHex} from '@noble/hashes/utils.js'
 import {offlineMode} from './offlineMode'
 import {
   recordPendingMintSecret,
+  recordPendingOutputSecret,
   requireRecoverableCashAddressSecret,
   nextChangeSecret
 } from './cashSecrets'
@@ -87,8 +88,16 @@ configureNetworkGuard(() => {
 // notes' cx1 branch below): plain randomness is fully spec-compliant. Wired into
 // src/lib's rotateNote/splitNote/mergeNotes via configureSecretProvider, so
 // this is the ONLY place in the app that needs to know about cashSecrets.ts.
-export const generateNoteSecret = (domain: string): string =>
-  bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+//
+// Journaled before it is returned (recordPendingOutputSecret), i.e. before
+// its hash is ever disclosed: a bearer output has no seed derivation to
+// rescan, so a secret held only in memory is lost for good the moment a
+// stalled request lands after the wallet gave up on it.
+export const generateNoteSecret = (domain: string): string => {
+  const secret = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+  recordPendingOutputSecret(domain, secret)
+  return secret
+}
 
 configureSecretProvider(generateNoteSecret)
 

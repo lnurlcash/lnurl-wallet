@@ -21,8 +21,38 @@ const bearerCp1 = (secret: string): string =>
 // configureSecretProvider in this module), so it's the one test that
 // stays here rather than moving with the rest.
 describe('generateNoteSecret', () => {
+  const store = new Map<string, string>()
+  beforeEach(() => {
+    store.clear()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key)
+    })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('journals the secret before returning it - a bearer output has no seed to rescan', async () => {
+    const secret = generateNoteSecret('mint.example.test')
+    const {pendingOutputSecrets} = await import('./cashSecrets')
+    expect(
+      pendingOutputSecrets()['mint.example.test'].map(e => e.secret)
+    ).toEqual([secret])
+  })
+
+  it('refuses to hand out a secret it could not journal', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceededError')
+      },
+      removeItem: () => {}
+    })
+    expect(() => generateNoteSecret('mint.example.test')).toThrow()
+  })
+
   it('generateNoteSecret + hashK1 produce exactly a 64-char hex comment', () => {
-    const secret = generateNoteSecret('mint.example.com')
+    const secret = generateNoteSecret('mint.example.test')
     expect(isPreimage(secret)).toBe(true)
     const comment = hashK1(secret)
     expect(comment).toMatch(/^[0-9a-f]{64}$/)

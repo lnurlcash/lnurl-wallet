@@ -27,8 +27,35 @@ import {
   AmbiguousMutationError
 } from './lnurlcash'
 import {receiveNote} from './receive'
+import {
+  reconcilePendingOutputs,
+  PENDING_OUTPUT_MIN_AGE_MS
+} from './pendingOutputs'
+import {clearPendingOutputSecret, pendingOutputSecrets} from './cashSecrets'
+import type {Bearer} from './storage'
+import type {NewBearer} from './WalletContext'
 import {bearerNoteIdOfHash, bearerNoteIdOfPreimage} from './lib/spend'
 import {decodeCp1, encodeCp1, encodeCs1WithAmount} from './lib/recoverableNotes'
+
+// generateNoteSecret journals every plain output secret to localStorage
+// before disclosing its hash (cashSecrets.ts's recordPendingOutputSecret) -
+// an in-memory stand-in, assigned directly rather than via vi.stubGlobal so
+// this file's afterEach(unstubAllGlobals) leaves it in place
+const memoryStore = new Map<string, string>()
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => memoryStore.get(key) ?? null,
+    setItem: (key: string, value: string) =>
+      void memoryStore.set(key, String(value)),
+    removeItem: (key: string) => void memoryStore.delete(key),
+    clear: () => memoryStore.clear(),
+    key: () => null,
+    get length() {
+      return memoryStore.size
+    }
+  }
+})
 
 // Exercises the stateful multi-step flows Mint.tsx/MeltDialog.tsx/Wallet.tsx
 // drive (mint -> rotate -> split -> merge -> melt, pending-note recovery,
@@ -917,5 +944,74 @@ describe('ambiguous mutation failures', () => {
     expect(await probeBurnedNote(buildNoteUrl(WITHDRAW_URL, k1, 5000))).toBe(
       'unknown'
     )
+  })
+})
+
+// The incident behind cashSecrets.ts's pending output journal: a plain
+// note's rotate stalls (a hung TLS handshake), the wallet times out, probes
+// the input, finds it still live and - correctly, as far as it can tell -
+// drops the fresh secret. The stalled request is then processed anyway. The
+// input is now spent and the mint holds the value under a hash whose
+// secret only the journal still has.
+describe('a stalled rotate that lands after the probe', () => {
+  it('is recovered from the pending output journal', async () => {
+    const k1 = randomHex(32)
+    mint.seed(k1, 6000)
+    let stalled: string | URL | null = null
+    vi.stubGlobal('fetch', (async (input: string | URL) => {
+      if (new URL(String(input)).pathname === '/w/cb') {
+        stalled = input
+        throw Object.assign(new Error('timed out'), {name: 'TimeoutError'})
+      }
+      return mint.fetch(input)
+    }) as unknown as typeof fetch)
+
+    const err = await rotateNote(WITHDRAW_CALLBACK, k1).catch(e => e)
+    expect(err).toBeInstanceOf(AmbiguousMutationError)
+    const lost = (err as AmbiguousMutationError).newSecrets[0]
+    const oldUrl = buildNoteUrl(WITHDRAW_URL, k1, 6000)
+    // the probe runs before the stalled request lands: 'live', so every
+    // caller drops the carried secret
+    expect(await probeBurnedNote(oldUrl)).toBe('live')
+
+    await mint.fetch(stalled!)
+    expect(mint.isOutstanding(k1)).toBe(false)
+    expect(mint.isOutstanding(lost)).toBe(true)
+
+    // the wallet as it stands afterwards: the old note only, marked spent
+    const held: Bearer[] = [
+      {
+        id: 'old',
+        url: oldUrl,
+        callback: WITHDRAW_CALLBACK,
+        amount: 6000,
+        verified: true,
+        spent: true,
+        createdAt: 0,
+        updatedAt: 0
+      }
+    ]
+    const addBearer = async (note: NewBearer): Promise<Bearer> => {
+      const bearer = {...note, id: 'new', createdAt: 0, updatedAt: 0}
+      held.push(bearer)
+      // what WalletContext's addBearer does once the record is persisted
+      clearPendingOutputSecret(lost)
+      return bearer
+    }
+    const result = await reconcilePendingOutputs({
+      bearers: () => held,
+      addBearer,
+      logActivity: () => {},
+      now: () => Date.now() + PENDING_OUTPUT_MIN_AGE_MS + 1
+    })
+
+    expect(result).toEqual({recovered: 1, recoveredMsat: 6000})
+    expect(new URL(held[1].url).searchParams.get('k1')).toBe(lost)
+    expect(held[1].amount).toBe(6000)
+    expect(
+      Object.values(pendingOutputSecrets())
+        .flat()
+        .some(e => e.secret === lost)
+    ).toBe(false)
   })
 })

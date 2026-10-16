@@ -278,3 +278,40 @@ describe('pending mint secrets (bearer note reload-survival)', () => {
     expect(cashSecrets.pendingMintSecretsFor('b.example')).toEqual([])
   })
 })
+
+// a rotate/split/merge's own plain output (lnurlcash.ts's generateNoteSecret),
+// journaled before its hash is disclosed - see pendingOutputs.ts
+describe('pending output secrets', () => {
+  it('records with a timestamp and ignores duplicates', () => {
+    cashSecrets.recordPendingOutputSecret('mint.example', 'aa'.repeat(32), 5)
+    cashSecrets.recordPendingOutputSecret('mint.example', 'aa'.repeat(32), 9)
+    expect(cashSecrets.pendingOutputSecrets()).toEqual({
+      'mint.example': [{secret: 'aa'.repeat(32), createdAt: 5}]
+    })
+  })
+
+  it('clearPendingOutputSecret finds the secret under any domain', () => {
+    cashSecrets.recordPendingOutputSecret('a.example', 'aa'.repeat(32))
+    cashSecrets.recordPendingOutputSecret('b.example', 'bb'.repeat(32))
+    cashSecrets.clearPendingOutputSecret('bb'.repeat(32))
+    expect(Object.keys(cashSecrets.pendingOutputSecrets())).toEqual([
+      'a.example'
+    ])
+  })
+
+  it('survives a fresh module load', async () => {
+    cashSecrets.recordPendingOutputSecret('mint.example', 'aa'.repeat(32))
+    vi.resetModules()
+    const reloaded: typeof import('./cashSecrets') =
+      await import('./cashSecrets')
+    expect(
+      reloaded.pendingOutputSecrets()['mint.example'].map(e => e.secret)
+    ).toEqual(['aa'.repeat(32)])
+  })
+
+  it('clearPendingOutputSecrets wipes the journal', () => {
+    cashSecrets.recordPendingOutputSecret('mint.example', 'aa'.repeat(32))
+    cashSecrets.clearPendingOutputSecrets()
+    expect(cashSecrets.pendingOutputSecrets()).toEqual({})
+  })
+})

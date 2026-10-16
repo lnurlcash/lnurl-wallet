@@ -367,3 +367,81 @@ export const pendingMintSecretsFor = (domain: string): string[] =>
 export const clearPendingMintSecrets = (): void => {
   localStorage.removeItem(PENDING_MINT_SECRETS_KEY)
 }
+
+// The same reload-survival for a rotate/split/merge's own plain bearer
+// output (lnurlcash.ts's generateNoteSecret) - recorded here BEFORE its
+// hash leaves the wallet as p1/p2, so the secret outlives a reload, a closed
+// tab, or an AmbiguousMutationError whose follow-up probe guessed wrong (a
+// request that stalled - e.g. a hung TLS handshake - can still be processed
+// AFTER the probe reported the input live, leaving the mint holding value
+// under a hash whose secret was only ever in memory). Unlike a key-path
+// output there is nothing to rescan from seed, so this journal is the only
+// copy until the output is persisted as a bearer (WalletContext clears it
+// there) or pendingOutputs.ts's reconcile settles it. Same plain,
+// same-device trust model as the pending mint list above.
+const PENDING_OUTPUT_SECRETS_KEY = 'lnurlcash_pending_output_secrets'
+export type PendingOutputSecret = {secret: string; createdAt: number}
+type PendingOutputSecrets = Record<string, PendingOutputSecret[]>
+
+const readPendingOutputSecrets = (): PendingOutputSecrets => {
+  try {
+    const raw = localStorage.getItem(PENDING_OUTPUT_SECRETS_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const result: PendingOutputSecrets = {}
+    for (const [domain, entries] of Object.entries(parsed)) {
+      if (!Array.isArray(entries)) continue
+      const valid = entries.filter(
+        (e): e is PendingOutputSecret =>
+          typeof e?.secret === 'string' && typeof e?.createdAt === 'number'
+      )
+      if (valid.length > 0) result[domain] = valid
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+const writePendingOutputSecrets = (secrets: PendingOutputSecrets): void => {
+  localStorage.setItem(PENDING_OUTPUT_SECRETS_KEY, JSON.stringify(secrets))
+}
+
+// throws if localStorage refuses the write - deliberately: the caller is
+// about to disclose this secret's hash, and must not do so with the secret
+// held nowhere but memory
+export const recordPendingOutputSecret = (
+  domain: string,
+  secret: string,
+  now: number = Date.now()
+): void => {
+  const all = readPendingOutputSecrets()
+  const list = all[domain] ?? []
+  if (list.some(e => e.secret === secret)) return
+  writePendingOutputSecrets({
+    ...all,
+    [domain]: [...list, {secret, createdAt: now}]
+  })
+}
+
+// domain-agnostic: the persist hook only has the stored url's k1 in hand,
+// and a 32-byte random secret never collides across domains anyway
+export const clearPendingOutputSecret = (secret: string): void => {
+  const all = readPendingOutputSecrets()
+  let changed = false
+  const next: PendingOutputSecrets = {}
+  for (const [domain, list] of Object.entries(all)) {
+    const kept = list.filter(e => e.secret !== secret)
+    if (kept.length !== list.length) changed = true
+    if (kept.length > 0) next[domain] = kept
+  }
+  if (changed) writePendingOutputSecrets(next)
+}
+
+export const pendingOutputSecrets = (): PendingOutputSecrets =>
+  readPendingOutputSecrets()
+
+export const clearPendingOutputSecrets = (): void => {
+  localStorage.removeItem(PENDING_OUTPUT_SECRETS_KEY)
+}

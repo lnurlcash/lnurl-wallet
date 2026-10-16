@@ -1,5 +1,14 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal, createMemo, onMount, onCleanup} from 'solid-js'
+import {
+  Show,
+  For,
+  createSignal,
+  createMemo,
+  createEffect,
+  on,
+  onMount,
+  onCleanup
+} from 'solid-js'
 import {render} from 'solid-js/web'
 import {A} from '@solidjs/router'
 import {QRCodeSVG, ErrorCorrectionLevel} from 'solid-qr-code'
@@ -81,6 +90,7 @@ import {notify, NotifyKind, msatToSats, pasteFromClipboard} from '../helpers'
 import {decodeTag, parseLabelTags} from '../noteTags'
 import {takeMeltInvoice} from '../meltHandoff'
 import {receiveIntoWallet} from '../receive'
+import {reconcilePendingOutputs} from '../pendingOutputs'
 import BearerCard from '../components/BearerCard'
 import Dialog from '../components/Dialog'
 import TransferDialog from '../components/TransferDialog'
@@ -873,6 +883,39 @@ const Wallet: Component = () => {
     }
   }
 
+  // adopts any plain output a stalled rotate/split/merge landed after this
+  // wallet stopped waiting for it - see pendingOutputs.ts. Never throws:
+  // an unreachable mint just leaves the entry for the next run
+  const recoverPendingOutputs = async () => {
+    if (offlineMode()) return
+    try {
+      const {recovered, recoveredMsat} = await reconcilePendingOutputs({
+        bearers,
+        addBearer,
+        logActivity
+      })
+      if (recovered > 0) {
+        notify(
+          `Recovered ${recovered} note${recovered === 1 ? '' : 's'} (${msatToSats(recoveredMsat)} sats) from an earlier operation whose outcome was uncertain.`,
+          NotifyKind.SUCCESS
+        )
+      }
+    } catch {
+      // the journal stays as it was - nothing is dropped on failure
+    }
+  }
+
+  // once per visit, as soon as the wallet is unlocked - a note stranded by
+  // an earlier stalled request shouldn't wait for a manual Rotate all
+  createEffect(
+    on(
+      () => state() === 'unlocked',
+      unlocked => {
+        if (unlocked) void recoverPendingOutputs()
+      }
+    )
+  )
+
   const refreshSelected = async () => {
     const picked = selectedBearers()
     if (picked.length === 0) return
@@ -892,10 +935,10 @@ const Wallet: Component = () => {
   // (persistBearer reads localStorage fresh per-write, so concurrent
   // refreshes could race and clobber each other's records)
   const refreshAllNotes = async () => {
-    const picked = bearers().filter(b => !b.spent)
-    if (picked.length === 0) return
     setRefreshingAll(true)
     try {
+      await recoverPendingOutputs()
+      const picked = bearers().filter(b => !b.spent)
       for (const bearer of picked) {
         await refreshOneBearer(bearer)
       }
