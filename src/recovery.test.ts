@@ -231,4 +231,49 @@ describe('scanMintForNotes', () => {
     // the second pass (change) restarts its own progress count at 0 too
     expect(seen[gapLimit.gapLimit()]).toBe(0)
   })
+
+  it('starts each pass at its own configured index and labels progress by pass', async () => {
+    vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
+    const seen: [number, string][] = []
+    const result = await recovery.scanMintForNotes(
+      `mint@${SERVER}`,
+      (index, pass) => seen.push([index, pass]),
+      [],
+      {walletStart: 50, changeStart: 10}
+    )
+    const limit = gapLimit.gapLimit()
+    const wallet = seen.filter(([, pass]) => pass === 'wallet').map(([i]) => i)
+    const change = seen.filter(([, pass]) => pass === 'change').map(([i]) => i)
+    // checkBehind window below the start first, then forward from it
+    expect(wallet[0]).toBe(49)
+    expect(Math.min(...wallet)).toBe(50 - limit)
+    expect(Math.max(...wallet)).toBe(50 + limit - 1)
+    expect(change[0]).toBe(9)
+    expect(Math.min(...change)).toBe(0)
+    expect(Math.max(...change)).toBe(10 + limit - 1)
+    // a start index alone, with nothing found, never counts as "used"
+    expect(result.highestUsedIndex).toBeNull()
+    expect(result.highestUsedChangeIndex).toBeNull()
+  })
+
+  it('reports every index status per pass, for the index map', async () => {
+    vi.stubGlobal('fetch', fakeMint([1], 3, null) as unknown as typeof fetch)
+    const cells: Record<string, Record<number, string>> = {
+      wallet: {},
+      change: {}
+    }
+    await recovery.scanMintForNotes(`mint@${SERVER}`, undefined, [], {
+      onIndex: (index, status, pass) => {
+        cells[pass]![index] = status
+      }
+    })
+    const limit = gapLimit.gapLimit()
+    expect(cells.wallet![1]).toBe('recovered')
+    expect(cells.wallet![3]).toBe('spent')
+    expect(cells.wallet![0]).toBe('unknown')
+    expect(cells.wallet![2]).toBe('unknown')
+    // gap limit counted from the last used index (3)
+    expect(Object.keys(cells.wallet!)).toHaveLength(3 + limit + 1)
+    expect(Object.keys(cells.change!)).toHaveLength(limit)
+  })
 })

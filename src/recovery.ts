@@ -72,6 +72,11 @@ export type MintScanResult = {
 // scanMintForNotes now has to run this same walk twice (NOTE_PURPOSE_WALLET
 // then NOTE_PURPOSE_CHANGE), each against its own secret-at-index function
 // and its own high-water mark, but otherwise byte-identical.
+// what a recovery scan learned about one index, for IndexMap's picture of
+// it: a live note it just handed back as recovered, a live note this wallet
+// already holds, a spent one, or nothing there at all
+export type IndexStatus = 'recovered' | 'held' | 'spent' | 'unknown'
+
 const scanPurposeNotes = async (
   server: string,
   withdrawLink: string,
@@ -79,7 +84,9 @@ const scanPurposeNotes = async (
   purpose: ScanPurpose,
   secretAtIndex: (domain: string, index: number) => Uint8Array | null,
   existing: Bearer[],
-  onProgress?: (index: number) => void
+  startIndex: number,
+  onProgress?: (index: number) => void,
+  onIndex?: (index: number, status: IndexStatus) => void
 ): Promise<{
   recovered: RecoveredNote[]
   highestUsedIndex: number | null
@@ -94,15 +101,19 @@ const scanPurposeNotes = async (
     // back whatever was confirmed before the error (see the catch below)
     await scanForAddressNotes(withdrawLink, branch, purpose, {
       gapLimit: gapLimit(),
-      // re-verifies gapLimit indices below the start floor too - a no-op
-      // today (this scan always starts at 0, so there is nothing behind it
-      // to check), but keeps this in lockstep with addressRecovery.ts's
-      // scanRegisteredAddress if a resume floor is ever added here too -
-      // see scanForAddressNotes' own doc comment
+      startIndex,
+      // re-verifies gapLimit indices below a nonzero start too (a no-op
+      // from 0) - same safety net as addressRecovery.ts's
+      // scanRegisteredAddress, see scanForAddressNotes' own doc comment
       checkBehind: true,
       onProgress,
       onSpent: index => {
         highestUsedIndex = Math.max(highestUsedIndex ?? -1, index)
+      },
+      // 'found' is reported from onFound below instead, once it's known
+      // whether this wallet already held it
+      onOutcome: (index, outcome) => {
+        if (outcome !== 'found') onIndex?.(index, outcome)
       },
       onFound: result => {
         highestUsedIndex = Math.max(highestUsedIndex ?? -1, result.index)
@@ -139,6 +150,7 @@ const scanPurposeNotes = async (
             mintPubkey: result.info.mintPubkey
           })
         }
+        onIndex?.(result.index, alreadyHeld ? 'held' : 'recovered')
       }
     })
   } catch (err) {
@@ -155,17 +167,29 @@ const scanPurposeNotes = async (
 // notes) and once for NOTE_PURPOSE_CHANGE (a split's own change notes),
 // since 25.md's Seed & derivation makes the two independent counters that
 // must each be walked on their own. onProgress, when given, is called with
-// each index right before it's probed (restarting at 0 for the change
-// pass), so a caller can show live scanning progress. existing (the
+// each index right before it's probed, and which of the two passes it
+// belongs to, so a caller can show live scanning progress. opts.walletStart/
+// opts.changeStart start either pass somewhere other than 0 (still
+// re-checking gapLimit indices below it) - only what a pass actually finds
+// ever raises highestUsedIndex/highestUsedChangeIndex, never the start
+// itself. existing (the
 // wallet's current bearers, same shape as receive.ts's own dedup) is
 // checked so an index still held under this wallet's own record for it
 // isn't handed back to the caller as "recovered" a second time - it still
 // counts toward the relevant highest-used index exactly as if it had been,
 // since the index really was used.
+export type MintScanPass = 'wallet' | 'change'
+
 export const scanMintForNotes = async (
   input: string,
-  onProgress?: (index: number) => void,
-  existing: Bearer[] = []
+  onProgress?: (index: number, pass: MintScanPass) => void,
+  existing: Bearer[] = [],
+  opts: {
+    walletStart?: number
+    changeStart?: number
+    // every index's final verdict, per pass - see IndexStatus
+    onIndex?: (index: number, status: IndexStatus, pass: MintScanPass) => void
+  } = {}
 ): Promise<MintScanResult> => {
   const payUrl = resolveMintInput(input)
   if (!payUrl) {
@@ -221,7 +245,9 @@ export const scanMintForNotes = async (
     NOTE_PURPOSE_WALLET,
     cashAddressSecretAtIndex,
     existing,
-    onProgress
+    opts.walletStart ?? 0,
+    onProgress && (index => onProgress(index, 'wallet')),
+    opts.onIndex && ((index, status) => opts.onIndex!(index, status, 'wallet'))
   )
   const change = await scanPurposeNotes(
     server,
@@ -230,7 +256,9 @@ export const scanMintForNotes = async (
     NOTE_PURPOSE_CHANGE,
     changeSecretAtIndex,
     existing,
-    onProgress
+    opts.changeStart ?? 0,
+    onProgress && (index => onProgress(index, 'change')),
+    opts.onIndex && ((index, status) => opts.onIndex!(index, status, 'change'))
   )
 
   return {

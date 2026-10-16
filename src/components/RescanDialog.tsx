@@ -3,12 +3,15 @@ import {Show, For, createMemo, createSignal} from 'solid-js'
 import {IoRefreshSharp, IoSearchSharp, IoTimeSharp} from 'solid-icons/io'
 
 import Dialog from './Dialog'
+import IndexMap, {type IndexMapCells} from './IndexMap'
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
 import {notify, NotifyKind, msatToSats} from '../helpers'
 import {serverOf} from '../lnurlcash'
 import {
   hasCashRoot,
+  nextCashAddressSecretIndex,
+  nextChangeSecretIndex,
   mergeCashAddressSecretIndices,
   mergeCashChangeSecretIndices
 } from '../cashSecrets'
@@ -21,7 +24,11 @@ import {
   type AddressScanMinutes
 } from '../addressRegistry'
 import {runAddressScan} from '../addressRecovery'
-import {scanMintForNotes} from '../recovery'
+import {
+  scanMintForNotes,
+  type IndexStatus,
+  type MintScanPass
+} from '../recovery'
 import {requestNotificationPermission} from '../notifications'
 
 export type RescanDialogProps = {
@@ -62,12 +69,51 @@ const RescanDialog: Component<RescanDialogProps> = props => {
 
   // ---- mint-bearer rescan (always available, address or not) ----
   const [mintBusy, setMintBusy] = createSignal(false)
-  const [mintIndex, setMintIndex] = createSignal(0)
+  const [mintProgress, setMintProgress] = createSignal<{
+    index: number
+    pass: MintScanPass
+  } | null>(null)
+  // what the latest pass saw at each index, per counter - drawn by
+  // IndexMap, filled in live as the scan goes and kept after it ends
+  const [walletCells, setWalletCells] = createSignal<IndexMapCells>({})
+  const [changeCells, setChangeCells] = createSignal<IndexMapCells>({})
+  const setCell =
+    (set: typeof setWalletCells) => (index: number, status: IndexStatus) =>
+      set(prev => ({...prev, [index]: status}))
+  // blank = 0, same as before these fields existed
+  const [walletStartInput, setWalletStartInput] = createSignal('')
+  const [changeStartInput, setChangeStartInput] = createSignal('')
+  // this device's own next-unused counters for this mint (cashSecrets.ts,
+  // plain localStorage - not reactive), re-read after each pass since a
+  // pass that finds notes raises them
+  const readCounters = () => ({
+    wallet: nextCashAddressSecretIndex(serverOf(props.server)),
+    change: nextChangeSecretIndex(serverOf(props.server))
+  })
+  const [counters, setCounters] = createSignal(readCounters())
+
+  const parseStart = (raw: string): number | null => {
+    const typed = raw.trim()
+    if (typed === '') return 0
+    const n = Number(typed)
+    return Number.isInteger(n) && n >= 0 ? n : null
+  }
 
   const rescanMintBearerNotes = async () => {
     if (mintBusy()) return
+    const walletStart = parseStart(walletStartInput())
+    const changeStart = parseStart(changeStartInput())
+    if (walletStart === null || changeStart === null) {
+      notify(
+        'Start indices must be whole numbers, 0 or more.',
+        NotifyKind.ERROR
+      )
+      return
+    }
     setMintBusy(true)
-    setMintIndex(0)
+    setMintProgress(null)
+    setWalletCells({})
+    setChangeCells({})
     try {
       // scanMintForNotes resolves input the same narrow way resolveMintInput
       // does (bech32/Lightning Address/bare domain) - props.server is the
@@ -76,8 +122,17 @@ const RescanDialog: Component<RescanDialogProps> = props => {
       // down to
       const result = await scanMintForNotes(
         serverOf(props.server),
-        index => setMintIndex(index),
-        bearers()
+        (index, pass) => setMintProgress({index, pass}),
+        bearers(),
+        {
+          walletStart,
+          changeStart,
+          onIndex: (index, status, pass) =>
+            setCell(pass === 'wallet' ? setWalletCells : setChangeCells)(
+              index,
+              status
+            )
+        }
       )
       for (const note of result.recovered) {
         await addBearer(note)
@@ -108,12 +163,20 @@ const RescanDialog: Component<RescanDialogProps> = props => {
       }
     } finally {
       setMintBusy(false)
+      setMintProgress(null)
+      setCounters(readCounters())
     }
   }
 
   // ---- address-aware rescan (only when a username is registered here) ----
   const [addrBusy, setAddrBusy] = createSignal(false)
+  const [addrIndex, setAddrIndex] = createSignal<number | null>(null)
+  const [addrCells, setAddrCells] = createSignal<IndexMapCells>({})
   const [showAutoCheck, setShowAutoCheck] = createSignal(false)
+  // "Check notes" start index: blank resumes from this device's own floor
+  // (and lets SERVICE's hint move it forward, see resolveScanStartIndex);
+  // a typed number is walked from exactly as given
+  const [startInput, setStartInput] = createSignal('')
 
   // enabling auto-check is the one user gesture this feature has to hang
   // a Notification permission prompt off of (TODO.md) - most browsers
@@ -143,18 +206,36 @@ const RescanDialog: Component<RescanDialogProps> = props => {
 
   // "Check notes"/"Full rescan" - "check notes" resumes from wherever this
   // address's own nextScanIndex (or SERVICE's own metadata hint) left off,
-  // "full rescan" always re-walks from 0.
+  // or from the start index typed in; "full rescan" always re-walks from 0.
   const checkNotes = async (mode: 'incremental' | 'all') => {
     const addr = registered()
     if (!addr || addrBusy()) return
+    const typed = startInput().trim()
+    const exactStart = mode === 'incremental' && typed !== ''
+    const startIndex = Number(typed)
+    if (exactStart && !(Number.isInteger(startIndex) && startIndex >= 0)) {
+      notify('Start index must be a whole number, 0 or more.', NotifyKind.ERROR)
+      return
+    }
     setAddrBusy(true)
+    setAddrIndex(null)
+    setAddrCells({})
     try {
       const result = await runAddressScan(
         addr.server,
         addr.username,
         bearers(),
         {addBearer, logActivity},
-        {startIndex: mode === 'incremental' ? (addr.nextScanIndex ?? 0) : 0}
+        {
+          startIndex: exactStart
+            ? startIndex
+            : mode === 'incremental'
+              ? (addr.nextScanIndex ?? 0)
+              : 0,
+          exactStart,
+          onProgress: setAddrIndex,
+          onIndex: setCell(setAddrCells)
+        }
       )
       setLastCheck({
         checkedFrom: result.checkedFrom,
@@ -173,6 +254,7 @@ const RescanDialog: Component<RescanDialogProps> = props => {
       }
     } finally {
       setAddrBusy(false)
+      setAddrIndex(null)
     }
   }
 
@@ -185,7 +267,41 @@ const RescanDialog: Component<RescanDialogProps> = props => {
       <p class="bearer-label">This mint's own bearer notes</p>
       <p class="bearer-hint">
         Notes this wallet minted/rotated/split/merged directly here - lost
-        locally on this device, a sync gap, or after a seed restore.
+        locally on this device, a sync gap, or after a seed restore. Wallet
+        notes and split change notes are two separate index counters, each
+        scanned in turn.
+      </p>
+      <p class="bearer-hint">
+        This device's next wallet index: {counters().wallet} · next change
+        index: {counters().change}
+      </p>
+      <label for="rescan-wallet-start">Wallet notes start index</label>
+      <input
+        id="rescan-wallet-start"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="0"
+        value={walletStartInput()}
+        disabled={mintBusy()}
+        onInput={e => setWalletStartInput(e.currentTarget.value)}
+        onKeyDown={e => e.key === 'Enter' && rescanMintBearerNotes()}
+      />
+      <label for="rescan-change-start">Change notes start index</label>
+      <input
+        id="rescan-change-start"
+        type="number"
+        min="0"
+        step="1"
+        placeholder="0"
+        value={changeStartInput()}
+        disabled={mintBusy()}
+        onInput={e => setChangeStartInput(e.currentTarget.value)}
+        onKeyDown={e => e.key === 'Enter' && rescanMintBearerNotes()}
+      />
+      <p class="bearer-hint">
+        Leave blank to start from 0. Indices up to the gap limit below a start
+        index are re-checked too.
       </p>
       <div class="btns">
         <button
@@ -205,9 +321,28 @@ const RescanDialog: Component<RescanDialogProps> = props => {
           &nbsp;Rescan
         </button>
       </div>
-      <Show when={mintBusy()}>
-        <p class="bearer-hint">checking index {mintIndex()}...</p>
+      <Show when={mintProgress()}>
+        {progress => (
+          <p class="scan-progress">
+            Checking {progress().pass === 'wallet' ? 'wallet' : 'change'} index{' '}
+            <strong>{progress().index}</strong>
+          </p>
+        )}
       </Show>
+      <IndexMap
+        label="Wallet notes"
+        cells={walletCells()}
+        current={
+          mintProgress()?.pass === 'wallet' ? mintProgress()!.index : null
+        }
+      />
+      <IndexMap
+        label="Change notes"
+        cells={changeCells()}
+        current={
+          mintProgress()?.pass === 'change' ? mintProgress()!.index : null
+        }
+      />
       <Show when={registered()}>
         {addr => (
           <>
@@ -228,13 +363,30 @@ const RescanDialog: Component<RescanDialogProps> = props => {
                 )}
               </Show>
             </p>
+            <label for="rescan-start-index">Start index</label>
+            <input
+              id="rescan-start-index"
+              type="number"
+              min="0"
+              step="1"
+              placeholder={`${addr().nextScanIndex ?? 0} (resume)`}
+              value={startInput()}
+              disabled={addrBusy()}
+              onInput={e => setStartInput(e.currentTarget.value)}
+              onKeyDown={e => e.key === 'Enter' && checkNotes('incremental')}
+            />
+            <p class="bearer-hint">
+              Leave blank to resume where this device left off. Notes are also
+              re-checked up to the gap limit below the start index, and the scan
+              always walks past the mint's suggested next index.
+            </p>
             <div class="btns">
               <button
                 disabled={offlineMode() || !hasCashRoot() || addrBusy()}
                 title={
                   offlineMode()
                     ? 'Offline mode is on'
-                    : `Check ${addr().username}@${serverOf(addr().server)} for new notes, resuming from where the last check left off`
+                    : `Check ${addr().username}@${serverOf(addr().server)} for new notes, from the start index above (or where the last check left off)`
                 }
                 onClick={() => checkNotes('incremental')}
               >
@@ -263,6 +415,16 @@ const RescanDialog: Component<RescanDialogProps> = props => {
                 &nbsp;Auto-check
               </button>
             </div>
+            <Show when={addrIndex() !== null}>
+              <p class="scan-progress">
+                Checking index <strong>{addrIndex()}</strong>
+              </p>
+            </Show>
+            <IndexMap
+              label="Address notes"
+              cells={addrCells()}
+              current={addrIndex()}
+            />
             <Show when={showAutoCheck()}>
               <p class="bearer-label">Auto-check every</p>
               <div class="btns">

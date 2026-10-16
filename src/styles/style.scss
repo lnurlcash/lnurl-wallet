@@ -1637,6 +1637,96 @@ nav {
   margin: 6px 0 0 0;
 }
 
+// IndexMap: one cell per derivation index after/during a recovery scan.
+// Fill colors validated (dataviz validate_palette.js, dark, against $bg,
+// all pairs) - recovered/held/spent; unknown is an empty outline (a gap),
+// unchecked is a faint dot
+$index-recovered: #199e70;
+$index-held: #9085e9;
+$index-spent: #c98500;
+
+.index-map {
+  margin-top: 12px;
+}
+
+.index-map-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.index-cell {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.index-cell-recovered {
+  background: $index-recovered;
+}
+
+.index-cell-held {
+  background: $index-held;
+}
+
+.index-cell-spent {
+  background: $index-spent;
+}
+
+.index-cell-unknown {
+  box-shadow: inset 0 0 0 1px rgba($font-color, 0.35);
+}
+
+.index-cell-unchecked {
+  background: radial-gradient(
+    circle,
+    rgba($font-color, 0.25) 1px,
+    transparent 1.5px
+  );
+}
+
+.index-cell-current {
+  outline: 2px solid $font-color;
+  outline-offset: 1px;
+}
+
+.index-map-grid .index-cell:focus-visible {
+  outline: 2px solid $font-color;
+  outline-offset: 1px;
+}
+
+.index-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 0.85em;
+  margin: 8px 0 0 0;
+}
+
+.index-map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.index-map-readout {
+  font-variant-numeric: tabular-nums;
+}
+
+// live "checking index N" line under a running recovery scan (RescanDialog)
+.scan-progress {
+  font-size: 1.15em;
+  margin: 10px 0 0 0;
+
+  strong {
+    font-size: 1.4em;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
 .bearer-dates {
   align-self: flex-start;
   font-size: 0.75em;
