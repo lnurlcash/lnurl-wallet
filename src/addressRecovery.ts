@@ -17,6 +17,7 @@ import {gapLimit} from './gapLimit'
 import {msatToSats} from './helpers'
 import {markAddressScanned} from './addressRegistry'
 import type {Bearer, ActivityKind} from './storage'
+import type {IndexStatus} from './recovery'
 import type {NewBearer} from './WalletContext'
 
 // LUD-25 counterpart to recovery.ts's scanMintForNotes - same shape,
@@ -63,13 +64,29 @@ export type AddressScanOutcome = {
   error?: string
 }
 
+export type AddressScanOptions = {
+  startIndex?: number
+  // startIndex was picked by hand (RescanDialog's start index field): walk
+  // from exactly there, never letting SERVICE's hint move it, and don't
+  // treat it as an already-checked floor either - nothing below it was
+  // necessarily ever checked, so nextScanIndex only advances past what
+  // this pass actually finds (same as a full rescan from 0)
+  exactStart?: boolean
+  // every index probed, hit or not - see scanForAddressNotes' onProgress
+  onProgress?: (index: number) => void
+  // every index's final verdict - see recovery.ts's IndexStatus
+  onIndex?: (index: number, status: IndexStatus) => void
+}
+
 export const scanRegisteredAddress = async (
   server: string,
   username: string,
   existing: Bearer[] = [],
-  opts: {startIndex?: number} = {}
+  opts: AddressScanOptions = {}
 ): Promise<AddressScanOutcome> => {
   const startFloor = opts.startIndex ?? 0
+  const floorOf = (start: number, highest: number | null): number =>
+    Math.max(opts.exactStart ? 0 : start, (highest ?? -1) + 1)
   // cashAddressBranch/cashAddressSecretAtIndex derive under the bare host
   // (serverOf, same as this function's own `host` below) - never `server`
   // itself, which callers pass as a full origin (TrustedMint.server/
@@ -88,7 +105,7 @@ export const scanRegisteredAddress = async (
       highestIndex: null,
       checkedFrom: startFloor,
       serviceHint: null,
-      nextScanIndex: startFloor,
+      nextScanIndex: floorOf(startFloor, null),
       error: 'Not a valid mint address.'
     }
   }
@@ -101,7 +118,7 @@ export const scanRegisteredAddress = async (
       highestIndex: null,
       checkedFrom: startFloor,
       serviceHint: null,
-      nextScanIndex: startFloor,
+      nextScanIndex: floorOf(startFloor, null),
       error:
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
     }
@@ -116,7 +133,7 @@ export const scanRegisteredAddress = async (
       highestIndex: null,
       checkedFrom: startFloor,
       serviceHint: null,
-      nextScanIndex: startFloor,
+      nextScanIndex: floorOf(startFloor, null),
       error: 'Not a recognizable mint address.'
     }
   }
@@ -134,7 +151,7 @@ export const scanRegisteredAddress = async (
         highestIndex: null,
         checkedFrom: startFloor,
         serviceHint: null,
-        nextScanIndex: startFloor,
+        nextScanIndex: floorOf(startFloor, null),
         error: 'This mint does not advertise LNURLcash minting.'
       }
     }
@@ -144,7 +161,9 @@ export const scanRegisteredAddress = async (
     // why this must never trust SERVICE's hint to skip a fresh scan (or an
     // explicit "full rescan", which always calls this with startIndex: 0)
     // past index 0 - the regression this guards against is documented there
-    startIndex = resolveScanStartIndex(startFloor, serviceHint ?? undefined)
+    startIndex = opts.exactStart
+      ? startFloor
+      : resolveScanStartIndex(startFloor, serviceHint ?? undefined)
   } catch (err) {
     return {
       server,
@@ -153,7 +172,7 @@ export const scanRegisteredAddress = async (
       highestIndex: null,
       checkedFrom: startFloor,
       serviceHint: null,
-      nextScanIndex: startFloor,
+      nextScanIndex: floorOf(startFloor, null),
       error: (err as Error).message
     }
   }
@@ -162,7 +181,7 @@ export const scanRegisteredAddress = async (
   let highestIndex: number | null = null
   const limit = gapLimit()
   try {
-    const results = await scanForAddressNotes(
+    await scanForAddressNotes(
       withdrawUrl,
       branch,
       NOTE_PURPOSE_LIGHTNING_ADDRESS,
@@ -184,44 +203,52 @@ export const scanRegisteredAddress = async (
         // just up to it, so a genuine gapLimit search still happens beyond
         // it too.
         minIndex: serviceHint !== null ? serviceHint + limit : undefined,
+        onProgress: opts.onProgress,
+        onOutcome: (index, outcome) => {
+          // 'found' is reported from onFound below instead, once it's known
+          // whether this wallet already held it
+          if (outcome !== 'found') opts.onIndex?.(index, outcome)
+        },
+        // built directly in onFound (not batched after the scan returns), same
+        // as recovery.ts's scanPurposeNotes, so a later index's transport
+        // failure can't discard a note already found this same pass
         onFound: result => {
           highestIndex = Math.max(highestIndex ?? -1, result.index)
+          const secretKey = addressSecretAtIndex(host, result.index)
+          // the cash root can only disappear mid-scan if the wallet locked
+          // while it was running - skip rather than crash; a re-scan once
+          // unlocked again picks this index right back up
+          if (!secretKey) return
+          const {pubkeyXOnly: ownershipPubkey, signature: ownershipSignature} =
+            signNoteOwnership(secretKey, withdrawUrl)
+          const ck1 = encodeCk1(ownershipPubkey, ownershipSignature)
+          // attach an already-disclosed offline-verification sig immediately
+          // (see WithdrawRequestInfo's own comment) rather than requiring a
+          // separate rotate/refresh afterward just to obtain one
+          const url = withNewK1(
+            withdrawUrl,
+            ck1,
+            result.info.maxWithdrawable,
+            result.info.c
+          )
+          const alreadyHeld = existing.some(
+            b =>
+              serverOf(b.url) === serverOf(url) &&
+              k1SpendsNote(noteK1(b.url), ownershipPubkey)
+          )
+          if (!alreadyHeld) {
+            recovered.push({
+              url,
+              callback: result.info.callback,
+              amount: result.info.maxWithdrawable,
+              verified: true,
+              mintPubkey: result.info.mintPubkey
+            })
+          }
+          opts.onIndex?.(result.index, alreadyHeld ? 'held' : 'recovered')
         }
       }
     )
-    for (const result of results) {
-      const secretKey = addressSecretAtIndex(host, result.index)
-      // the cash root can only disappear mid-scan if the wallet locked
-      // while it was running - skip rather than crash; a re-scan once
-      // unlocked again picks this index right back up
-      if (!secretKey) continue
-      const {pubkeyXOnly: ownershipPubkey, signature: ownershipSignature} =
-        signNoteOwnership(secretKey, withdrawUrl)
-      const ck1 = encodeCk1(ownershipPubkey, ownershipSignature)
-      // attach an already-disclosed offline-verification sig immediately
-      // (see WithdrawRequestInfo's own comment) rather than requiring a
-      // separate rotate/refresh afterward just to obtain one
-      const url = withNewK1(
-        withdrawUrl,
-        ck1,
-        result.info.maxWithdrawable,
-        result.info.c
-      )
-      const alreadyHeld = existing.some(
-        b =>
-          serverOf(b.url) === serverOf(url) &&
-          k1SpendsNote(noteK1(b.url), ownershipPubkey)
-      )
-      if (!alreadyHeld) {
-        recovered.push({
-          url,
-          callback: result.info.callback,
-          amount: result.info.maxWithdrawable,
-          verified: true,
-          mintPubkey: result.info.mintPubkey
-        })
-      }
-    }
   } catch (err) {
     return {
       server,
@@ -230,7 +257,7 @@ export const scanRegisteredAddress = async (
       highestIndex,
       checkedFrom: startIndex,
       serviceHint,
-      nextScanIndex: Math.max(startIndex, (highestIndex ?? -1) + 1),
+      nextScanIndex: floorOf(startIndex, highestIndex),
       error: (err as Error).message
     }
   }
@@ -242,7 +269,7 @@ export const scanRegisteredAddress = async (
     checkedFrom: startIndex,
     serviceHint,
     highestIndex,
-    nextScanIndex: Math.max(startIndex, (highestIndex ?? -1) + 1)
+    nextScanIndex: floorOf(startIndex, highestIndex)
   }
 }
 
@@ -265,7 +292,7 @@ export const runAddressScan = async (
   username: string,
   existing: Bearer[],
   wallet: AddressScanWalletOps,
-  opts: {startIndex?: number} = {}
+  opts: AddressScanOptions = {}
 ): Promise<AddressScanOutcome> => {
   const result = await scanRegisteredAddress(server, username, existing, opts)
   for (const note of result.recovered) {

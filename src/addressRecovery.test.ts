@@ -338,4 +338,61 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.recovered).toHaveLength(1)
     expect(result.highestIndex).toBe(25)
   })
+
+  it('exactStart walks from the typed index, not past it to the hint', async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([341], undefined, `${cx1}:342`) as unknown as typeof fetch
+    )
+    const probed: number[] = []
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 300, exactStart: true, onProgress: i => probed.push(i)}
+    )
+    expect(result.checkedFrom).toBe(300)
+    expect(result.recovered).toHaveLength(1)
+    expect(result.highestIndex).toBe(341)
+    expect(result.nextScanIndex).toBe(342)
+    // checkBehind window first (299 down to 280), then forward from 300
+    // through the hint + gap limit
+    expect(probed[0]).toBe(299)
+    expect(probed).toContain(300)
+    expect(Math.max(...probed)).toBe(342 + 20)
+  })
+
+  it('exactStart never records an unchecked typed start as a floor', async () => {
+    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 500, exactStart: true}
+    )
+    expect(result.checkedFrom).toBe(500)
+    expect(result.nextScanIndex).toBe(0)
+  })
+
+  it('reports every index status, held vs recovered included', async () => {
+    vi.stubGlobal('fetch', fakeMint([0, 2]) as unknown as typeof fetch)
+    const first = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    const held = {
+      id: 'held',
+      url: first.recovered[0]!.url,
+      amount: 21000
+    } as unknown as Bearer
+    const cells: Record<number, string> = {}
+    await addressRecovery.scanRegisteredAddress(SERVER, USERNAME, [held], {
+      onIndex: (index, status) => {
+        cells[index] = status
+      }
+    })
+    expect(cells[0]).toBe('held')
+    expect(cells[1]).toBe('unknown')
+    expect(cells[2]).toBe('recovered')
+    expect(Object.keys(cells)).toHaveLength(3 + 20)
+  })
 })

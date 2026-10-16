@@ -125,6 +125,8 @@ export type AddressScanResult = {
   info: HashWithdrawRequestInfo
 }
 
+export type ScanOutcome = 'found' | 'unknown' | 'spent'
+
 export type AddressScanOptions = {
   // standard HD-wallet address-gap-limit convention: stop once this many
   // consecutive indices come back unknown
@@ -169,6 +171,11 @@ export type AddressScanOptions = {
   // note): lets a caller track the true highest-used index for its own
   // "next index" bookkeeping even past one it can no longer recover
   onSpent?: (index: number) => void
+  // called once per index with its final verdict, whichever it was - the
+  // one callback that also reports "unknown", so a caller can draw a full
+  // map of what the scan saw (gaps included). An index whose probe threw
+  // (aborting the scan) never gets one.
+  onOutcome?: (index: number, outcome: ScanOutcome) => void
   // ms to wait before retrying a rate-limited probe - never counted
   // toward the gap limit itself (25.md: "WALLET MUST NOT count a rate
   // limit response as one of the gap limit's 'unknown' ones")
@@ -204,9 +211,13 @@ export const scanForAddressNotes = async (
   // shared by both the backward safety-net window and the ordinary forward
   // walk below so the two report through the exact same onProgress/onFound/
   // onSpent callbacks and a caller can't tell which pass found what
-  const probeOnce = async (
-    index: number
-  ): Promise<'found' | 'unknown' | 'spent'> => {
+  const probeOnce = async (index: number): Promise<ScanOutcome> => {
+    const outcome = await probeIndex(index)
+    opts.onOutcome?.(index, outcome)
+    return outcome
+  }
+
+  const probeIndex = async (index: number): Promise<ScanOutcome> => {
     for (;;) {
       opts.onProgress?.(index)
       const pubkey = deriveNotePubkey(
