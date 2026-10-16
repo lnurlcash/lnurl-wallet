@@ -110,10 +110,18 @@ component instead of reinventing rendering:
 | `Show`          | render children when an `Expr` is truthy                                             |
 | `QrDisplay`     | renders an `Expr`'s value as a QR code (wraps `components/Qr.tsx`)                   |
 | `AddressPicker` | pick one of your registered Lightning Addresses; binds `{address, server, username}` |
+| `ImagePicker`   | pick a JPG/PNG from this device; binds `{name, type, size, dataUrl}`, read locally   |
+| `Image`         | shows a JPG/PNG `data:` URL - nothing for any other value, never a remote URL        |
 | `Poll`          | renders nothing; runs `onTick` while `when` is truthy, every `every` s (min 2)       |
 
 New components are added here, in this file, when a real need shows up -
 never by an addon manifest.
+
+A picture picked with `ImagePicker` is read in the page and is ordinary addon
+state from then on: a verb the addon was granted can carry it wherever that
+verb goes, like any other state value. `IMAGE_MAX_BYTES` (8 MiB) is the
+picker's limit, not a property of a picture: `Image` shows a larger data URL
+if an addon builds one.
 
 ### `bind` inside a `For`
 
@@ -216,7 +224,8 @@ addon's own `helpers`, not here.
   address (only if this wallet registered it) so the note gets claimed.
   Used by the Point of Sale addon below.
 - **`file.download`** - saves a `Blob` via a synthetic `<a download>`, same
-  pattern `storage.ts`'s backup download already uses.
+  pattern `storage.ts`'s backup download already uses. Text, or bytes as a
+  PDF - or as a picture, when `mime` is `image/jpeg` or `image/png`.
 
 A verb's _implementation_ lives entirely here, in trusted host code. An
 addon only ever supplies plain-data arguments (a note by opaque id, a list
