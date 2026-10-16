@@ -48,6 +48,15 @@ OP_EQUAL` leaf, whose 64-hex short forms are the preimage as `k1` and `h`
     every note is looked up by its `cp1<Q>`, derived from its spend.
   - The bound-mint receipt's `h` is normalized to the note's `Q` and its
     `sig` kept as a `cs1`.
+- New `cr1` rotation certificate, SERVICE's signature that one note was
+  burned into exactly one other (lnurl-mint answers a rotate with one as
+  `r`): `encodeCr1WithAmount`/`decodeCr1WithAmount`/`isCr1WithAmount`, and
+  `verifyRotationCertificate`, which checks one against the burned note's
+  `Q`, the new note's `Q`, the amount and the mint key.
+  `rotateNoteWithHash`, `rotateNote` and `upgradeNote` hand back a
+  well-formed `r` as `rotation`; it is optional, so a SERVICE that sends
+  none changes nothing, and a split or merge never reports one. `cr1` is an
+  extension, not part of LUD-25.
 - Add `minIndex` to `scanForAddressNotes`'s options: forces the forward
   walk to keep going through indices up to and including this one, even
   past what `gapLimit` consecutive unknowns would otherwise have stopped
