@@ -1114,10 +1114,12 @@ const Wallet: Component = () => {
         let mergedK1: string
         let mergedSignature: string | undefined
         try {
+          // always seed-derived: the plain-secret choice lives only in the
+          // split panels now, so a checkbox left ticked there must not
+          // silently carry over to this toolbar action
           const merged = await mergeNotes(
             base.callback,
-            picked.map(b => requireNoteK1(b.url)),
-            {plain: plainSecret()}
+            picked.map(b => requireNoteK1(b.url))
           )
           mergedK1 = merged.k1
           mergedSignature = merged.signature
@@ -1975,17 +1977,6 @@ const Wallet: Component = () => {
                     </Show>
                     <span class="btn-label">&nbsp;Combine &amp; split</span>
                   </button>
-                  <label
-                    class="plain-secret-toggle"
-                    title="Split/combine into plain random bearer secrets, sent as their 64-hex short-form hash, instead of seed-derived keys - not recoverable from your seed"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={plainSecret()}
-                      onChange={e => setPlainSecret(e.currentTarget.checked)}
-                    />
-                    &nbsp;Plain secret
-                  </label>
                   <button
                     class="icon-btn transfer-btn"
                     disabled={!canTransfer() || offlineMode()}

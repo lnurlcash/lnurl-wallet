@@ -351,7 +351,7 @@ const RescanDialog: Component<RescanDialogProps> = props => {
               {addr().username}@{serverOf(addr().server)}'s registered notes
             </p>
             <p class="bearer-hint">
-              Last index this device checked: {addr().nextScanIndex ?? 0}
+              Checked up to index: {addr().nextScanIndex ?? 0}
               <Show when={lastCheck()}>
                 {info => (
                   <>

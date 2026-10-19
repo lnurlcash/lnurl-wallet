@@ -1,3 +1,4 @@
+import {bytesToHex} from '@noble/hashes/utils.js'
 import {cashAddressBranch, addressSecretAtIndex} from './cashSecrets'
 import {
   resolveMintInput,
@@ -11,7 +12,8 @@ import {
   encodeCk1,
   signNoteOwnership,
   k1SpendsNote,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS
+  NOTE_PURPOSE_LIGHTNING_ADDRESS,
+  ServiceError
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import {msatToSats} from './helpers'
@@ -56,7 +58,8 @@ export type AddressScanOutcome = {
   // resume floor for the NEXT incremental "check notes" pass, as opposed
   // to a full "rescan all" (startIndex: 0) - the higher of: whatever floor
   // the caller already passed in (never regresses below what's already
-  // been checked) and this scan's own highest found index + 1. Always
+  // been checked), this scan's own highest found index + 1, and - after a
+  // clean pass that covered everything up to it - SERVICE's own hint. Always
   // present, even on an error before any of that was learned, so a caller
   // can feed it straight back into addressRegistry.ts's markAddressScanned
   // unconditionally
@@ -262,6 +265,18 @@ export const scanRegisteredAddress = async (
     }
   }
 
+  // a pass that finished cleanly has walked every index up to SERVICE's
+  // hint (minIndex forces it there, see above) - so the hint itself becomes
+  // the resume floor, provided everything BELOW where this pass started was
+  // already covered: always true for an ordinary pass (startIndex is either
+  // 0 or a floor resolveScanStartIndex already trusts), and for a hand-
+  // picked exactStart only when its checkBehind window reached all the way
+  // down to 0. An invoice reserved below the hint but paid only later is
+  // still caught by the next pass's own checkBehind window (gapLimit below
+  // the floor), or by a full rescan beyond that.
+  const coveredUpToHint =
+    serviceHint !== null && (!opts.exactStart || startIndex - limit <= 0)
+
   return {
     server,
     username,
@@ -269,7 +284,10 @@ export const scanRegisteredAddress = async (
     checkedFrom: startIndex,
     serviceHint,
     highestIndex,
-    nextScanIndex: floorOf(startIndex, highestIndex)
+    nextScanIndex: Math.max(
+      floorOf(startIndex, highestIndex),
+      coveredUpToHint ? serviceHint! : 0
+    )
   }
 }
 
@@ -304,4 +322,47 @@ export const runAddressScan = async (
   }
   markAddressScanned(server, username, result.nextScanIndex)
   return result
+}
+
+// Whether `username`@`server` is still registered at SERVICE to the branch
+// THIS wallet derives - the question an "Invalid ownership signature."
+// refusal (unclaim, re-register) leaves open. SERVICE publishes the cx1 it
+// has on file in the payRequest's text/cpub entry (internalTransfer.ts), so
+// it can be compared directly:
+// - 'ours': same branch - a refusal was something else (worth a retry)
+// - 'not-ours': registered to some other branch (a different seed, an
+//   address claimed under an older derivation, or someone else re-claimed
+//   it after it was freed) - this wallet can neither unclaim it nor ever
+//   find notes paid to it, so there is nothing left to do but forget it
+// - 'unregistered': SERVICE doesn't know the name at all any more
+// - 'unknown': couldn't tell (offline, no seed, no text/cpub advertised)
+export type AddressOwnership = 'ours' | 'not-ours' | 'unregistered' | 'unknown'
+
+export const checkAddressOwnership = async (
+  server: string,
+  username: string
+): Promise<AddressOwnership> => {
+  let host: string
+  try {
+    host = new URL(server).host
+  } catch {
+    return 'unknown'
+  }
+  const branch = cashAddressBranch(host)
+  const payUrl = resolveMintInput(`${username}@${host}`)
+  if (!branch || !payUrl) return 'unknown'
+  try {
+    const info = await fetchPayRequest(payUrl)
+    const onFile = info.internalTransfer?.cx1
+    if (!onFile) return 'unknown'
+    const same =
+      bytesToHex(onFile.pubkeyXOnly) === bytesToHex(branch.pubkeyXOnly) &&
+      bytesToHex(onFile.chainCode) === bytesToHex(branch.chainCode)
+    return same ? 'ours' : 'not-ours'
+  } catch (err) {
+    if (err instanceof ServiceError && /unknown user/i.test(err.reason)) {
+      return 'unregistered'
+    }
+    return 'unknown'
+  }
 }

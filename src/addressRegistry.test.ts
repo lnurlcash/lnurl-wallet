@@ -131,3 +131,33 @@ describe('persistence', () => {
     expect(entry?.npub).toBeUndefined()
   })
 })
+
+describe('forgotten addresses', () => {
+  it('forgetting removes the record and remembers the name', () => {
+    mod.addRegisteredAddress('mint.example', 'alice')
+    mod.forgetRegisteredAddress('mint.example', 'alice')
+    expect(mod.registeredAddresses()).toEqual([])
+    expect(mod.forgottenAddresses()).toEqual([
+      {server: 'https://mint.example', username: 'alice'}
+    ])
+  })
+
+  it('re-adding a forgotten name clears it from the forgotten list', () => {
+    mod.forgetRegisteredAddress('mint.example', 'alice')
+    mod.addRegisteredAddress('mint.example', 'alice')
+    expect(mod.forgottenAddresses()).toEqual([])
+    expect(mod.registeredAddresses()[0]?.username).toBe('alice')
+  })
+
+  it('dismissing drops it, and it survives a reload otherwise', async () => {
+    mod.forgetRegisteredAddress('mint.example', 'alice')
+    mod.forgetRegisteredAddress('mint.example', 'bob')
+    mod.dismissForgottenAddress('mint.example', 'bob')
+    vi.resetModules()
+    const reloaded: typeof import('./addressRegistry') =
+      await import('./addressRegistry')
+    expect(reloaded.forgottenAddresses()).toEqual([
+      {server: 'https://mint.example', username: 'alice'}
+    ])
+  })
+})

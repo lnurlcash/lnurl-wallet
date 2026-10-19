@@ -396,3 +396,106 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(Object.keys(cells)).toHaveLength(3 + 20)
   })
 })
+
+describe('resume floor after a clean pass', () => {
+  it("advances to SERVICE's hint once a pass from 0 walked past it", async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.checkedFrom).toBe(0)
+    expect(result.nextScanIndex).toBe(342)
+  })
+
+  it('a hand-picked start whose window never reached 0 does not', async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 300, exactStart: true}
+    )
+    expect(result.nextScanIndex).toBe(0)
+  })
+
+  it('a hand-picked start within one gap limit of 0 does', async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {startIndex: 15, exactStart: true}
+    )
+    expect(result.nextScanIndex).toBe(342)
+  })
+
+  it('an errored pass never advances to the hint', async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    const mint = fakeMint([], undefined, `${cx1}:342`)
+    vi.stubGlobal('fetch', ((input: string | URL) =>
+      new URL(input.toString()).pathname === '/w'
+        ? Promise.reject(new Error('network down'))
+        : mint(input)) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.error).toBeTruthy()
+    expect(result.nextScanIndex).toBe(0)
+  })
+})
+
+describe('checkAddressOwnership', () => {
+  it("is 'ours' when the mint's cx1 is this wallet's own branch", async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
+    )
+    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
+      'ours'
+    )
+  })
+
+  it("is 'not-ours' when the mint has a different branch on file", async () => {
+    const other = cashSecrets.cashAddressBranch('other-mint.test')!
+    const cx1 = encodeCx1(other.pubkeyXOnly, other.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
+    )
+    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
+      'not-ours'
+    )
+  })
+
+  it("is 'unregistered' when the mint no longer knows the name", async () => {
+    vi.stubGlobal('fetch', (() =>
+      jsonResponse({
+        status: 'ERROR',
+        reason: 'Unknown user.'
+      })) as unknown as typeof fetch)
+    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
+      'unregistered'
+    )
+  })
+
+  it("is 'unknown' when the mint advertises no cx1", async () => {
+    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
+      'unknown'
+    )
+  })
+})

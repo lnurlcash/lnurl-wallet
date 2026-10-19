@@ -1,10 +1,12 @@
 import type {Component} from 'solid-js'
-import {Show, createMemo, createSignal} from 'solid-js'
+import {For, Show, createMemo, createSignal} from 'solid-js'
 import {
   IoAtCircleSharp,
   IoRefreshSharp,
   IoTrashSharp,
-  IoCopySharp
+  IoCopySharp,
+  IoEyeOffSharp,
+  IoCloseSharp
 } from 'solid-icons/io'
 
 import Dialog from './Dialog'
@@ -22,9 +24,22 @@ import {
   registeredAddresses,
   addRegisteredAddress,
   removeRegisteredAddress,
+  forgetRegisteredAddress,
+  forgottenAddresses,
+  dismissForgottenAddress,
   type RegisteredAddress
 } from '../addressRegistry'
 import {isValidNpub} from '../nostrAddress'
+import {checkAddressOwnership, type AddressOwnership} from '../addressRecovery'
+
+// why an unclaim failed, once checkAddressOwnership has looked - 'ours'
+// and 'unknown' get no extra text (the mint's own error already says it)
+const OWNERSHIP_PROBLEM: Partial<Record<AddressOwnership, string>> = {
+  'not-ours':
+    "The mint has this name registered to a different key than this wallet's seed derives - claimed under another seed or an older wallet version, or re-claimed by someone else. This wallet can't unclaim it, and can't find notes paid to it.",
+  unregistered:
+    'The mint no longer knows this name at all - it was already freed (or the mint was reset).'
+}
 
 export type AddressDialogProps = {
   server: string
@@ -52,14 +67,19 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   const [username, setUsername] = createSignal('')
   const [npub, setNpub] = createSignal('')
   const [claiming, setClaiming] = createSignal(false)
+  const forgottenHere = createMemo(() =>
+    forgottenAddresses().filter(a => a.server === props.server)
+  )
 
-  const claim = async () => {
-    const name = username().trim().toLowerCase()
+  // `reclaimName`: one of forgottenHere()'s names, claimed straight from
+  // its own button instead of the username field
+  const claim = async (reclaimName?: string) => {
+    const name = (reclaimName ?? username()).trim().toLowerCase()
     if (!name) {
       notify('Enter a username.', NotifyKind.ERROR)
       return
     }
-    const npubValue = npub().trim()
+    const npubValue = reclaimName ? '' : npub().trim()
     if (npubValue && !isValidNpub(npubValue)) {
       notify('Not a valid npub.', NotifyKind.ERROR)
       return
@@ -84,6 +104,27 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     }
     setClaiming(true)
     try {
+      // a name the mint already has on THIS wallet's branch (forgotten on
+      // this device, or claimed from another device on the same seed) is
+      // just added back locally - no POST, which would otherwise also
+      // replace whatever npub is registered with it there. Only a new npub
+      // still needs the round trip. A name on someone else's branch is
+      // refused here with a clearer reason than the mint's own "Invalid
+      // ownership signature."
+      const ownership = await checkAddressOwnership(props.server, name)
+      if (ownership === 'not-ours') {
+        throw new Error(
+          `${name}@${serverOf(props.server)} is registered at this mint to a different key than this wallet's seed - it can't be reclaimed from here.`
+        )
+      }
+      if (ownership === 'ours' && !npubValue) {
+        addRegisteredAddress(props.server, name)
+        notify(
+          `Reclaimed ${name}@${serverOf(props.server)} - the mint still has it registered to this wallet.`,
+          NotifyKind.SUCCESS
+        )
+        return
+      }
       const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
       await registerUsername(
         props.server,
@@ -108,7 +149,20 @@ const AddressDialog: Component<AddressDialogProps> = props => {
 
   // ---- manage (already registered) ----
   const [busy, setBusy] = createSignal(false)
-  const [confirmUnclaim, setConfirmUnclaim] = createSignal(false)
+  const [confirm, setConfirm] = createSignal<'unclaim' | 'forget' | null>(null)
+  const [problem, setProblem] = createSignal<string | null>(null)
+
+  // local bookkeeping only - nothing is sent to the mint (see
+  // addressRegistry.ts's forgetRegisteredAddress). The way out when the
+  // mint refuses an unclaim this wallet can never satisfy
+  const forget = (addr: RegisteredAddress) => {
+    forgetRegisteredAddress(addr.server, addr.username)
+    notify(
+      `Forgot ${addr.username}@${serverOf(addr.server)} on this device.`,
+      NotifyKind.SUCCESS
+    )
+    props.onClose()
+  }
 
   const unclaim = async (addr: RegisteredAddress) => {
     const proofKey = cashAddressSecretAtIndex(serverOf(addr.server), 0)
@@ -120,10 +174,11 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       return
     }
     setBusy(true)
+    setProblem(null)
     try {
       await unregisterUsername(addr.server, addr.username, proofKey)
       removeRegisteredAddress(addr.server, addr.username)
-      setConfirmUnclaim(false)
+      setConfirm(null)
       notify(
         `Freed ${addr.username}@${serverOf(addr.server)}.`,
         NotifyKind.SUCCESS
@@ -131,6 +186,14 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       props.onClose()
     } catch (err) {
       notify((err as Error).message, NotifyKind.ERROR)
+      const explained =
+        OWNERSHIP_PROBLEM[
+          await checkAddressOwnership(addr.server, addr.username)
+        ]
+      if (explained) {
+        setProblem(explained)
+        setConfirm('forget')
+      }
     } finally {
       setBusy(false)
     }
@@ -152,6 +215,36 @@ const AddressDialog: Component<AddressDialogProps> = props => {
               first. Your funds are never at risk either way: only this wallet's
               own seed can ever derive spendable notes from it.
             </p>
+            <Show when={forgottenHere().length > 0}>
+              <p class="bearer-label">Forgotten on this device</p>
+              <For each={forgottenHere()}>
+                {f => (
+                  <div class="btns">
+                    <button
+                      disabled={
+                        claiming() || offlineMode() || state() !== 'unlocked'
+                      }
+                      title="Add back if the mint still has it registered to this wallet"
+                      onClick={() => claim(f.username)}
+                    >
+                      <IoAtCircleSharp />
+                      &nbsp;Reclaim {f.username}@{serverOf(f.server)}
+                    </button>
+                    <button
+                      class="icon-btn icon-btn-gap"
+                      disabled={claiming()}
+                      title="Stop offering this name"
+                      onClick={() =>
+                        dismissForgottenAddress(f.server, f.username)
+                      }
+                    >
+                      <IoCloseSharp />
+                    </button>
+                  </div>
+                )}
+              </For>
+              <hr />
+            </Show>
             <label>Username</label>
             <input
               type="text"
@@ -176,7 +269,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <div class="btns">
               <button
                 disabled={claiming() || offlineMode() || state() !== 'unlocked'}
-                onClick={claim}
+                onClick={() => claim()}
               >
                 <Show when={claiming()} fallback={<IoAtCircleSharp />}>
                   <IoRefreshSharp class="spin" />
@@ -213,21 +306,28 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
-            <Show
-              when={confirmUnclaim()}
-              fallback={
-                <div class="btns">
-                  <button
-                    class="icon-btn"
-                    disabled={busy()}
-                    onClick={() => setConfirmUnclaim(true)}
-                  >
-                    <IoTrashSharp />
-                    &nbsp;Unclaim
-                  </button>
-                </div>
-              }
-            >
+            <Show when={confirm() === null}>
+              <div class="btns">
+                <button
+                  class="icon-btn"
+                  disabled={busy()}
+                  onClick={() => setConfirm('unclaim')}
+                >
+                  <IoTrashSharp />
+                  &nbsp;Unclaim
+                </button>
+                <button
+                  class="icon-btn icon-btn-gap"
+                  disabled={busy()}
+                  title="Remove this address from this wallet only, without contacting the mint"
+                  onClick={() => setConfirm('forget')}
+                >
+                  <IoEyeOffSharp />
+                  &nbsp;Forget on this device
+                </button>
+              </div>
+            </Show>
+            <Show when={confirm() === 'unclaim'}>
               <p class="warning">
                 Unclaim {addr().username}@{serverOf(addr().server)}? This frees
                 the username at the mint - since claiming is
@@ -243,9 +343,30 @@ const AddressDialog: Component<AddressDialogProps> = props => {
                   </Show>
                   Yes, unclaim
                 </button>
+                <button disabled={busy()} onClick={() => setConfirm(null)}>
+                  Cancel
+                </button>
+              </div>
+            </Show>
+            <Show when={confirm() === 'forget'}>
+              <Show when={problem()}>
+                {text => <p class="warning">{text()}</p>}
+              </Show>
+              <p class="warning">
+                Forget {addr().username}@{serverOf(addr().server)} on this
+                device? Nothing is sent to the mint - if the name is still
+                registered to this wallet there, payments to it keep landing as
+                notes, but this wallet stops checking for them (Rescan, and
+                auto-check) until you claim it again. Notes already in your
+                wallet are not affected.
+              </p>
+              <div class="btns">
+                <button onClick={() => forget(addr())}>Yes, forget it</button>
                 <button
-                  disabled={busy()}
-                  onClick={() => setConfirmUnclaim(false)}
+                  onClick={() => {
+                    setConfirm(null)
+                    setProblem(null)
+                  }}
                 >
                   Cancel
                 </button>

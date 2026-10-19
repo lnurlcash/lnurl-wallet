@@ -10,7 +10,8 @@ import {isValidNpub} from './nostrAddress'
 // - unrelated to a holder's personally-claimed address, which has no home
 // there. Not yet included in backup/restore (storage.ts) - a lost device
 // loses track of what it registered, though the registration itself still
-// stands at the mint and can be re-added by hand; the branch itself is
+// stands at the mint and can be reclaimed by typing the name into
+// AddressDialog's claim view (no re-POST needed); the branch itself is
 // always re-derivable from the seed regardless (see cashAddressBranch).
 export type RegisteredAddress = {
   // full SERVICE origin, same convention as trustedMints.ts's own `server`
@@ -143,6 +144,7 @@ export const addRegisteredAddress = (
   if (!USERNAME_PATTERN.test(name)) {
     throw new Error('Not a valid username.')
   }
+  dropForgotten(origin, name)
   const current = registeredAddresses()
   const existing = current.find(a => a.server === origin && a.username === name)
   if (existing) {
@@ -173,6 +175,76 @@ export const removeRegisteredAddress = (
       a => !(a.server === origin && a.username === name)
     )
   )
+}
+
+// Names this device forgot (AddressDialog's "Forget on this device") -
+// remembered only so the claim view can offer them back as a one-click
+// reclaim (see addressRecovery.ts's checkAddressOwnership for how a
+// reclaim decides whether the mint still has it on this wallet's branch).
+// Cleared again the moment the name is re-added by any route.
+export type ForgottenAddress = {server: string; username: string}
+
+const FORGOTTEN_KEY = 'lnurlcash_forgotten_addresses'
+
+const readForgotten = (): ForgottenAddress[] => {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(FORGOTTEN_KEY) ?? '[]'
+    )
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((a): ForgottenAddress[] => {
+      const server =
+        typeof a?.server === 'string' ? normalizeOrigin(a.server) : null
+      const username =
+        typeof a?.username === 'string' ? a.username.toLowerCase() : ''
+      return server && USERNAME_PATTERN.test(username)
+        ? [{server, username}]
+        : []
+    })
+  } catch {
+    return []
+  }
+}
+
+const [forgottenAddresses, setForgottenSignal] =
+  createSignal<ForgottenAddress[]>(readForgotten())
+export {forgottenAddresses}
+
+const persistForgotten = (list: ForgottenAddress[]): void => {
+  localStorage.setItem(FORGOTTEN_KEY, JSON.stringify(list))
+  setForgottenSignal(list)
+}
+
+const dropForgotten = (origin: string, name: string): void => {
+  const current = forgottenAddresses()
+  if (current.some(a => a.server === origin && a.username === name)) {
+    persistForgotten(
+      current.filter(a => !(a.server === origin && a.username === name))
+    )
+  }
+}
+
+// removeRegisteredAddress, plus remembering the name for a later reclaim
+export const forgetRegisteredAddress = (
+  server: string,
+  username: string
+): void => {
+  removeRegisteredAddress(server, username)
+  const origin = normalizeOrigin(server)
+  const name = username.trim().toLowerCase()
+  if (!origin) return
+  dropForgotten(origin, name)
+  persistForgotten([...forgottenAddresses(), {server: origin, username: name}])
+}
+
+// drops a forgotten name for good (it was taken by someone else, or the
+// holder just doesn't want the reclaim offer any more)
+export const dismissForgottenAddress = (
+  server: string,
+  username: string
+): void => {
+  const origin = normalizeOrigin(server)
+  if (origin) dropForgotten(origin, username.trim().toLowerCase())
 }
 
 const updateAddress = (
