@@ -36,7 +36,7 @@ import {
   IoSwapVerticalSharp,
   IoPricetagsSharp,
   IoAtCircleSharp,
-  IoKeySharp
+  IoPaperPlaneSharp
 } from 'solid-icons/io'
 import {MdSharpKeyboard} from 'solid-icons/md'
 
@@ -94,7 +94,7 @@ import {reconcilePendingOutputs} from '../pendingOutputs'
 import BearerCard from '../components/BearerCard'
 import Dialog from '../components/Dialog'
 import TransferDialog from '../components/TransferDialog'
-import SendToPubkeyDialog from '../components/SendToPubkeyDialog'
+import SendToDialog from '../components/SendToDialog'
 import MeltDialog from '../components/MeltDialog'
 import ScanToggle from '../components/ScanToggle'
 import NfcToggle from '../components/NfcToggle'
@@ -207,13 +207,11 @@ const Wallet: Component = () => {
   // otherwise drop it out of selectedEligible() and yank the dialog out
   // from under itself mid-flight
   const [transferSource, setTransferSource] = createSignal<Bearer | null>(null)
-  // same capture-at-click reasoning as transferSource above - Send to
-  // pubkey's own dialog burns its inputs itself, which would otherwise drop
+  // same capture-at-click reasoning as transferSource above - Send to's
+  // own dialog burns its inputs itself, which would otherwise drop
   // them out of selectedEligible() and pull the dialog's props out from
   // under it mid-flight
-  const [sendToPubkeySource, setSendToPubkeySource] = createSignal<
-    Bearer[] | null
-  >(null)
+  const [sendToSource, setSendToSource] = createSignal<Bearer[] | null>(null)
   // mutually exclusive - opening one closes the other rather than letting
   // both dialogs be up (and independently mutating wallet state) at once.
   // No 'send' anymore - carving an exact amount out of one or more notes is
@@ -531,13 +529,13 @@ const Wallet: Component = () => {
   const canMarkSpentSelected = createMemo(() => selectedBearers().length > 0)
   const canLabelSelected = createMemo(() => selectedBearers().length > 0)
   const canSplitSingle = createMemo(() => selectedEligible().length === 1)
-  // Send to pubkey (combine and/or split naming a pasted cp1 as the
-  // output) needs at least one verified, unspent note - unlike Combine it
+  // Send to (combine and/or split naming a cp1, a cx1 branch's next key,
+  // or a same-mint username's next key as the output) needs at least one verified, unspent note - unlike Combine it
   // works fine on just one (a plain send, or a send + change split) - and,
   // unlike Combine/Combine & split, has no device-vault equivalent yet (see
-  // SendToPubkeyDialog's own header comment), so device-backed notes are
+  // SendToDialog's own header comment), so device-backed notes are
   // excluded here rather than failing loudly once Send is clicked
-  const canSendToPubkey = createMemo(
+  const canSendTo = createMemo(
     () =>
       selectedEligible().length > 0 &&
       selectedEligible().every(b => !b.deviceId)
@@ -1992,6 +1990,21 @@ const Wallet: Component = () => {
                     <IoSwapHorizontalSharp />
                     <span class="btn-label">&nbsp;Transfer</span>
                   </button>
+                  <button
+                    class="icon-btn send-to-btn"
+                    disabled={!canSendTo() || offlineMode()}
+                    title={
+                      offlineMode()
+                        ? 'Offline mode is on'
+                        : canSendTo()
+                          ? 'Send the selected notes, or part of them, to a cp1 pubkey, a cx1 branch or a username at the same mint - no Lightning'
+                          : 'Select 1+ verified, unspent, non-vault notes from the same mint to send'
+                    }
+                    onClick={() => setSendToSource(selectedEligible())}
+                  >
+                    <IoPaperPlaneSharp />
+                    <span class="btn-label">&nbsp;Send to</span>
+                  </button>
                   <div class="more-menu" ref={el => (moreMenuRef = el)}>
                     <button
                       type="button"
@@ -2003,27 +2016,6 @@ const Wallet: Component = () => {
                     </button>
                     <Show when={showMoreMenu()}>
                       <div class="more-menu-panel">
-                        <button
-                          class="icon-btn send-pubkey-btn"
-                          disabled={!canSendToPubkey() || offlineMode()}
-                          title={
-                            offlineMode()
-                              ? 'Offline mode is on'
-                              : canSendToPubkey()
-                                ? 'Combine and/or split the selected notes into one owned by a cp1 pubkey you paste in'
-                                : 'Select 1+ verified, unspent, non-vault notes from the same mint to send to a pubkey'
-                          }
-                          onClick={() => {
-                            setSendToPubkeySource(selectedEligible())
-                            setShowMoreMenu(false)
-                          }}
-                        >
-                          <IoKeySharp />
-                          &nbsp;Send to pubkey
-                          <Show when={selectedEligible().length > 1}>
-                            &nbsp;({selectedEligible().length})
-                          </Show>
-                        </button>
                         <button
                           class="icon-btn label-btn"
                           disabled={!canLabelSelected()}
@@ -2348,12 +2340,12 @@ const Wallet: Component = () => {
           />
         )}
       </Show>
-      <Show when={sendToPubkeySource()}>
+      <Show when={sendToSource()}>
         {picked => (
-          <SendToPubkeyDialog
+          <SendToDialog
             bearers={picked()}
             onClose={() => {
-              setSendToPubkeySource(null)
+              setSendToSource(null)
               setSelected(new Set<string>())
             }}
           />

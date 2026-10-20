@@ -1127,7 +1127,8 @@ nav {
   margin-bottom: 16px;
 }
 
-// Refresh, Split, Combine, Combine & split, Transfer, More, Clear selection
+// Refresh, Split, Combine, Combine & split, Transfer, Send to, More, Clear
+// selection
 // - a size up from the app's default buttons, since this is the primary
 // action row for whatever's selected (all moved here from BearerCard so
 // every note-level action lives in one bar). Label/Mark spent/Export/QR -
@@ -1141,6 +1142,7 @@ nav {
 .combine-btn,
 .split-btn,
 .transfer-btn,
+.send-to-btn,
 .more-btn,
 .clear-selection-btn {
   padding: 10px 18px;
@@ -1151,6 +1153,7 @@ nav {
 .combine-btn,
 .split-btn,
 .transfer-btn,
+.send-to-btn,
 .more-btn,
 .clear-selection-btn {
   margin-left: 8px;
