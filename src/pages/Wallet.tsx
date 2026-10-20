@@ -529,9 +529,10 @@ const Wallet: Component = () => {
   const canMarkSpentSelected = createMemo(() => selectedBearers().length > 0)
   const canLabelSelected = createMemo(() => selectedBearers().length > 0)
   const canSplitSingle = createMemo(() => selectedEligible().length === 1)
-  // Send to (combine and/or split naming a cp1, a cx1 branch's next key,
-  // or a same-mint username's next key as the output) needs at least one verified, unspent note - unlike Combine it
-  // works fine on just one (a plain send, or a send + change split) - and,
+  // Send to (combine and/or split naming a cp1 or a same-mint username's
+  // next key as the output) needs at least one verified, unspent note -
+  // unlike Combine it works fine on just one (a plain send, or a send +
+  // change split) - and,
   // unlike Combine/Combine & split, has no device-vault equivalent yet (see
   // SendToDialog's own header comment), so device-backed notes are
   // excluded here rather than failing loudly once Send is clicked
@@ -1997,7 +1998,7 @@ const Wallet: Component = () => {
                       offlineMode()
                         ? 'Offline mode is on'
                         : canSendTo()
-                          ? 'Send the selected notes, or part of them, to a cp1 pubkey, a cx1 branch or a username at the same mint - no Lightning'
+                          ? 'Send the selected notes, or part of them, to a cp1 pubkey or a username at the same mint - no Lightning'
                           : 'Select 1+ verified, unspent, non-vault notes from the same mint to send'
                     }
                     onClick={() => setSendToSource(selectedEligible())}

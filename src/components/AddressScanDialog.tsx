@@ -23,6 +23,7 @@ import {requestNotificationPermission} from '../notifications'
 
 export type AddressScanDialogProps = {
   server: string
+  username: string
   onClose: () => void
 }
 
@@ -36,7 +37,9 @@ export type AddressScanDialogProps = {
 const AddressScanDialog: Component<AddressScanDialogProps> = props => {
   const {bearers, addBearer, logActivity} = useWallet()
   const registered = createMemo(() =>
-    registeredAddresses().find(a => a.server === props.server)
+    registeredAddresses().find(
+      a => a.server === props.server && a.username === props.username
+    )
   )
 
   const [busy, setBusy] = createSignal(false)
@@ -133,7 +136,12 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
     <Dialog onClose={props.onClose}>
       <Show
         when={registered()}
-        fallback={<p>No address registered at {serverOf(props.server)}.</p>}
+        fallback={
+          <p>
+            {props.username}@{serverOf(props.server)} is no longer registered on
+            this device.
+          </p>
+        }
       >
         {addr => (
           <>

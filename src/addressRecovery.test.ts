@@ -60,8 +60,13 @@ const jsonResponse = (body: unknown) =>
 // indices on the address branch cashAddressBranch(HOST) actually derives -
 // mirrors recovery.test.ts's own fakeMint shape, adapted for p=cp1<pk>
 // instead of h=sha256(k1)
-const fakeMint = (liveIndices: number[], sig?: string, xpubHint?: string) => {
-  const branch = cashSecrets.cashAddressBranch(HOST)!
+const fakeMint = (
+  liveIndices: number[],
+  sig?: string,
+  xpubHint?: string,
+  slot?: number
+) => {
+  const branch = cashSecrets.addressBranch(HOST, slot)!
   const liveCp1 = new Set(
     liveIndices.map(i =>
       encodeCp1(
@@ -508,5 +513,78 @@ describe('checkAddressOwnership', () => {
     expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
       'unknown'
     )
+  })
+})
+
+describe('many addresses per mint (address slots)', () => {
+  it('scans an address on its own slot branch, not the legacy one', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([1], undefined, undefined, 3) as unknown as typeof fetch
+    )
+    const legacy = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(legacy.recovered).toHaveLength(0)
+    const slotted = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {slot: 3}
+    )
+    expect(slotted.recovered).toHaveLength(1)
+    const owner = recoverNoteOwnershipPubkey(
+      noteK1(slotted.recovered[0]!.url)!,
+      slotted.recovered[0]!.url
+    )
+    const branch = cashSecrets.addressBranch(HOST, 3)!
+    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(
+      bytesToHex(
+        deriveNotePubkey(
+          branch.pubkeyXOnly,
+          branch.chainCode,
+          NOTE_PURPOSE_LIGHTNING_ADDRESS,
+          1
+        )
+      )
+    )
+  })
+
+  it("runAddressScan uses the registered address's own slot", async () => {
+    const registry = await import('./addressRegistry')
+    registry.addRegisteredAddress(SERVER, USERNAME, undefined, 2)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([0], undefined, undefined, 2) as unknown as typeof fetch
+    )
+    const added: unknown[] = []
+    const result = await addressRecovery.runAddressScan(SERVER, USERNAME, [], {
+      addBearer: async n => added.push(n),
+      logActivity: () => {}
+    })
+    expect(result.recovered).toHaveLength(1)
+    expect(added).toHaveLength(1)
+  })
+
+  it('finds which slot the mint has on file', async () => {
+    const branch = cashSecrets.addressBranch(HOST, 5)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
+    )
+    expect(
+      await addressRecovery.resolveAddressOwnership(SERVER, USERNAME)
+    ).toEqual({ownership: 'ours', slot: 5})
+  })
+
+  it('reports the legacy domain branch as slot undefined', async () => {
+    const branch = cashSecrets.cashAddressBranch(HOST)!
+    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
+    )
+    expect(
+      await addressRecovery.resolveAddressOwnership(SERVER, USERNAME)
+    ).toEqual({ownership: 'ours', slot: undefined})
   })
 })

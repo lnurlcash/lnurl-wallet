@@ -40,7 +40,6 @@ export type SendToDialogProps = {
 
 const RECIPIENT_HINT: Record<Recipient['kind'], string> = {
   cp1: 'A single pubkey - only its private key holder can redeem the note.',
-  cx1: "An address branch - the note goes to that branch's next unused key, the same place a Lightning payment to its address would land.",
   username:
     "A username at this mint - the note goes to its registered branch's next unused key, no Lightning involved."
 }
@@ -51,13 +50,12 @@ const RECIPIENT_HINT: Record<Recipient['kind'], string> = {
 // - a cp1 pasted in by hand: that exact pubkey. Whoever holds its private
 //   key proves ownership later with a ck1 signature (see the musig2 addon's
 //   own worked example) - this wallet never sees that key.
-// - a cx1 branch export: its next unused purpose-2 (Lightning Address) key,
-//   via internalTransfer.ts's payInternalTransfer.
-// - a username@this-mint: same as a cx1, but the branch and its hinted next
-//   index come from that address's own payRequest (LUD-25's "Internal
-//   transfer", text/cpub) - pays a registered address without Lightning.
-// The latter two land where the recipient's own address check
-// (addressRecovery.ts) finds them.
+// - a username@this-mint: its registered branch's next unused purpose-2
+//   (Lightning Address) key, with the branch and hinted next index taken
+//   from that address's own payRequest (LUD-25's "Internal transfer",
+//   text/cpub) via internalTransfer.ts's payInternalTransfer - pays a
+//   registered address without Lightning, landing where the recipient's own
+//   address check (addressRecovery.ts) finds it.
 //
 // One or many input notes, naming the recipient as either the WHOLE output
 // (amount left blank - a combine, or a plain send if there's only one input)
@@ -108,10 +106,7 @@ const SendToDialog: Component<SendToDialogProps> = props => {
     if (picked.length === 0) return
     const target = recipient()
     if (!target) {
-      notify(
-        `Enter a cp1 pubkey, a cx1 branch, or a username at ${host()}.`,
-        NotifyKind.ERROR
-      )
+      notify(`Enter a cp1 pubkey or a username at ${host()}.`, NotifyKind.ERROR)
       return
     }
     const sum = totalMsat()
@@ -146,16 +141,12 @@ const SendToDialog: Component<SendToDialogProps> = props => {
       const label =
         target.kind === 'cp1'
           ? `pubkey ${target.cp1}`
-          : target.kind === 'username'
-            ? `${target.username}@${host()}`
-            : 'cx1 branch'
+          : `${target.username}@${host()}`
       // resolved before anything is burned - a bad username fails here
       const hint =
-        target.kind === 'cx1'
-          ? target.hint
-          : target.kind === 'username'
-            ? await lookupUsername(target.username)
-            : null
+        target.kind === 'username'
+          ? await lookupUsername(target.username)
+          : null
       const cp1 = target.kind === 'cp1' ? target.cp1 : ''
 
       let index: number | null = null
@@ -308,13 +299,11 @@ const SendToDialog: Component<SendToDialogProps> = props => {
         owned by the recipient below instead - no Lightning involved. This can't
         be undone.
       </p>
-      <label for="send-to-recipient">
-        Recipient - cp1 pubkey, cx1 branch, or username
-      </label>
+      <label for="send-to-recipient">Recipient - cp1 pubkey or username</label>
       <input
         id="send-to-recipient"
         type="text"
-        placeholder={`cp1..., cx1... or alice@${host()}`}
+        placeholder={`cp1... or alice@${host()}`}
         value={recipientInput()}
         disabled={busy()}
         onInput={e => setRecipientInput(e.currentTarget.value)}

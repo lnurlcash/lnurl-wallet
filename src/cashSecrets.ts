@@ -1,4 +1,4 @@
-import {HDKey} from '@scure/bip32'
+import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
 import {deriveDomainBranchNode} from './lib/branchDerivation'
 import {
   deriveNoteSecretKey,
@@ -142,17 +142,68 @@ export const cashAddressSecretAtIndex = (
   )
 }
 
+// Many registered addresses per mint: each one registers its OWN branch -
+// hardened HD child `slot` of this domain's branch node - as its cx1, so
+// SERVICE keeps deriving every address's notes at
+// NOTE_PURPOSE_LIGHTNING_ADDRESS on whatever cx1 it has on file (no mint or
+// spec change), while no two addresses ever share a key. Slots 0 and 1 are
+// left alone by convention (this branch's own wallet notes and change), so
+// the first address is slot 2, the next 3, and so on. Hardened, so one
+// address's cx1 never reveals another's - they stay unlinkable to anyone
+// but this wallet. `slot` undefined is the LEGACY registration from before
+// this existed: the domain branch itself, the same cx1 the wallet/change
+// purposes above hang off - kept as-is so an address registered that way
+// never moves.
+export const FIRST_ADDRESS_SLOT = 2
+
+const addressSlotNode = (domain: string, slot?: number): HDKey | null => {
+  const node = addressDomainNode(domain)
+  if (!node || slot === undefined) return node
+  return node.deriveChild(HARDENED_OFFSET + slot)
+}
+
+// the cx1 an address in `slot` registers (see FIRST_ADDRESS_SLOT above) -
+// same x-only shape as cashAddressBranch
+export const addressBranch = (domain: string, slot?: number): Cx1 | null => {
+  const node = addressSlotNode(domain, slot)
+  const publicKey = node?.publicKey
+  const chainCode = node?.chainCode
+  if (!publicKey || !chainCode) return null
+  return {pubkeyXOnly: publicKey.slice(1), chainCode}
+}
+
+// the key an address's register/unregister ownership proof signs with -
+// its own branch's NOTE_PURPOSE_WALLET index-0 secret, which is what
+// SERVICE checks a proof against for whatever cx1 is on file (see
+// lib/signature.ts's signAddressProof). For a legacy (slot-less) address
+// that's exactly cashAddressSecretAtIndex(domain, 0)
+export const addressProofKey = (
+  domain: string,
+  slot?: number
+): Uint8Array | null => {
+  const node = addressSlotNode(domain, slot)
+  if (!node?.privateKey || !node.chainCode) return null
+  return deriveNoteSecretKey(
+    node.privateKey,
+    node.chainCode,
+    NOTE_PURPOSE_WALLET,
+    0
+  )
+}
+
 // the NOTE_PURPOSE_LIGHTNING_ADDRESS counterpart to cashAddressSecretAtIndex
-// above - same branch, same pure/no-counter-side-effect shape (a note here
-// is never wallet-initiated: SERVICE picks the index, whether by an actual
-// payment's auto-mint or an Internal transfer, so there is nothing for this
-// wallet to "claim" ahead of a scan - see addressRecovery.ts's
-// scanRegisteredAddress, the only caller).
+// above, on the address's own branch (`slot`, see FIRST_ADDRESS_SLOT) -
+// same pure/no-counter-side-effect shape (a note here is never
+// wallet-initiated: SERVICE picks the index, whether by an actual payment's
+// auto-mint or an Internal transfer, so there is nothing for this wallet to
+// "claim" ahead of a scan - see addressRecovery.ts's scanRegisteredAddress,
+// the only caller).
 export const addressSecretAtIndex = (
   domain: string,
-  index: number
+  index: number,
+  slot?: number
 ): Uint8Array | null => {
-  const node = addressDomainNode(domain)
+  const node = addressSlotNode(domain, slot)
   if (!node?.privateKey || !node.chainCode) return null
   return deriveNoteSecretKey(
     node.privateKey,

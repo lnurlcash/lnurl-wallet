@@ -15,17 +15,8 @@ describe('parseRecipient', () => {
     })
   })
 
-  it('reads a bare cx1 as a branch starting at index 0', () => {
-    const r = parseRecipient(encodeCx1(KEY, CHAIN), HOST)
-    expect(r?.kind).toBe('cx1')
-    expect(r?.kind === 'cx1' && r.hint.startIndex).toBe(0)
-    expect(r?.kind === 'cx1' && r.hint.cx1.chainCode).toEqual(CHAIN)
-  })
-
-  it("takes a cx1's :<index> suffix as the start index", () => {
-    const r = parseRecipient(`${encodeCx1(KEY, CHAIN)}:12`, HOST)
-    expect(r?.kind === 'cx1' && r.hint.startIndex).toBe(12)
-    expect(parseRecipient(`${encodeCx1(KEY, CHAIN)}:-1`, HOST)).toBeNull()
+  it('no longer accepts a cx1 branch', () => {
+    expect(parseRecipient(encodeCx1(KEY, CHAIN), HOST)).toBeNull()
   })
 
   it('reads a username, bare or at this same mint', () => {

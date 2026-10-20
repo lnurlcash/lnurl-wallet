@@ -161,3 +161,34 @@ describe('forgotten addresses', () => {
     ])
   })
 })
+
+describe('address slots', () => {
+  const SERVER = 'https://mint.example.test'
+
+  it('hands out slot 2 first, then one past every known slot', () => {
+    expect(mod.nextAddressSlot(SERVER)).toBe(2)
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, 2)
+    mod.addRegisteredAddress(SERVER, 'bob', undefined, 3)
+    expect(mod.nextAddressSlot(SERVER)).toBe(4)
+    expect(mod.nextAddressSlot('https://other.example.test')).toBe(2)
+  })
+
+  it('ignores legacy slot-less addresses when picking a slot', () => {
+    mod.addRegisteredAddress(SERVER, 'legacy')
+    expect(mod.nextAddressSlot(SERVER)).toBe(2)
+  })
+
+  it("never reuses a forgotten address's slot", () => {
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, 2)
+    mod.forgetRegisteredAddress(SERVER, 'alice')
+    expect(mod.forgottenAddresses()[0]?.slot).toBe(2)
+    expect(mod.nextAddressSlot(SERVER)).toBe(3)
+  })
+
+  it('persists the slot across a reload', async () => {
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, 4)
+    vi.resetModules()
+    const reloaded = await import('./addressRegistry')
+    expect(reloaded.registeredAddresses()[0]?.slot).toBe(4)
+  })
+})

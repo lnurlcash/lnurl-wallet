@@ -1,6 +1,7 @@
 import {createSignal} from 'solid-js'
 import {serviceOriginOf} from './lnurlcash'
 import {isValidNpub} from './nostrAddress'
+import {FIRST_ADDRESS_SLOT} from './cashSecrets'
 
 // LUD-25 (see 25.md's "Seed & derivation") - usernames THIS wallet
 // has registered for itself at a mint (GET /register), each backed by its
@@ -18,6 +19,11 @@ export type RegisteredAddress = {
   server: string
   username: string
   registeredAt: number
+  // which HD child of this mint's branch this address registered as its
+  // cx1 (see cashSecrets.ts's FIRST_ADDRESS_SLOT) - undefined for an
+  // address registered before addresses got their own branch, which uses
+  // the mint's domain branch itself
+  slot?: number
   // whatever npub AddressDialog sent alongside this claim (see
   // lib/addresses.ts's registerUsername), purely for this device's own
   // display - SERVICE is the one that actually serves it as a NIP-05
@@ -59,6 +65,13 @@ const STORAGE_KEY = 'lnurlcash_registered_addresses'
 // own validation of what it actually accepted
 const USERNAME_PATTERN = /^[a-z0-9_.-]{1,32}$/
 
+const readSlot = (value: unknown): number | undefined =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= FIRST_ADDRESS_SLOT
+    ? value
+    : undefined
+
 const normalizeOrigin = (value: string): string | null => {
   const origin = serviceOriginOf(value)
   try {
@@ -99,11 +112,13 @@ const readStored = (): RegisteredAddress[] => {
         typeof a?.nextScanIndex === 'number' && a.nextScanIndex >= 0
           ? a.nextScanIndex
           : undefined
+      const slot = readSlot(a?.slot)
       return [
         {
           server,
           username,
           registeredAt: a.registeredAt,
+          ...(slot !== undefined && {slot}),
           ...(npub && {npub}),
           ...(autoScanMinutes && {autoScanMinutes}),
           ...(lastAutoScanAt && {lastAutoScanAt}),
@@ -136,7 +151,8 @@ const persist = (addresses: RegisteredAddress[]): void => {
 export const addRegisteredAddress = (
   server: string,
   username: string,
-  npub?: string
+  npub?: string,
+  slot?: number
 ): void => {
   const origin = normalizeOrigin(server)
   if (!origin) throw new Error('Not a valid mint address.')
@@ -148,14 +164,34 @@ export const addRegisteredAddress = (
   const current = registeredAddresses()
   const existing = current.find(a => a.server === origin && a.username === name)
   if (existing) {
-    if (existing.npub === npub) return
-    persist(current.map(a => (a === existing ? {...a, npub} : a)))
+    if (existing.npub === npub && existing.slot === slot) return
+    persist(current.map(a => (a === existing ? {...a, npub, slot} : a)))
     return
   }
   persist([
     ...current,
-    {server: origin, username: name, registeredAt: Date.now(), npub}
+    {
+      server: origin,
+      username: name,
+      registeredAt: Date.now(),
+      ...(slot !== undefined && {slot}),
+      npub
+    }
   ])
+}
+
+// the slot a NEW address at `server` should register (see cashSecrets.ts's
+// FIRST_ADDRESS_SLOT): one past every slot this device knows is taken
+// there, registered or merely forgotten. Only as good as this device's own
+// records - a name claimed from another device on the same seed isn't
+// known here until it's reclaimed (addressRecovery.ts's
+// resolveAddressOwnership finds its slot then)
+export const nextAddressSlot = (server: string): number => {
+  const origin = normalizeOrigin(server)
+  const taken = [...registeredAddresses(), ...forgottenAddresses()]
+    .filter(a => a.server === origin && a.slot !== undefined)
+    .map(a => a.slot!)
+  return Math.max(FIRST_ADDRESS_SLOT - 1, ...taken) + 1
 }
 
 // Forgets this device's own record of a registration - purely local
@@ -182,7 +218,13 @@ export const removeRegisteredAddress = (
 // reclaim (see addressRecovery.ts's checkAddressOwnership for how a
 // reclaim decides whether the mint still has it on this wallet's branch).
 // Cleared again the moment the name is re-added by any route.
-export type ForgottenAddress = {server: string; username: string}
+export type ForgottenAddress = {
+  server: string
+  username: string
+  // kept so nextAddressSlot never hands a forgotten name's branch to a new
+  // one - see RegisteredAddress.slot
+  slot?: number
+}
 
 const FORGOTTEN_KEY = 'lnurlcash_forgotten_addresses'
 
@@ -197,8 +239,9 @@ const readForgotten = (): ForgottenAddress[] => {
         typeof a?.server === 'string' ? normalizeOrigin(a.server) : null
       const username =
         typeof a?.username === 'string' ? a.username.toLowerCase() : ''
+      const slot = readSlot(a?.slot)
       return server && USERNAME_PATTERN.test(username)
-        ? [{server, username}]
+        ? [{server, username, ...(slot !== undefined && {slot})}]
         : []
     })
   } catch {
@@ -229,12 +272,18 @@ export const forgetRegisteredAddress = (
   server: string,
   username: string
 ): void => {
-  removeRegisteredAddress(server, username)
   const origin = normalizeOrigin(server)
   const name = username.trim().toLowerCase()
+  const slot = registeredAddresses().find(
+    a => a.server === origin && a.username === name
+  )?.slot
+  removeRegisteredAddress(server, username)
   if (!origin) return
   dropForgotten(origin, name)
-  persistForgotten([...forgottenAddresses(), {server: origin, username: name}])
+  persistForgotten([
+    ...forgottenAddresses(),
+    {server: origin, username: name, ...(slot !== undefined && {slot})}
+  ])
 }
 
 // drops a forgotten name for good (it was taken by someone else, or the

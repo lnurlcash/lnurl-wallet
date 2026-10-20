@@ -1,5 +1,9 @@
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {cashAddressBranch, addressSecretAtIndex} from './cashSecrets'
+import {
+  addressBranch,
+  addressSecretAtIndex,
+  FIRST_ADDRESS_SLOT
+} from './cashSecrets'
 import {
   resolveMintInput,
   fetchPayRequest,
@@ -17,7 +21,11 @@ import {
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
 import {msatToSats} from './helpers'
-import {markAddressScanned} from './addressRegistry'
+import {
+  markAddressScanned,
+  registeredAddresses,
+  forgottenAddresses
+} from './addressRegistry'
 import type {Bearer, ActivityKind} from './storage'
 import type {IndexStatus} from './recovery'
 import type {NewBearer} from './WalletContext'
@@ -25,10 +33,10 @@ import type {NewBearer} from './WalletContext'
 // LUD-25 counterpart to recovery.ts's scanMintForNotes - same shape,
 // same dedup convention (existing bearers checked by serverOf+noteK1, see
 // receive.ts), but scans a REGISTERED address's own watch-only branch
-// (cashSecrets.ts's cashAddressBranch) at NOTE_PURPOSE_LIGHTNING_ADDRESS -
-// a separate counter from recovery.ts's own NOTE_PURPOSE_WALLET/
-// NOTE_PURPOSE_CHANGE scans of that same branch - via the public-commitment
-// lookup (src/lib/addresses.ts's scanForAddressNotes) rather than
+// (cashSecrets.ts's addressBranch, one per address) at
+// NOTE_PURPOSE_LIGHTNING_ADDRESS - never the counters recovery.ts's own
+// NOTE_PURPOSE_WALLET/NOTE_PURPOSE_CHANGE scans walk - via the
+// public-commitment lookup (src/lib/addresses.ts's scanForAddressNotes) rather than
 // re-deriving legacy hash-based secrets. Every note this finds signs its
 // own ck1 on the spot (signNoteOwnership) - the scan itself never redeems
 // anything, it only proves this wallet CAN.
@@ -68,6 +76,10 @@ export type AddressScanOutcome = {
 }
 
 export type AddressScanOptions = {
+  // the address's own branch (addressRegistry.ts's RegisteredAddress.slot,
+  // see cashSecrets.ts's FIRST_ADDRESS_SLOT) - undefined is the legacy
+  // domain branch. runAddressScan fills it in from the registry
+  slot?: number
   startIndex?: number
   // startIndex was picked by hand (AddressScanDialog's start index field): walk
   // from exactly there, never letting SERVICE's hint move it, and don't
@@ -99,7 +111,7 @@ export const scanRegisteredAddress = async (
   const startFloor = opts.startIndex ?? 0
   const floorOf = (start: number, highest: number | null): number =>
     Math.max(opts.exactStart ? 0 : start, (highest ?? -1) + 1)
-  // cashAddressBranch/cashAddressSecretAtIndex derive under the bare host
+  // addressBranch/addressSecretAtIndex derive under the bare host
   // (serverOf, same as this function's own `host` below) - never `server`
   // itself, which callers pass as a full origin (TrustedMint.server/
   // RegisteredAddress.server) for identity-tracking purposes unrelated to
@@ -121,7 +133,7 @@ export const scanRegisteredAddress = async (
       error: 'Not a valid mint address.'
     }
   }
-  const branch = cashAddressBranch(host)
+  const branch = addressBranch(host, opts.slot)
   if (!branch) {
     return {
       server,
@@ -226,7 +238,7 @@ export const scanRegisteredAddress = async (
         // failure can't discard a note already found this same pass
         onFound: result => {
           highestIndex = Math.max(highestIndex ?? -1, result.index)
-          const secretKey = addressSecretAtIndex(host, result.index)
+          const secretKey = addressSecretAtIndex(host, result.index, opts.slot)
           // the cash root can only disappear mid-scan if the wallet locked
           // while it was running - skip rather than crash; a re-scan once
           // unlocked again picks this index right back up
@@ -322,7 +334,15 @@ export const runAddressScan = async (
   wallet: AddressScanWalletOps,
   opts: AddressScanOptions = {}
 ): Promise<AddressScanOutcome> => {
-  const result = await scanRegisteredAddress(server, username, existing, opts)
+  const slot =
+    opts.slot ??
+    registeredAddresses().find(
+      a => a.server === server && a.username === username
+    )?.slot
+  const result = await scanRegisteredAddress(server, username, existing, {
+    ...opts,
+    slot
+  })
   for (const note of result.recovered) {
     await wallet.addBearer(note)
     wallet.logActivity(
@@ -348,31 +368,57 @@ export const runAddressScan = async (
 // - 'unknown': couldn't tell (offline, no seed, no text/cpub advertised)
 export type AddressOwnership = 'ours' | 'not-ours' | 'unregistered' | 'unknown'
 
-export const checkAddressOwnership = async (
+// how many address slots past the highest one this device knows about a
+// reclaim still checks - covers names claimed from another device on the
+// same seed, which this device has no record of
+const SLOT_PROBE = 20
+
+// checkAddressOwnership, plus WHICH of this wallet's branches the mint has
+// on file (the legacy domain branch is `slot: undefined`) - what a reclaim
+// needs to know to re-add the address with the right keys
+export const resolveAddressOwnership = async (
   server: string,
   username: string
-): Promise<AddressOwnership> => {
+): Promise<{ownership: AddressOwnership; slot?: number}> => {
   let host: string
   try {
     host = new URL(server).host
   } catch {
-    return 'unknown'
+    return {ownership: 'unknown'}
   }
-  const branch = cashAddressBranch(host)
   const payUrl = resolveMintInput(`${username}@${host}`)
-  if (!branch || !payUrl) return 'unknown'
+  if (!payUrl || !addressBranch(host)) return {ownership: 'unknown'}
+  let onFile
   try {
-    const info = await fetchPayRequest(payUrl)
-    const onFile = info.internalTransfer?.cx1
-    if (!onFile) return 'unknown'
-    const same =
-      bytesToHex(onFile.pubkeyXOnly) === bytesToHex(branch.pubkeyXOnly) &&
-      bytesToHex(onFile.chainCode) === bytesToHex(branch.chainCode)
-    return same ? 'ours' : 'not-ours'
+    onFile = (await fetchPayRequest(payUrl)).internalTransfer?.cx1
   } catch (err) {
     if (err instanceof ServiceError && /unknown user/i.test(err.reason)) {
-      return 'unregistered'
+      return {ownership: 'unregistered'}
     }
-    return 'unknown'
+    return {ownership: 'unknown'}
   }
+  if (!onFile) return {ownership: 'unknown'}
+  const known = [...registeredAddresses(), ...forgottenAddresses()]
+    .filter(a => a.slot !== undefined)
+    .map(a => a.slot!)
+  const last = Math.max(FIRST_ADDRESS_SLOT - 1, ...known) + SLOT_PROBE
+  const slots: (number | undefined)[] = [undefined]
+  for (let slot = FIRST_ADDRESS_SLOT; slot <= last; slot++) slots.push(slot)
+  for (const slot of slots) {
+    const branch = addressBranch(host, slot)
+    if (
+      branch &&
+      bytesToHex(onFile.pubkeyXOnly) === bytesToHex(branch.pubkeyXOnly) &&
+      bytesToHex(onFile.chainCode) === bytesToHex(branch.chainCode)
+    ) {
+      return {ownership: 'ours', slot}
+    }
+  }
+  return {ownership: 'not-ours'}
 }
+
+export const checkAddressOwnership = async (
+  server: string,
+  username: string
+): Promise<AddressOwnership> =>
+  (await resolveAddressOwnership(server, username)).ownership

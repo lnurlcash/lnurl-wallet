@@ -19,10 +19,11 @@ import {
   registerUsername,
   unregisterUsername
 } from '../lnurlcash'
-import {cashAddressBranch, cashAddressSecretAtIndex} from '../cashSecrets'
+import {addressBranch, addressProofKey} from '../cashSecrets'
 import {
   registeredAddresses,
   addRegisteredAddress,
+  nextAddressSlot,
   removeRegisteredAddress,
   forgetRegisteredAddress,
   forgottenAddresses,
@@ -30,7 +31,11 @@ import {
   type RegisteredAddress
 } from '../addressRegistry'
 import {isValidNpub} from '../nostrAddress'
-import {checkAddressOwnership, type AddressOwnership} from '../addressRecovery'
+import {
+  checkAddressOwnership,
+  resolveAddressOwnership,
+  type AddressOwnership
+} from '../addressRecovery'
 
 // why an unclaim failed, once checkAddressOwnership has looked - 'ours'
 // and 'unknown' get no extra text (the mint's own error already says it)
@@ -43,20 +48,31 @@ const OWNERSHIP_PROBLEM: Partial<Record<AddressOwnership, string>> = {
 
 export type AddressDialogProps = {
   server: string
+  // the registered address to manage - omitted to claim a new one
+  username?: string
   onClose: () => void
 }
 
 // LUD-25's cx1 registration (see 25.md's Seed & derivation) AND
 // managing an already-claimed one - npub, unclaiming - scoped to one mint
-// at a time and opened from that mint's card on the Address page.
+// at a time and opened from that mint's card on the Address page. A mint
+// can hold many addresses: each new claim registers its own HD-child
+// branch (cashSecrets.ts's FIRST_ADDRESS_SLOT/addressBranch), so they never
+// share keys or a note counter.
 // Address IDENTITY only: checking for new notes, and the auto-check
 // scheduler that triggers that automatically, live in the sibling
 // AddressScanDialog, opened from its own button on the same card.
 const AddressDialog: Component<AddressDialogProps> = props => {
   const {state} = useWallet()
-  const registered = createMemo(() =>
-    registeredAddresses().find(a => a.server === props.server)
-  )
+  // set once a claim from this dialog succeeds, so it re-renders straight
+  // into the manage view for that address instead of closing
+  const [claimedName, setClaimedName] = createSignal<string | null>(null)
+  const registered = createMemo(() => {
+    const name = props.username ?? claimedName()
+    return registeredAddresses().find(
+      a => a.server === props.server && a.username === name
+    )
+  })
 
   // ---- claim (no registration yet) ----
   const [username, setUsername] = createSignal('')
@@ -79,18 +95,12 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       notify('Not a valid npub.', NotifyKind.ERROR)
       return
     }
-    // cashAddressBranch/cashAddressSecretAtIndex derive under the bare
-    // host (serverOf), never props.server's own full origin directly - see
-    // src/lib/urls.ts's serverOf for why a seed-derived branch must not
-    // fragment across schemes/ports the way a signing-key pin legitimately
-    // does
-    const branch = cashAddressBranch(serverOf(props.server))
-    // this branch's own index-0 note secret - required as this request's
-    // ownership proof (see lib/signature.ts's signAddressProof), even for
-    // a fresh claim: SERVICE only checks it against whatever's already on
-    // file, so it's harmless to always send
-    const proofKey = cashAddressSecretAtIndex(serverOf(props.server), 0)
-    if (!branch || !proofKey) {
+    // addressBranch/addressProofKey derive under the bare host (serverOf),
+    // never props.server's own full origin directly - see src/lib/urls.ts's
+    // serverOf for why a seed-derived branch must not fragment across
+    // schemes/ports the way a signing-key pin legitimately does
+    const host = serverOf(props.server)
+    if (!addressBranch(host)) {
       notify(
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
         NotifyKind.ERROR
@@ -106,35 +116,53 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       // still needs the round trip. A name on someone else's branch is
       // refused here with a clearer reason than the mint's own "Invalid
       // ownership signature."
-      const ownership = await checkAddressOwnership(props.server, name)
+      const {ownership, slot: ownedSlot} = await resolveAddressOwnership(
+        props.server,
+        name
+      )
       if (ownership === 'not-ours') {
         throw new Error(
           `${name}@${serverOf(props.server)} is registered at this mint to a different key than this wallet's seed - it can't be reclaimed from here.`
         )
       }
       if (ownership === 'ours' && !npubValue) {
-        addRegisteredAddress(props.server, name)
+        addRegisteredAddress(props.server, name, undefined, ownedSlot)
+        setClaimedName(name)
         notify(
           `Reclaimed ${name}@${serverOf(props.server)} - the mint still has it registered to this wallet.`,
           NotifyKind.SUCCESS
         )
         return
       }
-      const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+      // re-registering one of ours (to change its npub) keeps its own
+      // branch - SERVICE checks the proof against the cx1 already on file.
+      // A fresh claim takes the next unused slot
+      const slot =
+        ownership === 'ours' ? ownedSlot : nextAddressSlot(props.server)
+      const branch = addressBranch(host, slot)
+      // this branch's own index-0 wallet note secret - required as this
+      // request's ownership proof (see lib/signature.ts's
+      // signAddressProof), even for a fresh claim: SERVICE checks it
+      // against whatever's on file, or the submitted cx1 if nothing is
+      const proofKey = addressProofKey(host, slot)
+      if (!branch || !proofKey) {
+        throw new Error(
+          'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
+        )
+      }
       await registerUsername(
         props.server,
         name,
-        cx1,
+        encodeCx1(branch.pubkeyXOnly, branch.chainCode),
         proofKey,
         npubValue || undefined
       )
-      addRegisteredAddress(props.server, name, npubValue || undefined)
+      addRegisteredAddress(props.server, name, npubValue || undefined, slot)
+      setClaimedName(name)
       notify(
         `Registered ${name}@${serverOf(props.server)}.`,
         NotifyKind.SUCCESS
       )
-      // stays open - registered() flips truthy now, so this same dialog
-      // re-renders straight into the manage view below instead of closing
     } catch (err) {
       notify((err as Error).message, NotifyKind.ERROR)
     } finally {
@@ -160,7 +188,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   }
 
   const unclaim = async (addr: RegisteredAddress) => {
-    const proofKey = cashAddressSecretAtIndex(serverOf(addr.server), 0)
+    const proofKey = addressProofKey(serverOf(addr.server), addr.slot)
     if (!proofKey) {
       notify(
         'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',

@@ -1,7 +1,11 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
-import {deriveNotePubkey, NOTE_PURPOSE_WALLET} from './lib/recoverableNotes'
+import {
+  deriveNotePubkey,
+  NOTE_PURPOSE_WALLET,
+  NOTE_PURPOSE_LIGHTNING_ADDRESS
+} from './lib/recoverableNotes'
 
 // same in-memory localStorage stand-in as storage.test.ts/trustedMints.test.ts -
 // cashSecrets.ts persists per-SERVICE indices there, and a fresh module graph
@@ -313,5 +317,62 @@ describe('pending output secrets', () => {
     cashSecrets.recordPendingOutputSecret('mint.example', 'aa'.repeat(32))
     cashSecrets.clearPendingOutputSecrets()
     expect(cashSecrets.pendingOutputSecrets()).toEqual({})
+  })
+})
+
+describe('address slots (one branch per registered address)', () => {
+  it('gives every slot its own branch, distinct from the legacy one', () => {
+    loadRoot()
+    const hex = (slot?: number) =>
+      bytesToHex(cashSecrets.addressBranch('mint.example', slot)!.pubkeyXOnly)
+    expect(cashSecrets.FIRST_ADDRESS_SLOT).toBe(2)
+    expect(hex()).toBe(
+      bytesToHex(cashSecrets.cashAddressBranch('mint.example')!.pubkeyXOnly)
+    )
+    expect(new Set([hex(), hex(2), hex(3), hex(4)]).size).toBe(4)
+    expect(hex(2)).toBe(hex(2))
+  })
+
+  it("proves ownership with the slot branch's own wallet index-0 key", () => {
+    loadRoot()
+    expect(bytesToHex(cashSecrets.addressProofKey('mint.example')!)).toBe(
+      bytesToHex(cashSecrets.cashAddressSecretAtIndex('mint.example', 0)!)
+    )
+    const branch = cashSecrets.addressBranch('mint.example', 2)!
+    expect(
+      bytesToHex(
+        schnorr.getPublicKey(cashSecrets.addressProofKey('mint.example', 2)!)
+      )
+    ).toBe(
+      bytesToHex(
+        deriveNotePubkey(
+          branch.pubkeyXOnly,
+          branch.chainCode,
+          NOTE_PURPOSE_WALLET,
+          0
+        )
+      )
+    )
+  })
+
+  it("derives a slot's address note keys on its own branch", () => {
+    loadRoot()
+    const branch = cashSecrets.addressBranch('mint.example', 3)!
+    expect(
+      bytesToHex(
+        schnorr.getPublicKey(
+          cashSecrets.addressSecretAtIndex('mint.example', 7, 3)!
+        )
+      )
+    ).toBe(
+      bytesToHex(
+        deriveNotePubkey(
+          branch.pubkeyXOnly,
+          branch.chainCode,
+          NOTE_PURPOSE_LIGHTNING_ADDRESS,
+          7
+        )
+      )
+    )
   })
 })
