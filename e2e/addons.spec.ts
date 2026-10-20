@@ -125,3 +125,15 @@ test.describe('Addon error isolation', () => {
     await expect(page).toHaveURL(/#\/settings/)
   })
 })
+
+test.describe('QR Code addon', () => {
+  test('shows a QR code for whatever is entered', async ({page}) => {
+    await setUpWallet(page)
+    await enableAddon(page, 'QR Code')
+
+    await page.goto('/#/addons/qr-code')
+    await expect(page.locator('.qrcode')).toHaveCount(0)
+    await page.getByLabel('Text').fill('hello@example.test')
+    await expect(page.locator('.qrcode svg')).toBeVisible()
+  })
+})

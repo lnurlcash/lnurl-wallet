@@ -18,7 +18,8 @@ import {
   IoLinkSharp,
   IoServerSharp,
   IoLockClosedSharp,
-  IoCalculatorSharp
+  IoCalculatorSharp,
+  IoQrCodeSharp
 } from 'solid-icons/io'
 
 // manifests reference an icon by name, never a component - keeps a
@@ -43,5 +44,6 @@ export const ADDON_ICONS: Record<string, Component> = {
   link: IoLinkSharp,
   server: IoServerSharp,
   lock: IoLockClosedSharp,
-  calculator: IoCalculatorSharp
+  calculator: IoCalculatorSharp,
+  qrcode: IoQrCodeSharp
 }

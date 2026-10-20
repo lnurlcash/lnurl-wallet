@@ -4,6 +4,7 @@ import {currencyAddon} from './currency/manifest'
 import {bech32DecoderAddon} from './bech32Decoder/manifest'
 import {seedGeneratorAddon} from './seedGenerator/manifest'
 import {lnurlToolsAddon} from './lnurlTools/manifest'
+import {qrCodeAddon} from './qrCode/manifest'
 import {nostrToolsAddon} from './nostrTools/manifest'
 import {giftCardAddon} from './giftcard/manifest'
 import {taprootAddon} from './taproot/manifest'
@@ -28,6 +29,7 @@ export const ADDONS: Addon[] = [
   bech32DecoderAddon,
   seedGeneratorAddon,
   lnurlToolsAddon,
+  qrCodeAddon,
   nostrToolsAddon,
   giftCardAddon,
   taprootAddon,
