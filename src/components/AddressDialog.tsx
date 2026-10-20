@@ -48,15 +48,10 @@ export type AddressDialogProps = {
 
 // LUD-25's cx1 registration (see 25.md's Seed & derivation) AND
 // managing an already-claimed one - npub, unclaiming - scoped to one mint
-// at a time and opened from that mint's own "@" button on the Mint page.
+// at a time and opened from that mint's card on the Address page.
 // Address IDENTITY only: checking for new notes, and the auto-check
-// scheduler that triggers that automatically, both live in the sibling
-// RescanDialog now, opened from its own button - the two used to be
-// crammed into this one dialog, which made "is there anything to scan
-// here" depend on whether this wallet happened to have claimed a
-// username, when in truth a rescan is exactly as meaningful (and exactly
-// the same seed-derived branch, see cashSecrets.ts's cashAddressBranch)
-// with or without one.
+// scheduler that triggers that automatically, live in the sibling
+// AddressScanDialog, opened from its own button on the same card.
 const AddressDialog: Component<AddressDialogProps> = props => {
   const {state} = useWallet()
   const registered = createMemo(() =>

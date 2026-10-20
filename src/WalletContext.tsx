@@ -103,6 +103,10 @@ export type NewBearer = {
   mintPubkey?: string
   deviceId?: string
   deviceHash?: string
+  // initial Bearer.label (see noteTags.ts for its "[tag]" prefix syntax) -
+  // e.g. addressRecovery.ts tags a found note with the address/index it
+  // was scanned from
+  label?: string
 }
 
 export type WalletContextType = {

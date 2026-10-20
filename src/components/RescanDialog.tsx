@@ -1,6 +1,6 @@
 import type {Component} from 'solid-js'
-import {Show, For, createMemo, createSignal} from 'solid-js'
-import {IoRefreshSharp, IoSearchSharp, IoTimeSharp} from 'solid-icons/io'
+import {Show, createSignal} from 'solid-js'
+import {IoRefreshSharp, IoSearchSharp} from 'solid-icons/io'
 
 import Dialog from './Dialog'
 import IndexMap, {type IndexMapCells} from './IndexMap'
@@ -16,58 +16,33 @@ import {
   mergeCashChangeSecretIndices
 } from '../cashSecrets'
 import {
-  registeredAddresses,
-  setAddressAutoScan,
-  ADDRESS_SCAN_OPTIONS,
-  ADDRESS_SCAN_LABEL,
-  type RegisteredAddress,
-  type AddressScanMinutes
-} from '../addressRegistry'
-import {runAddressScan} from '../addressRecovery'
-import {
   scanMintForNotes,
   type IndexStatus,
   type MintScanPass
 } from '../recovery'
-import {requestNotificationPermission} from '../notifications'
 
 export type RescanDialogProps = {
   server: string
   onClose: () => void
 }
 
-// LUD-25 recovery, split out of AddressDialog: rescanning is exactly the
-// same seed-derived-branch walk (cashSecrets.ts's cashAddressBranch)
-// whether or not this wallet has claimed a username@mint address here -
-// what differs is only whether SERVICE has a next-index hint to offer
-// (LUD-25's text/cpub metadata, registered-address-only). So this
-// dialog always offers the plain mint-bearer rescan (recovery.ts's
-// scanMintForNotes - notes this wallet minted/rotated/split/merged
-// directly here), and additionally offers the address-aware one
-// (addressRecovery.ts's scanRegisteredAddress, which also consults and
-// shows that hint) whenever an address happens to be registered. Opened
-// from its own button on the trusted-mint card, independent of the "@"
-// address button (AddressDialog) - claiming an address and recovering
-// funds are two different jobs that don't need to share a dialog, or a
-// disabled state, with each other.
+// LUD-25 recovery of this mint's own seed-derived bearer notes
+// (recovery.ts's scanMintForNotes - notes this wallet minted/rotated/
+// split/merged directly here), walking the wallet and change counters in
+// turn. Opened from the trusted-mint card's own "Rescan" button on the
+// Mint page. A registered username@mint address's own notes are a
+// separate counter, checked from the Address page instead (see
+// AddressScanDialog) - this dialog is the same with or without one.
 //
-// NOTE: today these two scans still walk two DIFFERENT branches for
-// historical reasons - the mint-bearer one derives its domain via
-// serverOf() (bare host), the address-aware one via the full origin
-// (props.server) - see addressRecovery.ts's own cashAddressBranch callers
-// vs recovery.ts's. Unifying that key space (so a note minted directly
-// here and a registered address's own notes always live on one branch)
+// NOTE: the two scans still walk two DIFFERENT branches for historical
+// reasons - this one derives its domain via serverOf() (bare host), the
+// address-aware one via the full origin - see addressRecovery.ts's own
+// cashAddressBranch callers vs recovery.ts's. Unifying that key space
 // would need src/lib/request.ts's generatePubkeySecret to also switch
-// conventions, which is a real, separate, higher-stakes migration - not
-// something to fold into a UI split. Until then, both sections here are
-// kept and run independently so neither history goes unchecked.
+// conventions, which is a real, separate, higher-stakes migration.
 const RescanDialog: Component<RescanDialogProps> = props => {
   const {bearers, addBearer, logActivity} = useWallet()
-  const registered = createMemo(() =>
-    registeredAddresses().find(a => a.server === props.server)
-  )
 
-  // ---- mint-bearer rescan (always available, address or not) ----
   const [mintBusy, setMintBusy] = createSignal(false)
   const [mintProgress, setMintProgress] = createSignal<{
     index: number
@@ -168,96 +143,6 @@ const RescanDialog: Component<RescanDialogProps> = props => {
     }
   }
 
-  // ---- address-aware rescan (only when a username is registered here) ----
-  const [addrBusy, setAddrBusy] = createSignal(false)
-  const [addrIndex, setAddrIndex] = createSignal<number | null>(null)
-  const [addrCells, setAddrCells] = createSignal<IndexMapCells>({})
-  const [showAutoCheck, setShowAutoCheck] = createSignal(false)
-  // "Check notes" start index: blank resumes from this device's own floor
-  // (and lets SERVICE's hint move it forward, see resolveScanStartIndex);
-  // a typed number is walked from exactly as given
-  const [startInput, setStartInput] = createSignal('')
-
-  // enabling auto-check is the one user gesture this feature has to hang
-  // a Notification permission prompt off of (TODO.md) - most browsers
-  // silently drop a request made outside a direct gesture, so this can't
-  // wait until the first scan actually finds something
-  const setAutoCheck = (
-    addr: RegisteredAddress,
-    minutes: AddressScanMinutes
-  ) => {
-    setAddressAutoScan(addr.server, addr.username, minutes)
-    if (minutes > 0) void requestNotificationPermission()
-  }
-
-  // what the most recent Check notes/Full rescan pass (this dialog
-  // session only - not persisted) actually saw: where it started walking
-  // forward from, and SERVICE's own advertised next-index hint at that
-  // moment. Shown alongside addr.nextScanIndex (this device's own
-  // persisted floor, always available with no scan needed) so a holder can
-  // see all three numbers - SERVICE's, this device's, and where the last
-  // pass actually started - side by side rather than having to trust any
-  // one of them blindly (see resolveScanStartIndex's own doc comment for
-  // why the SERVICE hint alone is never enough).
-  const [lastCheck, setLastCheck] = createSignal<{
-    checkedFrom: number
-    serviceHint: number | null
-  } | null>(null)
-
-  // "Check notes"/"Full rescan" - "check notes" resumes from wherever this
-  // address's own nextScanIndex (or SERVICE's own metadata hint) left off,
-  // or from the start index typed in; "full rescan" always re-walks from 0.
-  const checkNotes = async (mode: 'incremental' | 'all') => {
-    const addr = registered()
-    if (!addr || addrBusy()) return
-    const typed = startInput().trim()
-    const exactStart = mode === 'incremental' && typed !== ''
-    const startIndex = Number(typed)
-    if (exactStart && !(Number.isInteger(startIndex) && startIndex >= 0)) {
-      notify('Start index must be a whole number, 0 or more.', NotifyKind.ERROR)
-      return
-    }
-    setAddrBusy(true)
-    setAddrIndex(null)
-    setAddrCells({})
-    try {
-      const result = await runAddressScan(
-        addr.server,
-        addr.username,
-        bearers(),
-        {addBearer, logActivity},
-        {
-          startIndex: exactStart
-            ? startIndex
-            : mode === 'incremental'
-              ? (addr.nextScanIndex ?? 0)
-              : 0,
-          exactStart,
-          onProgress: setAddrIndex,
-          onIndex: setCell(setAddrCells)
-        }
-      )
-      setLastCheck({
-        checkedFrom: result.checkedFrom,
-        serviceHint: result.serviceHint
-      })
-      if (result.error) {
-        notify(result.error, NotifyKind.ERROR)
-      } else {
-        const total = result.recovered.reduce((sum, n) => sum + n.amount, 0)
-        notify(
-          result.recovered.length > 0
-            ? `Found ${result.recovered.length} note${result.recovered.length === 1 ? '' : 's'} (${msatToSats(total)} sats).`
-            : 'No new notes found.',
-          NotifyKind.SUCCESS
-        )
-      }
-    } finally {
-      setAddrBusy(false)
-      setAddrIndex(null)
-    }
-  }
-
   return (
     <Dialog onClose={props.onClose}>
       <h4>
@@ -343,109 +228,6 @@ const RescanDialog: Component<RescanDialogProps> = props => {
           mintProgress()?.pass === 'change' ? mintProgress()!.index : null
         }
       />
-      <Show when={registered()}>
-        {addr => (
-          <>
-            <hr />
-            <p class="bearer-label">
-              {addr().username}@{serverOf(addr().server)}'s registered notes
-            </p>
-            <p class="bearer-hint">
-              Checked up to index: {addr().nextScanIndex ?? 0}
-              <Show when={lastCheck()}>
-                {info => (
-                  <>
-                    {' '}
-                    · started this pass from {info().checkedFrom} · mint's
-                    suggested next index:{' '}
-                    {info().serviceHint ?? 'not advertised'}
-                  </>
-                )}
-              </Show>
-            </p>
-            <label for="rescan-start-index">Start index</label>
-            <input
-              id="rescan-start-index"
-              type="number"
-              min="0"
-              step="1"
-              placeholder={`${addr().nextScanIndex ?? 0} (resume)`}
-              value={startInput()}
-              disabled={addrBusy()}
-              onInput={e => setStartInput(e.currentTarget.value)}
-              onKeyDown={e => e.key === 'Enter' && checkNotes('incremental')}
-            />
-            <p class="bearer-hint">
-              Leave blank to resume where this device left off. Notes are also
-              re-checked up to the gap limit below the start index, and the scan
-              always walks past the mint's suggested next index.
-            </p>
-            <div class="btns">
-              <button
-                disabled={offlineMode() || !hasCashRoot() || addrBusy()}
-                title={
-                  offlineMode()
-                    ? 'Offline mode is on'
-                    : `Check ${addr().username}@${serverOf(addr().server)} for new notes, from the start index above (or where the last check left off)`
-                }
-                onClick={() => checkNotes('incremental')}
-              >
-                <Show when={addrBusy()} fallback={<IoSearchSharp />}>
-                  <IoRefreshSharp class="spin" />
-                </Show>
-                &nbsp;Check notes
-              </button>
-              <button
-                class="icon-btn icon-btn-gap"
-                disabled={offlineMode() || !hasCashRoot() || addrBusy()}
-                title="Full rescan - re-walk every index from 0, ignoring what's already been checked"
-                onClick={() => checkNotes('all')}
-              >
-                <IoRefreshSharp />
-                &nbsp;Full rescan
-              </button>
-              <button
-                class="icon-btn icon-btn-gap"
-                classList={{active: showAutoCheck()}}
-                disabled={addrBusy()}
-                title="Auto-check on a timer"
-                onClick={() => setShowAutoCheck(v => !v)}
-              >
-                <IoTimeSharp />
-                &nbsp;Auto-check
-              </button>
-            </div>
-            <Show when={addrIndex() !== null}>
-              <p class="scan-progress">
-                Checking index <strong>{addrIndex()}</strong>
-              </p>
-            </Show>
-            <IndexMap
-              label="Address notes"
-              cells={addrCells()}
-              current={addrIndex()}
-            />
-            <Show when={showAutoCheck()}>
-              <p class="bearer-label">Auto-check every</p>
-              <div class="btns">
-                <For each={ADDRESS_SCAN_OPTIONS}>
-                  {option => (
-                    <button
-                      type="button"
-                      classList={{
-                        active: (addr().autoScanMinutes ?? 0) === option
-                      }}
-                      onClick={() => setAutoCheck(addr(), option)}
-                    >
-                      {ADDRESS_SCAN_LABEL[option]}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </>
-        )}
-      </Show>
     </Dialog>
   )
 }

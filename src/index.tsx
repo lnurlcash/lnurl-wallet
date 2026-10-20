@@ -20,6 +20,7 @@ import Hero from './pages/Hero'
 import Wallet from './pages/Wallet'
 import Setup from './pages/Setup'
 import Mint from './pages/Mint'
+import Address from './pages/Address'
 import Activity from './pages/Activity'
 import Docs from './pages/Docs'
 import Vault from './pages/Vault'
@@ -84,6 +85,7 @@ const cleanup = render(
       <Route path="/wallet" component={Wallet} />
       <Route path="/setup" component={Setup} />
       <Route path="/mint" component={Mint} />
+      <Route path="/address" component={Address} />
       {/* /mints merged into /mint (trusted-mint management now lives at
       the bottom of that page) - kept as a redirect so old links/bookmarks
       still land somewhere useful instead of 404ing */}
@@ -103,11 +105,6 @@ const cleanup = render(
       <Route path="/addons/:addonId" component={AddonRun} />
       <Route path="/vault" component={Vault} />
       <Route path="/claim" component={Claim} />
-      {/* /address merged into /mint (claiming/checking/unclaiming/auto-
-      check now live in that trusted-mint card's own "@" dialog, see
-      AddressDialog.tsx) - kept as a redirect so old links/bookmarks still
-      land somewhere useful instead of 404ing */}
-      <Route path="/address" component={() => <Navigate href="/mint" />} />
       <Route path="*" component={() => <h1>Page not found</h1>} />
     </HashRouter>
   ),

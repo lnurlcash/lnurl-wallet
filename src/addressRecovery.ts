@@ -69,7 +69,7 @@ export type AddressScanOutcome = {
 
 export type AddressScanOptions = {
   startIndex?: number
-  // startIndex was picked by hand (RescanDialog's start index field): walk
+  // startIndex was picked by hand (AddressScanDialog's start index field): walk
   // from exactly there, never letting SERVICE's hint move it, and don't
   // treat it as an already-checked floor either - nothing below it was
   // necessarily ever checked, so nextScanIndex only advances past what
@@ -80,6 +80,15 @@ export type AddressScanOptions = {
   // every index's final verdict - see recovery.ts's IndexStatus
   onIndex?: (index: number, status: IndexStatus) => void
 }
+
+// a found note's initial label: the address it was paid to as a tag (so
+// the Wallet page's tag filter groups every note from one address) plus
+// the branch index it was scanned at - see noteTags.ts for the syntax
+export const addressNoteLabel = (
+  username: string,
+  host: string,
+  index: number
+): string => `[${username}@${host}] index ${index}`
 
 export const scanRegisteredAddress = async (
   server: string,
@@ -245,7 +254,8 @@ export const scanRegisteredAddress = async (
               callback: result.info.callback,
               amount: result.info.maxWithdrawable,
               verified: true,
-              mintPubkey: result.info.mintPubkey
+              mintPubkey: result.info.mintPubkey,
+              label: addressNoteLabel(username, host, result.index)
             })
           }
           opts.onIndex?.(result.index, alreadyHeld ? 'held' : 'recovered')
@@ -298,7 +308,7 @@ export type AddressScanWalletOps = {
 
 // runs scanRegisteredAddress and actually claims anything it finds into
 // the wallet (addBearer + activity log) - the one piece every caller
-// (AddressDialog's "check notes"/"full rescan", AddressAutoScanner's
+// (AddressScanDialog's "check notes"/"full rescan", AddressAutoScanner's
 // periodic tick) needs identically. Always
 // records how far this pass got (markAddressScanned) so the NEXT
 // incremental "check notes" pass resumes past it, regardless of whether

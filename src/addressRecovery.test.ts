@@ -3,6 +3,7 @@ import {bytesToHex, utf8ToBytes} from '@noble/hashes/utils.js'
 import {sha256} from '@noble/hashes/sha2.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import type {Bearer} from './storage'
+import {parseLabelTags} from './noteTags'
 import {
   deriveNotePubkey,
   encodeCk1,
@@ -127,6 +128,16 @@ describe('scanRegisteredAddress', () => {
     const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
     expect(owner).not.toBeNull()
     expect(bytesToHex(owner!.pubkeyXOnly)).toBe(expectedPk)
+  })
+
+  it('labels a found note with its address tag and scanned index', async () => {
+    vi.stubGlobal('fetch', fakeMint([0, 2]) as unknown as typeof fetch)
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    const labels = result.recovered.map(n => parseLabelTags(n.label!))
+    expect(labels).toEqual([
+      {tags: [encodeURIComponent(`${USERNAME}@${HOST}`)], text: 'index 0'},
+      {tags: [encodeURIComponent(`${USERNAME}@${HOST}`)], text: 'index 2'}
+    ])
   })
 
   it('attaches an already-disclosed offline-verification sig immediately', async () => {

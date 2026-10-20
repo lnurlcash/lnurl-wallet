@@ -9,7 +9,8 @@ import {
   IoBookSharp,
   IoCogSharp,
   IoHardwareChipSharp,
-  IoReceiptSharp
+  IoReceiptSharp,
+  IoAtCircleSharp
 } from 'solid-icons/io'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
@@ -20,7 +21,7 @@ import {effectiveNavPosition} from '../addons/navPosition'
 import {vaultEnabled} from '../vaultFeature'
 
 // enabled addons (bundled or custom) that asked for a nav entry (see
-// addons/types.ts's AddonNavEntry) - 'left' joins Wallet/Mint/Vault
+// addons/types.ts's AddonNavEntry) - 'left' joins Wallet/Mint/Address/Vault
 // (.nav-links), 'right' joins Docs/Activity/Settings (.nav-persistent),
 // same as any other link there. Disabled addons contribute nothing here
 // regardless of what their manifest declares. Position itself is a
@@ -87,6 +88,18 @@ const Nav = () => {
             <IoLibrarySharp />
             &nbsp;Mint
           </A>
+          {/* claiming/checking username@mint addresses - needs an
+          unlocked wallet (see pages/Address.tsx), so hidden with none */}
+          <Show when={state() !== 'none'}>
+            <A
+              href="/address"
+              class="nav-link"
+              title="Claim and check username@mint Lightning Addresses"
+            >
+              <IoAtCircleSharp />
+              &nbsp;Address
+            </A>
+          </Show>
           {/* still alpha (TODO.md) - off by default, a holder opts in via
           Settings instead of this permanently occupying a nav slot */}
           <Show when={vaultEnabled()}>
