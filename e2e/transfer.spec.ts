@@ -100,6 +100,7 @@ const mockDestinationAddress = async (
       payCallbacks.push(url)
       return json(route, {
         pr: INVOICE,
+        disposable: false,
         ...(withVerify ? {verify: `${DEST}/verify/1`} : {})
       })
     }
@@ -168,6 +169,35 @@ test.describe('Transfer to a Lightning Address', () => {
       // must never name one
       expect(payCallbacks[0].searchParams.has('comment')).toBe(false)
       expect(source.melted).toBe(INVOICE)
+      // LUD-11: the address said it's reusable - kept as a melt destination
+      const saved = await page.evaluate(() =>
+        localStorage.getItem('lnurlcash_storeable_melt_addresses')
+      )
+      expect(JSON.parse(saved ?? '[]')).toEqual([
+        expect.objectContaining({address: ADDRESS, internalTransfer: true})
+      ])
     })
   }
+
+  test('offers a saved address as a one-click destination', async ({page}) => {
+    await page.addInitScript(
+      ([address]) =>
+        localStorage.setItem(
+          'lnurlcash_storeable_melt_addresses',
+          JSON.stringify([{address, addedAt: 1, internalTransfer: true}])
+        ),
+      [ADDRESS]
+    )
+    await setUpWallet(page)
+    const source = await mockSourceMint(page)
+    await mockDestinationAddress(page, source, {withVerify: true})
+
+    await receiveSourceNote(page)
+    await page.locator('.bearer-card').first().click()
+    await page.locator('.transfer-btn').click()
+    await page.getByRole('button', {name: ADDRESS}).click()
+    await expect(
+      page.getByText(`to ${ADDRESS}? It lands as a note`)
+    ).toBeVisible()
+  })
 })

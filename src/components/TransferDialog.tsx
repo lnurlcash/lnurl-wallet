@@ -46,6 +46,12 @@ import {
   copyToClipboard
 } from '../helpers'
 import {isMintTrusted, addTrustedMint, trustedMints} from '../trustedMints'
+import {
+  storeableMints,
+  addStoreableMint,
+  storeableMeltAddresses,
+  addStoreableMeltAddress
+} from '../storeableLinks'
 import {offlineMode} from '../offlineMode'
 import Qr from './Qr'
 import Dialog from './Dialog'
@@ -168,6 +174,20 @@ const TransferDialog: Component<TransferDialogProps> = props => {
     lookup()
   }
 
+  // LUD-11 links saved from earlier mints, melts and transfers - both
+  // registries, since a transfer goes either to a mint or to a registered
+  // address. Anything the trusted-mint buttons above already offer is
+  // left out, and the lookup still decides whether a pick can take a
+  // transfer at all
+  const savedLinks = createMemo(() => {
+    const seen = new Set(trustedMints().map(m => `mint@${serverOf(m.server)}`))
+    return [...storeableMints(), ...storeableMeltAddresses()].filter(link => {
+      if (seen.has(link.address)) return false
+      seen.add(link.address)
+      return true
+    })
+  })
+
   const confirmTrust = () => {
     const pending = pendingTrust()
     if (!pending) return
@@ -229,6 +249,13 @@ const TransferDialog: Component<TransferDialogProps> = props => {
         )
         setMintSecret(minted.secret)
         result = minted.result
+      }
+      // LUD-11: keep a destination that says it's reusable, in the same
+      // registry its own flow would - a paid address is a melt
+      // destination (with its LUD-25 support just confirmed), a mint a mint
+      if (!result.disposable) {
+        if (payingAddress()) addStoreableMeltAddress(mintInput(), true)
+        else addStoreableMint(mintInput())
       }
       if (props.sourceBearer.deviceId) {
         await deviceMeltRequest(
@@ -669,6 +696,21 @@ const TransferDialog: Component<TransferDialogProps> = props => {
                     onClick={() => selectMint(`mint@${serverOf(mint.server)}`)}
                   >
                     {serverOf(mint.server)}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <Show when={savedLinks().length > 0}>
+            <label>Saved</label>
+            <div class="mint-picker">
+              <For each={savedLinks()}>
+                {link => (
+                  <button
+                    disabled={busy() || offlineMode()}
+                    onClick={() => selectMint(link.address)}
+                  >
+                    {link.address}
                   </button>
                 )}
               </For>
