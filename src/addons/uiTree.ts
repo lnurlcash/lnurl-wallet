@@ -149,6 +149,10 @@ export const defaultNodeFor = (type: UiNode['type']): UiNode => {
       return {type: 'JsonDisplay', value: ''}
     case 'AddressPicker':
       return {type: 'AddressPicker', bind: ''}
+    case 'ImagePicker':
+      return {type: 'ImagePicker', bind: ''}
+    case 'Image':
+      return {type: 'Image', value: ''}
     case 'Poll':
       return {
         type: 'Poll',
@@ -197,6 +201,10 @@ export const describeNode = (node: UiNode): string => {
       return `JsonDisplay ${describeExprShort(node.value)}`
     case 'AddressPicker':
       return `AddressPicker -> ${node.bind || '(unbound)'}`
+    case 'ImagePicker':
+      return `ImagePicker -> ${node.bind || '(unbound)'}`
+    case 'Image':
+      return `Image ${describeExprShort(node.value)}`
     case 'Poll':
       return `Poll every ${node.every}s when ${describeExprShort(node.when)}`
   }
@@ -276,6 +284,8 @@ const UI_NODE_TYPES = new Set([
   'List',
   'JsonDisplay',
   'AddressPicker',
+  'ImagePicker',
+  'Image',
   'Poll'
 ])
 

@@ -124,6 +124,8 @@ const UI_NODE_TYPES = new Set([
   'List',
   'JsonDisplay',
   'AddressPicker',
+  'ImagePicker',
+  'Image',
   'Poll'
 ])
 
@@ -169,6 +171,10 @@ const isUiNode = (v: unknown, path: string): string | null => {
       return isExpr(v.value, `${path}.value`)
     case 'AddressPicker':
       return typeof v.bind === 'string' ? null : `${path}.bind must be a string`
+    case 'ImagePicker':
+      return typeof v.bind === 'string' ? null : `${path}.bind must be a string`
+    case 'Image':
+      return isExpr(v.value, `${path}.value`)
     case 'Poll':
       if (typeof v.every !== 'number' || !(v.every > 0)) {
         return `${path}.every must be a positive number of seconds`

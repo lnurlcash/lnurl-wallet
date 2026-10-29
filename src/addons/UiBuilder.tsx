@@ -40,6 +40,8 @@ const NODE_TYPES: UiNode['type'][] = [
   'List',
   'JsonDisplay',
   'AddressPicker',
+  'ImagePicker',
+  'Image',
   'Poll'
 ]
 
@@ -673,6 +675,37 @@ const NodeInspector: Component<NodeInspectorProps> = props => {
               }
             />
           </>
+        )
+      }
+      case 'ImagePicker': {
+        const n = () => node() as Extract<UiNode, {type: 'ImagePicker'}>
+        return (
+          <>
+            <label>Bind (state path)</label>
+            <input
+              type="text"
+              value={n().bind}
+              onInput={e => update({...n(), bind: e.currentTarget.value})}
+            />
+            <label>Label (optional)</label>
+            <input
+              type="text"
+              value={n().label ?? ''}
+              onInput={e =>
+                update({...n(), label: e.currentTarget.value || undefined})
+              }
+            />
+          </>
+        )
+      }
+      case 'Image': {
+        const n = () => node() as Extract<UiNode, {type: 'Image'}>
+        return (
+          <ExprEditor
+            label="Value (a JPG/PNG data URL, e.g. a picked image's dataUrl)"
+            expr={n().value}
+            onChange={value => update({...n(), value})}
+          />
         )
       }
       case 'Poll': {
