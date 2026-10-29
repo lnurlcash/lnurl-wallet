@@ -3,6 +3,7 @@ import {secp256k1, schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {AmbiguousMintError} from './errors'
 import {
+  decodeCr1WithAmount,
   decodeCs1WithAmount,
   isCs1WithAmount,
   isCk1,
@@ -69,9 +70,10 @@ const noteSignatureDigestForId = (
 // r || s || recovery-id (25.md's Encoding).
 const normalizeSignatureHex = (
   signature: string,
-  expectedAmountMsat: number
+  expectedAmountMsat: number,
+  decodeCertificate: typeof decodeCs1WithAmount
 ): string | null => {
-  const current = decodeCs1WithAmount(signature)
+  const current = decodeCertificate(signature)
   // The current wire carries the amount as well as signing it. Both claims
   // must agree; otherwise a copied payload under a different cs HRP would be
   // accepted while reporting an amount the signer never certified.
@@ -84,9 +86,14 @@ const verifyNoteSignatureDigest = (
   digest: Uint8Array,
   signature: string,
   mintPubkeyHex: string,
-  expectedAmountMsat: number
+  expectedAmountMsat: number,
+  decodeCertificate: typeof decodeCs1WithAmount = decodeCs1WithAmount
 ): boolean => {
-  const signatureHex = normalizeSignatureHex(signature, expectedAmountMsat)
+  const signatureHex = normalizeSignatureHex(
+    signature,
+    expectedAmountMsat,
+    decodeCertificate
+  )
   if (!signatureHex) return false
   let wireSig: Uint8Array
   try {
@@ -190,6 +197,59 @@ export const verifyNoteSignatureForKey = (
   mintPubkeyHex: string
 ): boolean =>
   verifiesAgainstAnyId([outputKeyHex], amountMsat, signatureHex, mintPubkeyHex)
+
+// ---- rotation certificates (cr1) ----
+//
+// A note's cs1 says the note exists. A cr1 says where it came from: SERVICE
+// burned the note `spentKeyHex` and credited exactly the one note
+// `outputKeyHex`, worth `amountMsat`, in its place. Signed like a cs1, by
+// the same key, over
+//   "LNURLcash:rotate:" || amount_msat || ":" || hex(Q_spent) || ":" || hex(Q)
+// SERVICE answers a rotate with one as `r` (never a split or a merge:
+// neither has one note that became one other). A note is burned once, so
+// two certificates naming the same spent note cannot both be genuine -
+// which is what lets a holder check, offline, that something anchored to a
+// note moved from note to note without a fork and without a look-alike
+// minted on the side.
+const rotationDigest = (
+  spentKeyHex: string,
+  outputKeyHex: string,
+  amountMsat: number
+): Uint8Array => {
+  const ids = [spentKeyHex, outputKeyHex].map(id => id.trim().toLowerCase())
+  if (ids.some(id => !/^[0-9a-f]{64}$/.test(id))) {
+    throw new Error('A note id must be 32 bytes of hex.')
+  }
+  const message = utf8ToBytes(
+    `LNURLcash:rotate:${amountMsat}:${ids[0]}:${ids[1]}`
+  )
+  return sha256(
+    sha256(new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message]))
+  )
+}
+
+// true only if `cr1` is `mintPubkeyHex`'s certificate for exactly this
+// rotation and this amount. Never throws: a malformed id, certificate or
+// key is simply "not certified".
+export const verifyRotationCertificate = (
+  spentKeyHex: string,
+  outputKeyHex: string,
+  amountMsat: number,
+  cr1: string,
+  mintPubkeyHex: string
+): boolean => {
+  try {
+    return verifyNoteSignatureDigest(
+      rotationDigest(spentKeyHex, outputKeyHex, amountMsat),
+      cr1,
+      mintPubkeyHex,
+      amountMsat,
+      decodeCr1WithAmount
+    )
+  } catch {
+    return false
+  }
+}
 
 // ---- LUD-25 key-path spends (ck1) ----
 //
