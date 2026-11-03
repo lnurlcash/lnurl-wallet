@@ -21,8 +21,8 @@ type DialogTarget = {server: string; username?: string}
 // LUD-25 username@mint addresses, one card per trusted mint listing every
 // address this wallet holds there: claiming/managing one (AddressDialog)
 // and checking it for notes paid to it (AddressScanDialog, auto-check
-// included). A mint can hold any number - each registers its own branch
-// (see cashSecrets.ts's FIRST_ADDRESS_SLOT). Split out of the Mint page,
+// included). A mint can hold any number - each registers its own share
+// (see cashSecrets.ts's addressShareCx1). Split out of the Mint page,
 // which keeps only the plain wallet/change rescan (RescanDialog) - an
 // address is something a holder hands out and checks on, not part of
 // managing which mints to trust.

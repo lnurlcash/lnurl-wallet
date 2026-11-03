@@ -138,7 +138,7 @@ configurePubkeySecretProvider(domain => {
   }
 })
 
-// NOTE_PURPOSE_CHANGE counterpart to the wiring above - a split's own
+// change-chain counterpart to the wiring above - a split's own
 // change note, drawn from its own independent counter (cashSecrets.ts's
 // nextChangeSecret) so it never shares an index with an ordinary
 // mint/rotate/merge output. Already `(domain) => string | null`, so it

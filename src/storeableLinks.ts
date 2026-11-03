@@ -17,12 +17,10 @@ import {createSignal} from 'solid-js'
 export type StoreableLink = {
   address: string
   addedAt: number
-  // LUD-25's Internal transfer (25.md): whether this address's own
-  // payRequest was last seen advertising a text/cpub metadata entry (see
-  // mintRequest.ts's parseInternalTransferHint) - a CONFIRMED fact from an
-  // actual lookup, never guessed (e.g. never inferred just because this
-  // wallet happens to hold notes at the same mint - that alone says
-  // nothing about whether the recipient registered a cx1 there). Only the
+  // LUD-26's Internal transfer: whether this address's own payRequest was
+  // last seen naming its mint's withdrawLink (a mint's address, which an
+  // internal transfer can pay) - a CONFIRMED fact from an actual lookup,
+  // never guessed. Only the
   // melt registry ever sets this (MeltDialog.tsx's own lookup is the one
   // place that actually fetches a melt address's payRequest); undefined
   // means "never confirmed either way," not "confirmed unsupported."
@@ -70,8 +68,8 @@ const makeRegistry = (storageKey: string) => {
   // caller (see addStoreableMeltAddress below) - the mint registry's own
   // add() calls simply never pass it, leaving every mint entry's own field
   // undefined. Re-adding an address already on file refreshes what's known
-  // about it (e.g. a later lookup that now sees text/cpub where an earlier
-  // one didn't) rather than silently no-op'ing past newer information.
+  // about it (e.g. a later lookup that now sees a withdrawLink where an
+  // earlier one didn't) rather than silently no-op'ing past newer information.
   const add = (address: string, internalTransfer?: boolean): void => {
     const trimmed = address.trim()
     if (!trimmed) return

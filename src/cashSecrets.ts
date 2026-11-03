@@ -1,49 +1,51 @@
 import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
-import {deriveDomainBranchNode} from './lib/branchDerivation'
 import {
-  deriveNoteSecretKey,
+  deriveDomainBranchNode,
+  deriveServiceRoot,
+  serviceDomainOf,
+  deriveNoteKey,
+  deriveShareNode,
+  shareCx1
+} from './lib/branchDerivation'
+import {
   encodeCk1,
-  NOTE_PURPOSE_WALLET,
-  NOTE_PURPOSE_CHANGE,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS,
+  legacyDeriveNoteSecretKey,
+  LEGACY_NOTE_PURPOSE_WALLET,
+  LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './lib/recoverableNotes'
 import {signNoteOwnership} from './lib/signature'
 
-// LUD-25 seed-recoverable note secrets: deterministic secrets for the
+// LUD-26 seed-recoverable note secrets: deterministic secrets for the
 // cp1/ck1 notes this wallet mints/rotates/splits/merges, derived from the
 // seed instead of drawn at random, so a lost/reinstalled wallet can
 // reconstruct them from nothing but the seed phrase plus a small, non-secret
-// per-SERVICE index. https://github.com/lnurl/luds/blob/lnurlcash/25.md
+// per-SERVICE index. https://github.com/lnurl/luds/blob/lnurlcash/26.md
 //
-//   cashHashingKey = derive(cashRoot, 0)                         // LUD-05's step 1, own purpose
-//   domainMaterial = hmacSha256(cashHashingKey, full SERVICE domain)  // LUD-05's steps 2-3, unchanged
-//   (d1, d2, d3, d4) = first 16 bytes of domainMaterial as 4 uint32   // exactly as LUD-05
-//   p, chaincode   = derive(cashRoot, d1/d2/d3/d4)                // this SERVICE's branch root
+//   S = m/139'/d1/d2/d3/d4        this SERVICE's root, d1..d4 as LUD-05 over
+//                                 its domain (hostname, no port)
+//   S/a'/0/i                      wallet notes: mint/rotate/merge results
+//   S/a'/1/i                      change notes: a split's change only
+//   S/a'/2/n'                     share n, exported as a cx1 for one
+//                                 Lightning Address; its notes S/a'/2/n'/i
+//                                 are derived by the SERVICE from the cx1
 //
-// This is the literal path 25.md's own "Seed & derivation" section defines -
-// no extra purpose hop beyond `cashRoot` (see src/lib/branchDerivation.ts).
-// `cashRoot` here is already the wallet's own m/139' node (see keys.ts's
-// deriveLud25CashRootNode) - the spec's `masterKey` with the fixed `m/139'`
-// prefix already applied, since that's as much of the true BIP32 master as
-// this wallet ever keeps around (see cashRoot below).
+// This wallet uses account 0 only. The wallet and change chains are
+// independent counters, so a stray retry never merges value into a note
+// someone else holds the spend for; a share's index is picked by the
+// SERVICE, never counted here.
 //
-// One branch, three independent index counters (25.md's own `purpose`):
-// NOTE_PURPOSE_WALLET for this file's own nextCashAddressSecret (an
-// ordinary mint/rotate/merge output, or a split's resulting note),
-// NOTE_PURPOSE_CHANGE for a split's own change note (nextChangeSecret
-// below - never shares an index with the above, or a stray retry could
-// merge value into a note someone else already holds the spend for), and
-// NOTE_PURPOSE_LIGHTNING_ADDRESS for whatever a registered address
-// receives, whether by real payment or Internal transfer (addressSecretAtIndex
-// below, used by addressRecovery.ts - never this file's own counter, since
-// SERVICE picks that index, not WALLET).
+// Superseded schemes (before LUD-26: a per-note tagged-hash tweak off the
+// domain branch, with purposes 0/1/2) are kept read-only, for sweeping what
+// an older version of this wallet left there - see the legacy* functions
+// below and recovery.ts. `cashRoot` is the wallet's own m/139' node (see
+// keys.ts's deriveLud25CashRootNode).
 //
-// 25.md defines no derivation for bearer notes (a plain hash preimage) - a
+// LUD-26 defines no derivation for bearer notes (a plain hash preimage) - a
 // WALLET may generate that secret however it likes. This wallet generates it
 // with plain randomness (see lnurlcash.ts's
 // generateNoteSecret/generateMintSecret), not a seed-derived branch, so
-// bearer notes never compete with key-path notes for a branch index.
+// bearer notes never compete with key-path notes for an index.
 
 // the decrypted cash root node, held in memory only for as long as the
 // wallet is unlocked - set by WalletContext (activate/lock/forgetWallet),
@@ -56,18 +58,41 @@ let cashRoot: HDKey | null = null
 
 export const setCashRoot = (node: HDKey | null): void => {
   cashRoot = node
+  nodeCache.clear()
+}
+
+// the per-mint nodes below, derived once per cash root: a recovery scan
+// asks for every index of a mint in turn, and each walk from the cash root
+// costs an HMAC and several hardened derivations
+const nodeCache = new Map<string, HDKey>()
+
+const cached = (key: string, derive: () => HDKey): HDKey => {
+  let node = nodeCache.get(key)
+  if (!node) {
+    node = derive()
+    nodeCache.set(key, node)
+  }
+  return node
 }
 
 export const hasCashRoot = (): boolean => cashRoot !== null
 
-// per-SERVICE "next index to use" counter for a wallet-initiated key-path
-// output (see nextCashAddressSecret below) - not secret (an index reveals
-// nothing without the cash root key itself), so plain localStorage, same as
-// trustedMints.ts. `Object.create(null)` sidesteps prototype-pollution
-// entirely rather than filtering key names one at a time: a malformed or
-// crafted backup (see mergeCashAddressSecretIndices) can populate this
-// object with arbitrary string keys without ever touching Object.prototype.
-const ADDRESS_STORAGE_KEY = 'lnurlcash_cash_address_indices'
+// per-SERVICE "next index to use" counters for the wallet and change
+// chains - not secret (an index reveals nothing without the cash root key
+// itself), so plain localStorage, same as trustedMints.ts.
+// `Object.create(null)` sidesteps prototype-pollution entirely rather than
+// filtering key names one at a time: a malformed or crafted backup (see
+// mergeCashAddressSecretIndices) can populate this object with arbitrary
+// string keys without ever touching Object.prototype. LUD-26 started these
+// over at 0 under new keys: the old counters ran on the superseded scheme,
+// and carrying them over would leave a gap a gap-limited recovery scan
+// never crosses.
+const ADDRESS_STORAGE_KEY = 'lnurlcash_lud26_wallet_indices'
+const CHANGE_STORAGE_KEY = 'lnurlcash_lud26_change_indices'
+const LEGACY_STORAGE_KEYS = [
+  'lnurlcash_cash_address_indices',
+  'lnurlcash_cash_change_indices'
+]
 type Indices = Record<string, number>
 
 const readIndices = (key: string): Indices => {
@@ -98,130 +123,145 @@ export const readCashAddressSecretIndices = (): Indices =>
 
 export const clearCashAddressSecretIndices = (): void => {
   localStorage.removeItem(ADDRESS_STORAGE_KEY)
+  for (const key of LEGACY_STORAGE_KEYS) localStorage.removeItem(key)
 }
 
-// the domain-bound subtree cashAddressBranch/cashAddressSecretAtIndex below
-// hang their per-index children off - null whenever no cash root is loaded
-// (locked, or a wallet that hasn't re-entered its seed since this feature
-// shipped)
-const addressDomainNode = (domain: string): HDKey | null =>
-  cashRoot ? deriveDomainBranchNode(cashRoot, domain) : null
-
-// the watch-only branch this domain's cx1 export names - null whenever no
-// cash root is loaded, same as addressDomainNode above. `pubkeyXOnly` drops
-// the HDKey publicKey's leading 02/03 compressed-form byte: a plain x-
-// coordinate is exactly BIP-340's x-only encoding regardless of which y the
-// underlying point actually has (see deriveNoteSecretKey's own parity
-// handling in src/lib/recoverableNotes.ts, which takes the raw, unmodified
-// private key and corrects for this internally - nothing here needs to).
-export const cashAddressBranch = (domain: string): Cx1 | null => {
-  const node = addressDomainNode(domain)
-  const publicKey = node?.publicKey
-  const chainCode = node?.chainCode
-  if (!publicKey || !chainCode) return null
-  return {pubkeyXOnly: publicKey.slice(1), chainCode}
+// S for `domain` (any URL or host of the mint) - null whenever no cash root
+// is loaded (locked, or a wallet that hasn't re-entered its seed since this
+// feature shipped)
+const serviceRoot = (domain: string): HDKey | null => {
+  const root = cashRoot
+  return root
+    ? cached(`S ${serviceDomainOf(domain)}`, () =>
+        deriveServiceRoot(root, domain)
+      )
+    : null
 }
 
-// this note's own bearer secret on the NOTE_PURPOSE_WALLET branch - an
-// actual secp256k1 scalar (see deriveNoteSecretKey). Pure - no counter side
-// effect of its own, so a recovery scan can probe index by index (LUD-25's
-// gap-limit convention, see recovery.ts) without any bookkeeping: the index
-// itself is tracked separately, by nextCashAddressSecretIndex below for a
-// fresh mint, or by the scan's own loop counter during recovery.
+const ACCOUNT = 0
+
+// the wallet note at index i - an actual secp256k1 scalar whose x-only
+// public key is the note's Q (a BIP-340 signer negates it for an odd y
+// itself). Pure - no counter side effect of its own, so a recovery scan can
+// probe index by index (LUD-26's gap-limit convention, see recovery.ts)
+// without any bookkeeping.
 export const cashAddressSecretAtIndex = (
   domain: string,
   index: number
 ): Uint8Array | null => {
-  const node = addressDomainNode(domain)
-  if (!node?.privateKey || !node.chainCode) return null
-  return deriveNoteSecretKey(
-    node.privateKey,
-    node.chainCode,
-    NOTE_PURPOSE_WALLET,
-    index
-  )
+  const root = serviceRoot(domain)
+  return root
+    ? deriveNoteKey(root, {chain: 'wallet', account: ACCOUNT, index}).secretKey
+    : null
 }
 
-// Many registered addresses per mint: each one registers its OWN branch -
-// hardened HD child `slot` of this domain's branch node - as its cx1, so
-// SERVICE keeps deriving every address's notes at
-// NOTE_PURPOSE_LIGHTNING_ADDRESS on whatever cx1 it has on file (no mint or
-// spec change), while no two addresses ever share a key. Slots 0 and 1 are
-// left alone by convention (this branch's own wallet notes and change), so
-// the first address is slot 2, the next 3, and so on. Hardened, so one
-// address's cx1 never reveals another's - they stay unlinkable to anyone
-// but this wallet. `slot` undefined is the LEGACY registration from before
-// this existed: the domain branch itself, the same cx1 the wallet/change
-// purposes above hang off - kept as-is so an address registered that way
-// never moves.
-export const FIRST_ADDRESS_SLOT = 2
-
-const addressSlotNode = (domain: string, slot?: number): HDKey | null => {
-  const node = addressDomainNode(domain)
-  if (!node || slot === undefined) return node
-  return node.deriveChild(HARDENED_OFFSET + slot)
-}
-
-// the cx1 an address in `slot` registers (see FIRST_ADDRESS_SLOT above) -
-// same x-only shape as cashAddressBranch
-export const addressBranch = (domain: string, slot?: number): Cx1 | null => {
-  const node = addressSlotNode(domain, slot)
-  const publicKey = node?.publicKey
-  const chainCode = node?.chainCode
-  if (!publicKey || !chainCode) return null
-  return {pubkeyXOnly: publicKey.slice(1), chainCode}
-}
-
-// the key an address's register/unregister ownership proof signs with -
-// its own branch's NOTE_PURPOSE_WALLET index-0 secret, which is what
-// SERVICE checks a proof against for whatever cx1 is on file (see
-// lib/signature.ts's signAddressProof). For a legacy (slot-less) address
-// that's exactly cashAddressSecretAtIndex(domain, 0)
-export const addressProofKey = (
+// the change-chain counterpart to cashAddressSecretAtIndex
+export const changeSecretAtIndex = (
   domain: string,
-  slot?: number
+  index: number
 ): Uint8Array | null => {
-  const node = addressSlotNode(domain, slot)
-  if (!node?.privateKey || !node.chainCode) return null
-  return deriveNoteSecretKey(
-    node.privateKey,
-    node.chainCode,
-    NOTE_PURPOSE_WALLET,
-    0
-  )
+  const root = serviceRoot(domain)
+  return root
+    ? deriveNoteKey(root, {chain: 'change', account: ACCOUNT, index}).secretKey
+    : null
 }
 
-// the NOTE_PURPOSE_LIGHTNING_ADDRESS counterpart to cashAddressSecretAtIndex
-// above, on the address's own branch (`slot`, see FIRST_ADDRESS_SLOT) -
-// same pure/no-counter-side-effect shape (a note here is never
-// wallet-initiated: SERVICE picks the index, whether by an actual payment's
-// auto-mint or an Internal transfer, so there is nothing for this wallet to
-// "claim" ahead of a scan - see addressRecovery.ts's scanRegisteredAddress,
-// the only caller).
-export const addressSecretAtIndex = (
+// Many Lightning Addresses per mint: each registers its own share
+// S/0'/2/n' as its cx1, hardened, so one address's cx1 never reveals
+// another's or the wallet's own notes. A SERVICE never accepts a share
+// twice, so every registration (and every move by updateUsername) takes a
+// fresh one - see addressRegistry.ts's nextShare.
+export const addressShareCx1 = (domain: string, share: number): Cx1 | null => {
+  const root = serviceRoot(domain)
+  return root ? shareCx1(deriveShareNode(root, ACCOUNT, share)) : null
+}
+
+// the key a share's register/update/unregister proofs are signed with: the
+// share node's own (lib/signature.ts's signAddressProof)
+export const addressShareKey = (
   domain: string,
+  share: number
+): Uint8Array | null => {
+  const root = serviceRoot(domain)
+  return root ? deriveShareNode(root, ACCOUNT, share).privateKey : null
+}
+
+// a note the SERVICE credited to `share` at index i - picked by the SERVICE
+// at settlement, so there is nothing for this wallet to count ahead of a
+// scan (addressRecovery.ts's scanRegisteredAddress)
+export const shareSecretAtIndex = (
+  domain: string,
+  share: number,
+  index: number
+): Uint8Array | null => {
+  const root = serviceRoot(domain)
+  return root
+    ? deriveNoteKey(root, {chain: 'share', account: ACCOUNT, share, index})
+        .secretKey
+    : null
+}
+
+// ---- superseded derivation (before LUD-26), read-only, for sweeping ----
+//
+// The old branch node hashed the host as stored, port included; addresses
+// registered either the branch itself (no slot) or its hardened child
+// `slot` (2, 3, ...), and their notes were tweaks off it under purpose 2.
+export const LEGACY_FIRST_ADDRESS_SLOT = 2
+
+const legacyNode = (domain: string, slot?: number): HDKey | null => {
+  const root = cashRoot
+  if (!root) return null
+  const node = cached(`legacy ${domain}`, () =>
+    deriveDomainBranchNode(root, domain)
+  )
+  return slot === undefined
+    ? node
+    : cached(`legacy ${domain} ${slot}`, () =>
+        node.deriveChild(HARDENED_OFFSET + slot)
+      )
+}
+
+// the old note at `index` under `purpose` (null: the pre-purpose variant)
+export const legacySecretAtIndex = (
+  domain: string,
+  purpose: number | null,
   index: number,
   slot?: number
 ): Uint8Array | null => {
-  const node = addressSlotNode(domain, slot)
+  const node = legacyNode(domain, slot)
   if (!node?.privateKey || !node.chainCode) return null
-  return deriveNoteSecretKey(
+  return legacyDeriveNoteSecretKey(
     node.privateKey,
     node.chainCode,
-    NOTE_PURPOSE_LIGHTNING_ADDRESS,
+    purpose,
     index
   )
 }
 
-// LUD-25's own "next index" convention - a wallet-INITIATED
-// mint/transfer's own pubkey-bound output, returned as its actual bearer
-// secret (a ck1 ownership signature - see signNoteOwnership) rather than a
-// raw preimage. This draws from NOTE_PURPOSE_WALLET's own counter, entirely
-// independent of a registered address's mint-auto-derived notes
-// (NOTE_PURPOSE_LIGHTNING_ADDRESS, addressSecretAtIndex above) or a split's
-// change (NOTE_PURPOSE_CHANGE, nextChangeSecret below) on that same
-// branch - the three purposes exist specifically so none of them ever needs
-// to coordinate with, or skip past, either of the others.
+// what an old registration's proofs were signed with - its branch's
+// purpose-0 index-0 key - and so what signs the PUT moving it to a share
+export const legacyAddressProofKey = (
+  domain: string,
+  slot?: number
+): Uint8Array | null =>
+  legacySecretAtIndex(domain, LEGACY_NOTE_PURPOSE_WALLET, 0, slot)
+
+export const legacyAddressSecretAtIndex = (
+  domain: string,
+  index: number,
+  slot?: number
+): Uint8Array | null =>
+  legacySecretAtIndex(
+    domain,
+    LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
+    index,
+    slot
+  )
+
+// LUD-26's "next index" convention - a wallet-INITIATED mint/transfer's own
+// pubkey-bound output, returned as its actual bearer secret (a ck1 - see
+// signNoteOwnership) rather than a raw preimage, from the wallet chain's
+// counter.
 export const nextCashAddressSecretIndex = (domain: string): number =>
   readIndices(ADDRESS_STORAGE_KEY)[domain] ?? 0
 
@@ -252,35 +292,11 @@ export const requireRecoverableCashAddressSecret = (domain: string): string => {
   return secret
 }
 
-// NOTE_PURPOSE_CHANGE's own counter - a split's change note only (never a
-// rotate/merge result, never a split's own "resulting" output, both of
-// which stay on NOTE_PURPOSE_WALLET above). A separate counter, not a
-// shared one with a skip-based dance, is the whole reason this purpose
-// exists: nothing here needs to check what NOTE_PURPOSE_WALLET has already
-// used, or vice versa.
-const CHANGE_STORAGE_KEY = 'lnurlcash_cash_change_indices'
-
 export const readCashChangeSecretIndices = (): Indices =>
   readIndices(CHANGE_STORAGE_KEY)
 
 export const clearCashChangeSecretIndices = (): void => {
   localStorage.removeItem(CHANGE_STORAGE_KEY)
-}
-
-// the NOTE_PURPOSE_CHANGE counterpart to cashAddressSecretAtIndex above -
-// same branch, same pure/no-counter-side-effect shape.
-export const changeSecretAtIndex = (
-  domain: string,
-  index: number
-): Uint8Array | null => {
-  const node = addressDomainNode(domain)
-  if (!node?.privateKey || !node.chainCode) return null
-  return deriveNoteSecretKey(
-    node.privateKey,
-    node.chainCode,
-    NOTE_PURPOSE_CHANGE,
-    index
-  )
 }
 
 export const nextChangeSecretIndex = (domain: string): number =>

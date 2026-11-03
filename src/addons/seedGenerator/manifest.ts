@@ -3,69 +3,50 @@ import type {Addon, AddonHelper, AddonManifest, UiNode} from '../types'
 import {
   generateSeedPhrase,
   isValidSeedPhrase,
-  deriveLud25CashRootNode,
-  lud05PathSuffix
+  deriveLud25CashRootNode
 } from '../../keys'
 import {
-  deriveNotePubkey,
+  deriveServiceRoot,
+  deriveNoteKey,
+  deriveShareNode,
+  shareCx1,
   encodeCp1,
-  encodeCx1,
-  NOTE_PURPOSE_WALLET
+  encodeCx1
 } from '../../lnurlcash'
 import {trustedMints} from '../../trustedMints'
 
-// A throwaway-seed sandbox for exploring LUD-25's own derivation
-// (see cashSecrets.ts's cashAddressBranch/cashAddressSecretAtIndex) without
-// touching this wallet's real seed at all - "Generate new seed" makes a
-// fresh BIP39 mnemonic entirely in the browser, held only in this addon's
-// own page-local state (see AddonRun.tsx/Renderer.tsx's 'run' mode - never
-// persisted, gone the moment this page is left or reloaded), and every
-// derivation below is a pure function of (that ephemeral seed, a mint
-// domain) - never cashSecrets.ts's own module-level wallet state.
-// Reimplements the same small amount of path-walking cashSecrets.ts's
-// addressDomainNode does (rather than importing it) specifically so this
-// can never be confused with, or accidentally reach, the real unlocked
-// cash root. Public-only output: derives pubkeys straight off the
-// branch's own public key + chain code (deriveNotePubkey, the same
-// watch-only math a mint uses against a cx1 export) rather than via each
-// index's private key, so there is no private scalar to accidentally show.
-// Shows NOTE_PURPOSE_WALLET only (the ordinary notes a wallet mints/rotates/
-// merges for itself) - not purpose 1 (change) or 2 (Lightning Address),
-// which is what this wallet's own recovery scans (recovery.ts,
+// A throwaway-seed sandbox for exploring LUD-26's derivation (see
+// cashSecrets.ts) without touching this wallet's real seed at all -
+// "Generate new seed" makes a fresh BIP39 mnemonic entirely in the browser,
+// held only in this addon's own page-local state (see
+// AddonRun.tsx/Renderer.tsx's 'run' mode - never persisted, gone the moment
+// this page is left or reloaded), and every derivation below is a pure
+// function of (that ephemeral seed, a mint domain) - never cashSecrets.ts's
+// own module-level wallet state, so this can never reach the real unlocked
+// cash root. Shows the first share's cx1 (what a Lightning Address
+// registers) and the wallet notes S/0'/0/i (what a wallet mints, rotates
+// and merges for itself) as public keys only - not the change chain or the
+// share's notes, which this wallet's own recovery scans (recovery.ts,
 // addressRecovery.ts) additionally walk.
 const KEYPAIR_COUNT = 10
 
 const trimmedString = (value: unknown): string => String(value ?? '').trim()
 
-// mirrors cashSecrets.ts's own addressDomainNode (m/139'/d1/d2/d3/d4) - see
-// this file's own header comment for why it's reimplemented here rather
-// than imported. No extra purpose hop beyond cashRoot itself: 25.md's
-// Seed & derivation puts `purpose` in the per-note tweak (deriveNotePubkey's
-// own argument below), not in the branch path.
-const addressDomainNode = (cashRoot: HDKey, domain: string): HDKey | null => {
-  const hashingNode = cashRoot.deriveChild(0)
-  if (!hashingNode.privateKey) return null
-  const suffix = lud05PathSuffix(hashingNode.privateKey, domain)
-  let node = cashRoot
-  for (const index of suffix) node = node.deriveChild(index)
-  return node
-}
-
-const branchFor = (
-  seedPhrase: unknown,
-  domain: unknown
-): {pubkeyXOnly: Uint8Array; chainCode: Uint8Array} | null => {
+// S for this seed and domain, or null while either is not yet valid
+const serviceRootFor = (seedPhrase: unknown, domain: unknown): HDKey | null => {
   const seed = trimmedString(seedPhrase)
   const d = trimmedString(domain)
   if (!seed || !d || !isValidSeedPhrase(seed)) return null
-  const node = addressDomainNode(deriveLud25CashRootNode(seed), d)
-  if (!node?.publicKey || !node.chainCode) return null
-  return {pubkeyXOnly: node.publicKey.slice(1), chainCode: node.chainCode}
+  try {
+    return deriveServiceRoot(deriveLud25CashRootNode(seed), d)
+  } catch {
+    return null
+  }
 }
 
 const xpubDisplay = (seedPhrase: unknown, domain: unknown): string => {
-  const branch = branchFor(seedPhrase, domain)
-  return branch ? encodeCx1(branch.pubkeyXOnly, branch.chainCode) : '-'
+  const root = serviceRootFor(seedPhrase, domain)
+  return root ? encodeCx1(shareCx1(deriveShareNode(root, 0, 0))) : '-'
 }
 
 export type SeedPubkeyRow = {index: number; pubkey: string}
@@ -74,17 +55,16 @@ const keypairsForSeed = (
   seedPhrase: unknown,
   domain: unknown
 ): SeedPubkeyRow[] => {
-  const branch = branchFor(seedPhrase, domain)
-  if (!branch) return []
+  const root = serviceRootFor(seedPhrase, domain)
+  if (!root) return []
   const rows: SeedPubkeyRow[] = []
   for (let i = 0; i < KEYPAIR_COUNT; i++) {
-    const pubkey = deriveNotePubkey(
-      branch.pubkeyXOnly,
-      branch.chainCode,
-      NOTE_PURPOSE_WALLET,
-      i
-    )
-    rows.push({index: i, pubkey: encodeCp1(pubkey)})
+    const {outputKey} = deriveNoteKey(root, {
+      chain: 'wallet',
+      account: 0,
+      index: i
+    })
+    rows.push({index: i, pubkey: encodeCp1(outputKey)})
   }
   return rows
 }

@@ -19,6 +19,28 @@ describe('LUD-25 mint fees', () => {
     expect(parseMintFee(metadata)).toEqual({baseFeeMsat: 1000, feePpm: 2000})
   })
 
+  it("reads LUD-26's address fee, the token anywhere in the entry", () => {
+    expect(
+      parseMintFee(
+        JSON.stringify([
+          ['text/plain', 'Welcome! Mint fees: 1000,2000,50000 apply']
+        ])
+      )
+    ).toEqual({baseFeeMsat: 1000, feePpm: 2000, addressFeeMsat: 50000})
+    // only an address fee is still a fee
+    expect(
+      parseMintFee(JSON.stringify([['text/plain', 'Mint fees: 0,0,50000']]))
+    ).toEqual({baseFeeMsat: 0, feePpm: 0, addressFeeMsat: 50000})
+  })
+
+  it('refuses a ppm of 100% or more, or values that are no safe integers', () => {
+    for (const fees of ['0,1000000', '1e3,0', '-1,0', '9007199254740993,0']) {
+      expect(
+        parseMintFee(JSON.stringify([['text/plain', `Mint fees: ${fees}`]]))
+      ).toBeNull()
+    }
+  })
+
   it('is null for metadata with no fee entry, or invalid JSON', () => {
     expect(parseMintFee(JSON.stringify([['text/plain', 'a mint']]))).toBeNull()
     expect(parseMintFee('not json')).toBeNull()

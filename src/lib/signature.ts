@@ -2,6 +2,7 @@ import {sha256} from '@noble/hashes/sha2.js'
 import {secp256k1, schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex, hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
 import {AmbiguousMintError} from './errors'
+import {serviceDomainOf} from './branchDerivation'
 import {
   decodeCs1WithAmount,
   isCs1WithAmount,
@@ -43,21 +44,29 @@ export const hashK1 = (k1: string): string => bytesToHex(sha256(hexToBytes(k1)))
 
 // A note's cs1 certificate, signed the same way LUD-13 signs its auth seed
 // phrase - the standard Lightning node `signmessage` wrapping:
-//   message = "LNURLcash:" || amount_msat (decimal ASCII) || ":" || hex(Q)
+//   message = "LNURLcash:" || domain || ":" || amount_msat (decimal ASCII) || ":" || hex(Q)
 //   digest  = sha256(sha256("Lightning Signed Message:" || message))
 // Q is the note's taproot output key (25.md's Offline verification). For a
 // bearer note that is the Q its hash h names (spend.ts's bearerNote).
+// `domain` is the mint's lowercase hostname, so a certificate never vouches
+// for a note at another mint (luds 92abbb3). Certificates issued before then
+// signed no domain; notes people hold still carry them, so they still
+// verify (noteCertificateKind reports which it was).
 const LIGHTNING_SIGNED_MESSAGE_PREFIX = utf8ToBytes('Lightning Signed Message:')
 
 const noteSignatureDigestForId = (
   noteId: string,
-  amountMsat: number
+  amountMsat: number,
+  domain: string | null
 ): Uint8Array => {
   if (!/^[0-9a-fA-F]{64}$/.test(noteId.trim())) {
     throw new Error('A note id must be 32 bytes of hex.')
   }
+  const id = noteId.trim().toLowerCase()
   const message = utf8ToBytes(
-    `LNURLcash:${amountMsat}:${noteId.trim().toLowerCase()}`
+    domain === null
+      ? `LNURLcash:${amountMsat}:${id}`
+      : `LNURLcash:${serviceDomainOf(domain)}:${amountMsat}:${id}`
   )
   return sha256(
     sha256(new Uint8Array([...LIGHTNING_SIGNED_MESSAGE_PREFIX, ...message]))
@@ -115,24 +124,37 @@ const verifyNoteSignatureDigest = (
   }
 }
 
-const verifiesAgainstAnyId = (
+export type CertifiedOver = 'current' | 'legacy'
+
+// which message a certificate verified over, if any: the current one bound
+// to `domain`, or the superseded one without a domain
+const certifiedOverAnyId = (
   noteIds: string[],
+  domain: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
-): boolean =>
-  noteIds.some(noteId => {
-    try {
-      return verifyNoteSignatureDigest(
-        noteSignatureDigestForId(noteId, amountMsat),
-        signatureHex,
-        mintPubkeyHex,
-        amountMsat
-      )
-    } catch {
-      return false
-    }
-  })
+): CertifiedOver | null => {
+  for (const [kind, boundTo] of [
+    ['current', domain],
+    ['legacy', null]
+  ] as const) {
+    const verifies = noteIds.some(noteId => {
+      try {
+        return verifyNoteSignatureDigest(
+          noteSignatureDigestForId(noteId, amountMsat, boundTo),
+          signatureHex,
+          mintPubkeyHex,
+          amountMsat
+        )
+      } catch {
+        return false
+      }
+    })
+    if (verifies) return kind
+  }
+  return null
+}
 
 // The note ids a certificate for the note spent by `k1` may be signed over:
 // its Q, read or derived locally from k1's own shape with no network - a
@@ -156,19 +178,38 @@ const noteIdsOfK1 = (k1: string): string[] => {
   }
 }
 
+// `domain` is the note's mint - its URL, host or bare hostname
+export const noteCertificateKind = (
+  k1: string,
+  domain: string,
+  amountMsat: number,
+  signatureHex: string,
+  mintPubkeyHex: string
+): CertifiedOver | null =>
+  certifiedOverAnyId(
+    noteIdsOfK1(k1),
+    domain,
+    amountMsat,
+    signatureHex,
+    mintPubkeyHex
+  )
+
 export const verifyNoteSignature = (
   k1: string,
+  domain: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
 ): boolean =>
-  verifiesAgainstAnyId(noteIdsOfK1(k1), amountMsat, signatureHex, mintPubkeyHex)
+  noteCertificateKind(k1, domain, amountMsat, signatureHex, mintPubkeyHex) !==
+  null
 
 // A sealed vault discloses h=sha256(k1), not k1. A bound-mint receipt
 // certifies the bearer note h names, so the companion can authenticate it
 // without asking the device to export the bearer secret.
 export const verifyNoteSignatureHash = (
   h: string,
+  domain: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
@@ -179,17 +220,32 @@ export const verifyNoteSignatureHash = (
   } catch {
     return false
   }
-  return verifiesAgainstAnyId(noteIds, amountMsat, signatureHex, mintPubkeyHex)
+  return (
+    certifiedOverAnyId(
+      noteIds,
+      domain,
+      amountMsat,
+      signatureHex,
+      mintPubkeyHex
+    ) !== null
+  )
 }
 
 // A note's certificate, by its Q (hex) directly.
 export const verifyNoteSignatureForKey = (
   outputKeyHex: string,
+  domain: string,
   amountMsat: number,
   signatureHex: string,
   mintPubkeyHex: string
 ): boolean =>
-  verifiesAgainstAnyId([outputKeyHex], amountMsat, signatureHex, mintPubkeyHex)
+  certifiedOverAnyId(
+    [outputKeyHex],
+    domain,
+    amountMsat,
+    signatureHex,
+    mintPubkeyHex
+  ) !== null
 
 // ---- LUD-25 key-path spends (ck1) ----
 //
@@ -280,50 +336,53 @@ export const recoverNoteOwnershipPubkey = (
 // other SERVICE's own /p/{username}. `domain` here is addressProofUrl's own
 // `server` reduced to a bare hostname (addresses.ts) - matching exactly what
 // a SERVICE verifies against (lnurl-mint's router.py resolves this from its
-// OWN configured base_url/onion_url, never a request's Host header), never
-// the full origin cashAddressBranch/cashAddressSecretAtIndex derive under
-// (that string is a WALLET-internal derivation choice a SERVICE never
-// re-derives or checks, so it has no need to match this one). Hashed to a
+// OWN configured base_url/onion_url, never a request's Host header) - the
+// same hostname LUD-26's S hashes. Hashed to a
 // 32-byte digest before signing: `domain`/`username` are variable-length, so
 // the raw message would otherwise only rarely land on the 32 bytes most
 // Schnorr signers require.
-// Signed with the branch's own index-0 secret key (cashSecrets.ts's
-// cashAddressSecretAtIndex(domain, 0) - "the first secret" a WALLET would
-// derive on this branch regardless, the same one a wallet-initiated
-// mint/transfer would claim first), never a fresh per-request key. Unlike
-// ck1, the pubkey never needs to travel alongside the signature: SERVICE
-// already derives pk_0 from the cx1 on file (or the one being submitted, on
-// a fresh claim) itself, so only the raw signature is ever sent.
-export type AddressProofAction = 'register' | 'unregister'
+// A Lightning Address registration proof (LUD-26): a BIP-340 signature by a
+// share's own key p (branchDerivation.ts's deriveShareNode), verified by the
+// SERVICE against x(P) of a cx1, over
+//
+//   sha256("LNURLcash:register:" || domain || ":" || username || ":" || cx1)        POST, and a PUT's newsig
+//   sha256("LNURLcash:update:" || domain || ":" || username || ":" || new cx1)     a PUT's sig, by the key on file
+//   sha256("LNURLcash:unregister:" || domain || ":" || username)                   DELETE, by the key on file
+//
+// `domain` stops a proof one mint saw being replayed at another, binding
+// the cx1 stops it putting another chain code around the same key or
+// redirecting an update, and the username is signed lowercase, as the
+// SERVICE stores it.
+export type AddressProofAction = 'register' | 'update' | 'unregister'
 
 const addressProofMessage = (
   action: AddressProofAction,
   domain: string,
-  username: string
-): Uint8Array => utf8ToBytes(`LNURLcash:${action}:${domain}:${username}`)
-
-const addressProofDigest = (
-  action: AddressProofAction,
-  domain: string,
-  username: string
-): Uint8Array => sha256(addressProofMessage(action, domain, username))
+  username: string,
+  cx1?: string
+): Uint8Array => {
+  const at = `${serviceDomainOf(domain)}:${username.trim().toLowerCase()}`
+  if (action === 'unregister') return utf8ToBytes(`LNURLcash:unregister:${at}`)
+  if (!cx1) throw new Error(`A ${action} proof binds the cx1 it puts on file.`)
+  return utf8ToBytes(`LNURLcash:${action}:${at}:${cx1.trim().toLowerCase()}`)
+}
 
 // returns the raw 64-byte Schnorr signature - callers hex-encode it for the
-// wire (SERVICE's `sig` query param), not bech32m: unlike ck1/cs1 this
-// value is never a note's own bearer secret or disclosed as part of a
-// withdraw response, only ever a one-off proof.
+// wire, not bech32m: unlike ck1/cs1 this value is never a note's own bearer
+// secret, only ever a one-off proof.
 export const signAddressProof = (
-  branchIndexZeroSecretKey: Uint8Array,
+  shareSecretKey: Uint8Array,
   action: AddressProofAction,
   domain: string,
-  username: string
+  username: string,
+  cx1?: string
 ): Uint8Array =>
   // deterministic aux_rand - see signNoteOwnership's own ZERO_AUX_RAND
   // comment for why (a retried request should resend the exact same proof,
   // not a fresh-but-equally-valid one)
   schnorr.sign(
-    addressProofDigest(action, domain, username),
-    branchIndexZeroSecretKey,
+    sha256(addressProofMessage(action, domain, username, cx1)),
+    shareSecretKey,
     ZERO_AUX_RAND
   )
 

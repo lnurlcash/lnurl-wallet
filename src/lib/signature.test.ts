@@ -7,6 +7,7 @@ import {
   ck1Pubkey,
   cp1FromCk1,
   hashK1,
+  noteCertificateKind,
   recoverNoteOwnershipPubkey,
   signAddressProof,
   signNoteOwnership,
@@ -27,14 +28,19 @@ const K1 = 'a'.repeat(64)
 
 // a mint's cs1 certificate for the bearer note K1 spends: the standard
 // Lightning `signmessage` double-sha256 wrapping over
-// "LNURLcash:<amount_msat>:<hex(Q)>", encoded r || s || recovery-id
+// "LNURLcash:<domain>:<amount_msat>:<hex(Q)>", encoded r || s || recovery-id
 const signAsMint = (
   priv: Uint8Array,
   k1: string,
-  amountMsat: number
+  amountMsat: number,
+  // null: the superseded domain-less message, still read for stored notes
+  domain: string | null = DOMAIN
 ): string => {
+  const id = bearerNoteIdOfPreimage(k1)
   const message = utf8ToBytes(
-    `LNURLcash:${amountMsat}:${bearerNoteIdOfPreimage(k1)}`
+    domain === null
+      ? `LNURLcash:${amountMsat}:${id}`
+      : `LNURLcash:${domain}:${amountMsat}:${id}`
   )
   const digest = sha256(
     sha256(
@@ -60,18 +66,50 @@ describe('offline signature verification', () => {
     const amountMsat = 21000
     const cs1 = signAsMint(priv, K1, amountMsat)
 
-    expect(verifyNoteSignature(K1, amountMsat, cs1, pubHex)).toBe(true)
-    expect(verifyNoteSignatureHash(hashK1(K1), amountMsat, cs1, pubHex)).toBe(
-      true
-    )
-    expect(verifyNoteSignature(K1, amountMsat + 1, cs1, pubHex)).toBe(false)
-    expect(verifyNoteSignature('b'.repeat(64), amountMsat, cs1, pubHex)).toBe(
+    expect(verifyNoteSignature(K1, DOMAIN, amountMsat, cs1, pubHex)).toBe(true)
+    expect(
+      verifyNoteSignatureHash(hashK1(K1), DOMAIN, amountMsat, cs1, pubHex)
+    ).toBe(true)
+    expect(verifyNoteSignature(K1, DOMAIN, amountMsat + 1, cs1, pubHex)).toBe(
       false
     )
+    expect(
+      verifyNoteSignature('b'.repeat(64), DOMAIN, amountMsat, cs1, pubHex)
+    ).toBe(false)
     const otherPub = bytesToHex(
       secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
     )
-    expect(verifyNoteSignature(K1, amountMsat, cs1, otherPub)).toBe(false)
+    expect(verifyNoteSignature(K1, DOMAIN, amountMsat, cs1, otherPub)).toBe(
+      false
+    )
+  })
+
+  it("binds the certificate to the mint domain - another mint's is no certificate here", () => {
+    const priv = secp256k1.utils.randomSecretKey()
+    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
+    const cs1 = signAsMint(priv, K1, 21000)
+    expect(verifyNoteSignature(K1, 'other.example', 21000, cs1, pubHex)).toBe(
+      false
+    )
+    // any URL of the mint names the same domain
+    expect(
+      verifyNoteSignature(K1, `https://${DOMAIN}:8443/w`, 21000, cs1, pubHex)
+    ).toBe(true)
+  })
+
+  it('still reads a superseded domain-less certificate as legacy', () => {
+    const priv = secp256k1.utils.randomSecretKey()
+    const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
+    const legacy = signAsMint(priv, K1, 21000, null)
+    const current = signAsMint(priv, K1, 21000)
+    expect(verifyNoteSignature(K1, DOMAIN, 21000, legacy, pubHex)).toBe(true)
+    expect(noteCertificateKind(K1, DOMAIN, 21000, legacy, pubHex)).toBe(
+      'legacy'
+    )
+    expect(noteCertificateKind(K1, DOMAIN, 21000, current, pubHex)).toBe(
+      'current'
+    )
+    expect(noteCertificateKind(K1, DOMAIN, 21001, current, pubHex)).toBe(null)
   })
 
   it('rejects a cs1 relabelled with a different amount', () => {
@@ -82,8 +120,12 @@ describe('offline signature verification', () => {
       21001,
       decodeCs1WithAmount(cs1)!.signature
     )
-    expect(verifyNoteSignature(K1, 21000, relabelled, pubHex)).toBe(false)
-    expect(verifyNoteSignature(K1, 21001, relabelled, pubHex)).toBe(false)
+    expect(verifyNoteSignature(K1, DOMAIN, 21000, relabelled, pubHex)).toBe(
+      false
+    )
+    expect(verifyNoteSignature(K1, DOMAIN, 21001, relabelled, pubHex)).toBe(
+      false
+    )
   })
 
   it('rejects a plain-hex signature: only a cs1 is a certificate', () => {
@@ -91,15 +133,15 @@ describe('offline signature verification', () => {
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
     const cs1 = signAsMint(priv, K1, 1000)
     const hex = bytesToHex(decodeCs1WithAmount(cs1)!.signature)
-    expect(verifyNoteSignature(K1, 1000, hex, pubHex)).toBe(false)
+    expect(verifyNoteSignature(K1, DOMAIN, 1000, hex, pubHex)).toBe(false)
   })
 
   it('rejects garbage signatures without throwing', () => {
-    expect(verifyNoteSignature(K1, 1000, 'not-hex', 'ab'.repeat(33))).toBe(
-      false
-    )
     expect(
-      verifyNoteSignature(K1, 1000, 'ab'.repeat(10), 'ab'.repeat(33))
+      verifyNoteSignature(K1, DOMAIN, 1000, 'not-hex', 'ab'.repeat(33))
+    ).toBe(false)
+    expect(
+      verifyNoteSignature(K1, DOMAIN, 1000, 'ab'.repeat(10), 'ab'.repeat(33))
     ).toBe(false)
   })
 
@@ -109,8 +151,10 @@ describe('offline signature verification', () => {
     const priv = secp256k1.utils.randomSecretKey()
     const pubHex = bytesToHex(secp256k1.getPublicKey(priv, true))
     const cs1 = signAsMint(priv, K1, 1000)
-    expect(verifyNoteSignature('zz', 1000, cs1, pubHex)).toBe(false)
-    expect(verifyNoteSignature('a'.repeat(63), 1000, cs1, pubHex)).toBe(false)
+    expect(verifyNoteSignature('zz', DOMAIN, 1000, cs1, pubHex)).toBe(false)
+    expect(verifyNoteSignature('a'.repeat(63), DOMAIN, 1000, cs1, pubHex)).toBe(
+      false
+    )
   })
 })
 
@@ -159,14 +203,14 @@ describe('signNoteOwnership (LUD-25 key-path spend, ck1)', () => {
 })
 
 describe('verifyNoteSignature - LUD-25 ck1 dispatch', () => {
-  // cs1's message is LNURLcash:<amount>:<hex(pk)>, pk hex used directly, no
+  // cs1's message is LNURLcash:<domain>:<amount>:<hex(pk)>, pk hex used directly, no
   // hashing - see mintRequest.test.ts's own signAsMintForId, same shape
   const signAsMintForId = (
     priv: Uint8Array,
     idHex: string,
     amountMsat: number
   ): string => {
-    const message = utf8ToBytes(`LNURLcash:${amountMsat}:${idHex}`)
+    const message = utf8ToBytes(`LNURLcash:${DOMAIN}:${amountMsat}:${idHex}`)
     const digest = sha256(
       sha256(
         new Uint8Array([
@@ -195,19 +239,29 @@ describe('verifyNoteSignature - LUD-25 ck1 dispatch', () => {
     const ck1 = encodeCk1(pubkeyXOnly, signature)
     const cs1Sig = signAsMintForId(mintPriv, notePubkeyHex, amountMsat)
 
-    expect(verifyNoteSignature(ck1, amountMsat, cs1Sig, mintPubHex)).toBe(true)
-    expect(verifyNoteSignature(ck1, amountMsat + 1, cs1Sig, mintPubHex)).toBe(
-      false
-    )
+    expect(
+      verifyNoteSignature(ck1, DOMAIN, amountMsat, cs1Sig, mintPubHex)
+    ).toBe(true)
+    expect(
+      verifyNoteSignature(ck1, DOMAIN, amountMsat + 1, cs1Sig, mintPubHex)
+    ).toBe(false)
     const otherPub = bytesToHex(
       secp256k1.getPublicKey(secp256k1.utils.randomSecretKey(), true)
     )
-    expect(verifyNoteSignature(ck1, amountMsat, cs1Sig, otherPub)).toBe(false)
+    expect(verifyNoteSignature(ck1, DOMAIN, amountMsat, cs1Sig, otherPub)).toBe(
+      false
+    )
   })
 
   it('rejects a malformed ck1 without throwing', () => {
     expect(
-      verifyNoteSignature('ck1garbage', 1000, 'ab'.repeat(65), 'ab'.repeat(33))
+      verifyNoteSignature(
+        'ck1garbage',
+        DOMAIN,
+        1000,
+        'ab'.repeat(65),
+        'ab'.repeat(33)
+      )
     ).toBe(false)
   })
 })
@@ -289,84 +343,93 @@ describe('cp1FromCk1', () => {
   })
 })
 
-describe('signAddressProof (LUD-25, un-/register)', () => {
-  // independently recomputes the per-action/domain/username digest
-  // signAddressProof signs - a plain BIP-340 Schnorr signature over
-  // sha256(message), no Lightning-signmessage digest wrapping -
-  // deliberately not importing any internal helper
+describe('signAddressProof (LUD-26 register/update/unregister)', () => {
+  // independently recomputes the digest signAddressProof signs - a plain
+  // BIP-340 Schnorr signature by the share key over sha256(message), no
+  // Lightning-signmessage wrapping - deliberately not importing any helper
+  const CX1 = 'cx1' + 'q'.repeat(110)
   const digestFor = (
-    action: 'register' | 'unregister',
+    action: 'register' | 'update' | 'unregister',
     domain: string,
-    username: string
-  ) => sha256(utf8ToBytes(`LNURLcash:${action}:${domain}:${username}`))
-
-  it("verifies against the branch key's own pubkey for the exact action/domain/username signed", () => {
+    username: string,
+    cx1?: string
+  ) =>
+    sha256(
+      utf8ToBytes(
+        action === 'unregister'
+          ? `LNURLcash:unregister:${domain}:${username}`
+          : `LNURLcash:${action}:${domain}:${username}:${cx1}`
+      )
+    )
+  const keyPair = () => {
     const secretKey = schnorr.utils.randomSecretKey()
-    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
+    return {secretKey, pubkeyXOnly: schnorr.getPublicKey(secretKey)}
+  }
+
+  it('verifies against the share key for the exact action/domain/username/cx1 signed', () => {
+    const {secretKey, pubkeyXOnly} = keyPair()
+    const sig = signAddressProof(secretKey, 'register', DOMAIN, 'alice', CX1)
     expect(sig).toHaveLength(64)
     expect(
       schnorr.verify(
         sig,
-        digestFor('register', 'mint.example', 'alice'),
+        digestFor('register', DOMAIN, 'alice', CX1),
+        pubkeyXOnly
+      )
+    ).toBe(true)
+    const un = signAddressProof(secretKey, 'unregister', DOMAIN, 'alice')
+    expect(
+      schnorr.verify(un, digestFor('unregister', DOMAIN, 'alice'), pubkeyXOnly)
+    ).toBe(true)
+  })
+
+  it('signs the username lowercase and the domain without port', () => {
+    const {secretKey, pubkeyXOnly} = keyPair()
+    const sig = signAddressProof(
+      secretKey,
+      'update',
+      `https://${DOMAIN}:8443`,
+      'Alice',
+      CX1
+    )
+    expect(
+      schnorr.verify(
+        sig,
+        digestFor('update', DOMAIN, 'alice', CX1),
         pubkeyXOnly
       )
     ).toBe(true)
   })
 
-  it('is domain-separated by action - a register proof does not verify as unregister', () => {
-    const secretKey = schnorr.utils.randomSecretKey()
-    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
-    expect(
-      schnorr.verify(
-        sig,
-        digestFor('unregister', 'mint.example', 'alice'),
-        pubkeyXOnly
-      )
-    ).toBe(false)
+  it('refuses a register or update proof without the cx1 it binds', () => {
+    const {secretKey} = keyPair()
+    expect(() =>
+      signAddressProof(secretKey, 'register', DOMAIN, 'alice')
+    ).toThrow()
+    expect(() =>
+      signAddressProof(secretKey, 'update', DOMAIN, 'alice')
+    ).toThrow()
   })
 
-  it('is domain-separated by username - a proof for one name does not verify for another', () => {
-    const secretKey = schnorr.utils.randomSecretKey()
-    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
-    expect(
-      schnorr.verify(
-        sig,
-        digestFor('register', 'mint.example', 'bob'),
-        pubkeyXOnly
-      )
-    ).toBe(false)
+  it('is separated by action, username, domain and cx1', () => {
+    const {secretKey, pubkeyXOnly} = keyPair()
+    const sig = signAddressProof(secretKey, 'register', DOMAIN, 'alice', CX1)
+    for (const digest of [
+      digestFor('update', DOMAIN, 'alice', CX1),
+      digestFor('register', DOMAIN, 'bob', CX1),
+      digestFor('register', 'other-mint.example', 'alice', CX1),
+      digestFor('register', DOMAIN, 'alice', 'cx1' + 'p'.repeat(110))
+    ]) {
+      expect(schnorr.verify(sig, digest, pubkeyXOnly)).toBe(false)
+    }
   })
 
-  it('is domain-separated by domain - a proof for one SERVICE does not verify for another', () => {
-    // the cross-mint replay this binding exists to close (luds#cx1-domain-
-    // replay): a bare cx1 is otherwise fully portable, and any SERVICE that
-    // ever legitimately received a proof from this wallet could otherwise
-    // replay it verbatim against a different one's own /p/{username}
-    const secretKey = schnorr.utils.randomSecretKey()
-    const pubkeyXOnly = schnorr.getPublicKey(secretKey)
-    const sig = signAddressProof(secretKey, 'register', 'mint.example', 'alice')
+  it('is deterministic for the same inputs', () => {
+    const {secretKey} = keyPair()
     expect(
-      schnorr.verify(
-        sig,
-        digestFor('register', 'other-mint.example', 'alice'),
-        pubkeyXOnly
-      )
-    ).toBe(false)
-  })
-
-  it('is deterministic for the same key/action/domain/username', () => {
-    const secretKey = schnorr.utils.randomSecretKey()
-    expect(
-      bytesToHex(
-        signAddressProof(secretKey, 'unregister', 'mint.example', 'alice')
-      )
+      bytesToHex(signAddressProof(secretKey, 'unregister', DOMAIN, 'alice'))
     ).toBe(
-      bytesToHex(
-        signAddressProof(secretKey, 'unregister', 'mint.example', 'alice')
-      )
+      bytesToHex(signAddressProof(secretKey, 'unregister', DOMAIN, 'alice'))
     )
   })
 })

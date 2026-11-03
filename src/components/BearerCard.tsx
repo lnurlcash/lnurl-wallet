@@ -185,11 +185,18 @@ const BearerCard: Component<BearerCardProps> = props => {
     return props.bearer.deviceHash
       ? verifyNoteSignatureHash(
           props.bearer.deviceHash,
+          props.bearer.url,
           props.bearer.amount,
           sig,
           mintPubkey
         )
-      : verifyNoteSignature(k1(), props.bearer.amount, sig, mintPubkey)
+      : verifyNoteSignature(
+          k1(),
+          props.bearer.url,
+          props.bearer.amount,
+          sig,
+          mintPubkey
+        )
   })
 
   // a quick, direct refresh right from the card - same
@@ -336,7 +343,7 @@ const BearerCard: Component<BearerCardProps> = props => {
               </span>
             </Show>
             {/* A bearer note's hash preimage, as opposed to a key-path
-            note's pubkey/signature-bound k1 (see cashAddressBranch/the Address
+            note's pubkey/signature-bound k1 (see cashSecrets.ts/the Address
             page) - k1() is '' for a device-backed bearer (no raw k1 kept
             in browser storage), which isCk1('') correctly reads as false;
             gated on a non-empty k1 too so a device note doesn't wrongly

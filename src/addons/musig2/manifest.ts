@@ -16,7 +16,7 @@ import {
 // network/wallet-state access) - same "sandbox stays a sandbox" reasoning
 // bech32Decoder's own addon already relies on for verifyNoteSignature. Also
 // re-exports withNewK1, used the same pure way - see lockedNoteUrl below.
-// Resolving a cp1/cx1 address, Lightning Address, or username into a
+// Resolving a cp1/cx1 address into a
 // pubkey (verbs.ts's note.resolveAddressPubkey) needs a network round trip
 // and lives behind a verb instead, not here.
 import {
@@ -721,7 +721,7 @@ const musigDocsUi: UiNode[] = [
     type: 'List',
     ordered: true,
     each: [
-      "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, resolve their Lightning Address (preferred - or a cp1/cx1 address, or a username) with 'Resolve', or paste their pubkey directly.",
+      "Click 'Add participant' 2 or 3 times for an all-local demo - each click generates one fresh, ephemeral keypair. To include someone else's real key instead, resolve their cp1/cx1 address with 'Resolve', or paste their pubkey directly.",
       'Once there are 2 or more participants, the aggregated group pubkey (and its cp1 address form) appear automatically below the list.',
       "All local: click 'Aggregate & sign' - this runs the entire round in one step (nonce generation, nonce aggregation, every participant's partial signature, and final aggregation) over exactly what a ck1 signs: the LUD-25 key-path sighash for the group key, bound to the locked note's mint (a placeholder mint until a note is locked - sign again after locking).",
       "With an external pubkey: click 'Generate my nonces', then paste that participant's own public nonce into its row; once every row has one, copy the shown aggregate nonce (plus the pubkey list and message to sign above) to them, click 'Sign my parts', then paste their own partial signature into its row; once every row has one, click 'Combine signatures'.",
@@ -751,7 +751,7 @@ const musigBuilderUi: UiNode[] = [
       {
         type: 'Text',
         value:
-          'Or add someone else by their Lightning Address (preferred), a cp1/cx1 address, or a username - resolves their pubkey via a LUD-25 registered branch, no copying 66 hex characters back and forth. A bare username has no mint of its own, so pick one of your own notes first to name one (a full Lightning Address or a cp1/cx1 address ignores it, both are already self-contained):'
+          'Or add someone else by their cp1/cx1 address - no copying 66 hex characters back and forth. (Lightning Addresses no longer publish a key, so they cannot be resolved.)'
       },
       {
         type: 'NotePicker',
@@ -762,7 +762,7 @@ const musigBuilderUi: UiNode[] = [
       {
         type: 'Input',
         bind: 'externalAddressInput',
-        label: 'Lightning Address, cp1/cx1 address, or username'
+        label: 'cp1/cx1 address'
       },
       {
         type: 'Show',
@@ -1406,7 +1406,7 @@ const musig2Manifest: AddonManifest = {
       verb: 'note.resolveAddressPubkey',
       scope: 'spent:false',
       reason:
-        "Look up an external participant's pubkey from their Lightning Address, a cp1/cx1 address, or a username registered at the same mint as one of your own notes"
+        "Look up an external participant's pubkey from their cp1/cx1 address"
     }
   ],
   nav: {position: 'right', icon: 'people', label: 'MuSig2'},

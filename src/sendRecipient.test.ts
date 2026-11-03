@@ -1,3 +1,4 @@
+import {secp256k1} from '@noble/curves/secp256k1.js'
 import {describe, expect, it} from 'vitest'
 import {encodeCp1, encodeCx1} from './lnurlcash'
 import {parseRecipient} from './sendRecipient'
@@ -16,7 +17,13 @@ describe('parseRecipient', () => {
   })
 
   it('no longer accepts a cx1 branch', () => {
-    expect(parseRecipient(encodeCx1(KEY, CHAIN), HOST)).toBeNull()
+    const pubkey = new Uint8Array([
+      2,
+      ...secp256k1.getPublicKey(new Uint8Array(32).fill(3)).slice(1)
+    ])
+    expect(
+      parseRecipient(encodeCx1({chainCode: CHAIN, pubkey}), HOST)
+    ).toBeNull()
   })
 
   it('reads a username, bare or at this same mint', () => {

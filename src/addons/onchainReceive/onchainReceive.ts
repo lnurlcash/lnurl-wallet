@@ -1,7 +1,7 @@
 // LUD-25 onchain receiving: the SAME cp1 note pubkey this wallet
-// derives for a registered SERVICE/index (see ../../cashSecrets.ts's
-// cashAddressBranch/cashAddressSecretAtIndex and
-// ../../lib/recoverableNotes.ts's deriveNotePubkey/deriveNoteSecretKey),
+// derives for a SERVICE/index (the wallet note S/0'/0/i - see
+// ../../cashSecrets.ts's cashAddressSecretAtIndex and
+// ../../lib/branchDerivation.ts's deriveNoteKey),
 // wrapped in the standard BIP341/BIP86 key-path-only Taproot tweak so it is
 // ALSO spendable as a plain bc1p... onchain output - reusing the exact
 // already-tested derivation this wallet's ecash side relies on
@@ -34,13 +34,8 @@ import {createBase58check} from '@scure/base'
 import {sha256} from '@noble/hashes/sha2.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {deriveLud25CashRootNode, isValidSeedPhrase} from '../../keys'
-import {deriveDomainBranchNode} from '../../lib/branchDerivation'
-import {
-  deriveNotePubkey,
-  deriveNoteSecretKey,
-  encodeCp1,
-  NOTE_PURPOSE_WALLET
-} from '../../lib/recoverableNotes'
+import {deriveServiceRoot, deriveNoteKey} from '../../lib/branchDerivation'
+import {encodeCp1} from '../../lib/recoverableNotes'
 
 const base58check = createBase58check(sha256)
 
@@ -77,32 +72,17 @@ export const deriveOnchainReceive = (
   if (!isNonNegativeInt(i)) return null
   try {
     const cashRoot = deriveLud25CashRootNode(phrase)
-    const branch = deriveDomainBranchNode(cashRoot, d)
-    const chainCode = branch.chainCode
-    const branchPubkeyXOnly = branch.publicKey?.slice(1)
-    if (!branchPubkeyXOnly || !chainCode || !branch.privateKey) return null
-
-    // the exact cp1 the mint would compute for this SERVICE + index on
-    // NOTE_PURPOSE_WALLET (watch-only math, identical to what a cx1 export
-    // lets the mint derive on its own) - shown so a holder can cross-check
-    // "this address's key really is this exact note"
-    const notePubkeyXOnly = deriveNotePubkey(
-      branchPubkeyXOnly,
-      chainCode,
-      NOTE_PURPOSE_WALLET,
-      i
-    )
-
-    // only the wallet (holder of the branch's own private key) can go this
-    // direction - see deriveNoteSecretKey's own parity-handling comment in
-    // recoverableNotes.ts for why this is safe to reuse as the taproot
-    // internal key's spending scalar
-    const noteSecretKey = deriveNoteSecretKey(
-      branch.privateKey,
-      chainCode,
-      NOTE_PURPOSE_WALLET,
-      i
-    )
+    // the wallet note S/0'/0/i at this SERVICE (LUD-26) - the exact cp1 the
+    // wallet would mint there at index i, shown so a holder can cross-check
+    // "this address's key really is this exact note". Its secret key is the
+    // taproot internal key's spending scalar; taprootTweakPrivKey negates it
+    // itself for an odd y.
+    const {secretKey: noteSecretKey, outputKey: notePubkeyXOnly} =
+      deriveNoteKey(deriveServiceRoot(cashRoot, d), {
+        chain: 'wallet',
+        account: 0,
+        index: i
+      })
     const tweakedPrivateKey = taprootTweakPrivKey(noteSecretKey)
 
     const {address} = p2tr(notePubkeyXOnly, undefined, NETWORK)

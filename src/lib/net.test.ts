@@ -37,7 +37,8 @@ describe('configureTransport', () => {
     expect(transport).toHaveBeenCalledWith(
       'https://mint.example.com/w/cb?k1=x',
       expect.any(AbortSignal),
-      'GET'
+      'GET',
+      undefined
     )
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -99,7 +100,8 @@ describe('configureTransport', () => {
       2,
       'https://mint.example.com/current',
       expect.any(AbortSignal),
-      'POST'
+      'POST',
+      undefined
     )
   })
 
@@ -121,7 +123,8 @@ describe('configureTransport', () => {
       2,
       'https://mint.example.com/current',
       expect.any(AbortSignal),
-      'GET'
+      'GET',
+      undefined
     )
   })
 

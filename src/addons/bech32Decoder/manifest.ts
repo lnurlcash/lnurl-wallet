@@ -265,7 +265,7 @@ const noteVerifiedDisplay = (value: unknown, mintPubkey: unknown): string => {
   if (!key) {
     return "Signature attached - enter the mint's public key above to verify it."
   }
-  return verifyNoteSignature(k1, amount, sig, key)
+  return verifyNoteSignature(k1, url, amount, sig, key)
     ? 'Verified - signature matches the mint key entered above.'
     : 'NOT verified - signature does not match the mint key entered above.'
 }

@@ -186,17 +186,17 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
     addon: {id: 'musig2', name: 'MuSig2 Playground'}
   })
 
-  // 25.md's own published "Test vector 1", purpose 0 (wallet) - pk_0's
-  // x-only form, and the same underlying key encoded two self-contained
-  // ways (a cp1 note address directly, and purpose-0 index 0 of its own
-  // branch's cx1 export, which is what note.resolveAddressPubkey derives a
-  // cx1 into - see src/lib/specVectors.test.ts for the byte-exact
-  // cross-check these are drawn from).
+  // LUD-25's key_path_spend Q as a cp1, and a LUD-26 share's cx1, whose
+  // note 0 is what note.resolveAddressPubkey derives a cx1 into - both
+  // from the published vectors (src/lib/vectors).
   const PK0_XONLY =
     '690ac33892c64aa53874b0066ab1332f0ef45cb7c0e017eae0828916f52aa99f'
   const CP1 = 'cp1dy9vxwyjce922wr5kqrx4vfn9u80gh9hcrsp06hqs2y3daf24x0sxpcl6z'
   const CX1 =
-    'cx1k7pa9ycdcpf6ju0sryz5efp70jw72rs8d80gwtw3mh096zl5e8g6hywvzxh28902dd3zj2npgl63aaq4p6l2qnn52ymmdpceugu0jpqes280t'
+    'cx1w7dtlat4n5zkk3m4ms8wfgmn3j6dymx0rz653v0dqvtm4k0xr5dsxhss8rzzk93hlw85v4j0ahguwchu3zm70nr4g6hxd50m4dlyftle95ayjt'
+  // its share's note 0 (26-vectors.json, derivation[0] account 0 share 0)
+  const SHARE_NOTE0_XONLY =
+    '79229b06ef97a698a3564feb254a929b9391ae3d561b7512dcf3cea0d3d4a219'
 
   it('decodes a cp1 address locally into its even-y compressed pubkey - no mint note or network needed', async () => {
     const fetchMock = vi.fn()
@@ -216,124 +216,22 @@ describe("VERBS['note.resolveAddressPubkey']", () => {
       {address: CX1},
       makeCtx()
     )
-    expect(result).toBe(`02${PK0_XONLY}`)
+    expect(result).toBe(`02${SHARE_NOTE0_XONLY}`)
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('rejects a bare username with no mint note picked, before ever touching the network', async () => {
+  it('refuses a Lightning Address or a username - LUD-26 addresses publish no key - without touching the network', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    await expect(
-      VERBS['note.resolveAddressPubkey']!({address: 'alice'}, makeCtx())
-    ).rejects.toThrow(/pick one of your notes/i)
+    for (const address of ['bob@mock-mint.test', 'bob']) {
+      await expect(
+        VERBS['note.resolveAddressPubkey']!(
+          {mintNote: 'source', address},
+          makeCtx()
+        )
+      ).rejects.toThrow(/no longer publish/)
+    }
     expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it("resolves a username against the picked note's own mint, via its published LUD-25 text/cpub hint - always at index 0, not the hint's own next-payable index", async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      expect(new URL(input.toString()).toString()).toBe(
-        `${BASE}/.well-known/lnurlp/alice`
-      )
-      return {
-        json: async () => ({
-          tag: 'payRequest',
-          callback: `${BASE}/p/cb`,
-          minSendable: 1000,
-          maxSendable: 100000000,
-          metadata: JSON.stringify([
-            ['text/plain', 'pay alice'],
-            ['text/cpub', `${CX1}:3`]
-          ])
-        })
-      } as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    // uppercase, to also confirm this is lowercased before both the
-    // pattern check and the lookup itself
-    const result = await VERBS['note.resolveAddressPubkey']!(
-      {mintNote: 'source', address: 'ALICE'},
-      makeCtx()
-    )
-    expect(result).toBe(`02${PK0_XONLY}`)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  // a different domain than BASE (the wallet's own mint) - proves the
-  // lookup names its own mint and never falls back to the picked note's
-  // one, unlike the bare-username path below
-  const OTHER_MINT = 'https://another-mint.test'
-
-  it('resolves a full Lightning Address (any domain) directly, with no mint note needed', async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      expect(new URL(input.toString()).toString()).toBe(
-        `${OTHER_MINT}/.well-known/lnurlp/alice`
-      )
-      return {
-        json: async () => ({
-          tag: 'payRequest',
-          callback: `${OTHER_MINT}/p/cb`,
-          minSendable: 1000,
-          maxSendable: 100000000,
-          metadata: JSON.stringify([
-            ['text/plain', 'pay alice'],
-            ['text/cpub', `${CX1}:3`]
-          ])
-        })
-      } as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    // no mintNote arg at all - unlike the bare-username path, a full
-    // Lightning Address names its own domain
-    const result = await VERBS['note.resolveAddressPubkey']!(
-      {address: `alice@${OTHER_MINT.replace('https://', '')}`},
-      makeCtx()
-    )
-    expect(result).toBe(`02${PK0_XONLY}`)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects a Lightning Address whose mint never published a LUD-25 address (no text/cpub)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        json: async () => ({
-          tag: 'payRequest',
-          callback: `${OTHER_MINT}/p/cb`,
-          minSendable: 1000,
-          maxSendable: 100000000,
-          metadata: JSON.stringify([['text/plain', 'pay alice']])
-        })
-      })) as unknown as typeof fetch
-    )
-    await expect(
-      VERBS['note.resolveAddressPubkey']!(
-        {address: `alice@${OTHER_MINT.replace('https://', '')}`},
-        makeCtx()
-      )
-    ).rejects.toThrow(/LUD-25 address/)
-  })
-
-  it('rejects a username whose mint never published a LUD-25 address (no text/cpub)', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => ({
-        json: async () => ({
-          tag: 'payRequest',
-          callback: `${BASE}/p/cb`,
-          minSendable: 1000,
-          maxSendable: 100000000,
-          metadata: JSON.stringify([['text/plain', 'pay bob']])
-        })
-      })) as unknown as typeof fetch
-    )
-    await expect(
-      VERBS['note.resolveAddressPubkey']!(
-        {mintNote: 'source', address: 'bob'},
-        makeCtx()
-      )
-    ).rejects.toThrow(/LUD-25 address/)
   })
 
   it('rejects input that is neither a valid pubkey-bearing address nor a valid username', async () => {

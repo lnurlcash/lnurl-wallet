@@ -17,17 +17,30 @@ export const configureNetworkGuard = (guard: NetworkGuard): void => {
 // Defaults to fetch with redirects exposed to this module; a host configures
 // this once at startup. A custom transport is trusted to do the same rather
 // than following a redirect before its destination has passed the URL policy.
-// `method` defaults to GET at every call site except the LUD-25 username
-// registration endpoints (addresses.ts), the one place in this kit that isn't
-// a plain k1-bearing GET callback (see 25.md's Seed & derivation).
+// `method` defaults to GET at every call site except LUD-26's Lightning
+// Address registration (addresses.ts), the one place in this kit that isn't
+// a plain k1-bearing GET callback, and the only one sending `body`: its
+// parameters, application/x-www-form-urlencoded. A custom transport must
+// send that body, or registration fails at the SERVICE as a missing field.
 export type Transport = (
   url: string,
   signal: AbortSignal,
-  method: string
+  method: string,
+  body?: string
 ) => Promise<Response>
 
-let transport: Transport = (url, signal, method) =>
-  fetch(url, {signal, method, redirect: 'manual'})
+let transport: Transport = (url, signal, method, body) =>
+  fetch(url, {
+    signal,
+    method,
+    redirect: 'manual',
+    ...(body === undefined
+      ? {}
+      : {
+          body,
+          headers: {'content-type': 'application/x-www-form-urlencoded'}
+        })
+  })
 
 export const configureTransport = (next: Transport): void => {
   transport = next
@@ -39,12 +52,13 @@ const MAX_BODY_BYTES = 1_048_576
 
 const fetchResponse = async (
   url: string,
-  method: string
+  method: string,
+  body?: string
 ): Promise<Response> => {
   try {
     // bounded wait: without a timeout a hung service would freeze whatever
     // flow called this (lookup, refresh, melt) forever
-    return await transport(url, AbortSignal.timeout(30_000), method)
+    return await transport(url, AbortSignal.timeout(30_000), method, body)
   } catch (err) {
     // transport failures are ambiguous for a mutating request (see
     // AmbiguousMintError) - the request may have arrived before the failure
@@ -61,12 +75,14 @@ const fetchResponse = async (
 
 const fetchFollowingSafeRedirects = async (
   startUrl: string,
-  method: string
+  method: string,
+  body?: string
 ): Promise<Response> => {
   let current = startUrl
   let currentMethod = method
+  let currentBody = body
   for (let redirects = 0; ; redirects++) {
-    const response = await fetchResponse(current, currentMethod)
+    const response = await fetchResponse(current, currentMethod, currentBody)
     const redirected =
       response.type === 'opaqueredirect' ||
       REDIRECT_STATUSES.has(response.status)
@@ -104,6 +120,7 @@ const fetchFollowingSafeRedirects = async (
         currentMethod === 'POST')
     ) {
       currentMethod = 'GET'
+      currentBody = undefined
     }
     current = next
   }
@@ -179,7 +196,8 @@ export type FetchedJson = {status: number; body: any}
 // instead of each call site reimplementing them.
 export const fetchJson = async (
   url: string | URL,
-  method: string = 'GET'
+  method: string = 'GET',
+  body?: string
 ): Promise<FetchedJson> => {
   networkGuard()
   if (!isAllowedServiceUrl(url.toString())) {
@@ -187,18 +205,22 @@ export const fetchJson = async (
       'The service provided a URL this wallet will not fetch (not an allowed https/http address).'
     )
   }
-  const res = await fetchFollowingSafeRedirects(url.toString(), method)
-  const body = await readBoundedJson(res)
-  return {status: res.status, body}
+  const res = await fetchFollowingSafeRedirects(url.toString(), method, body)
+  return {status: res.status, body: await readBoundedJson(res)}
 }
 
 // the one choke point every LNURLcash request in this kit goes through -
 // lookups, melt, split, merge, rotate, verify, minting.
 export const lnurlFetch = async (
   url: string | URL,
-  method: string = 'GET'
+  method: string = 'GET',
+  form?: Record<string, string>
 ): Promise<any> => {
-  const {body} = await fetchJson(url, method)
+  const {body} = await fetchJson(
+    url,
+    method,
+    form === undefined ? undefined : new URLSearchParams(form).toString()
+  )
   if (body?.status === 'ERROR') {
     throw new ServiceError(typeof body.reason === 'string' ? body.reason : '')
   }

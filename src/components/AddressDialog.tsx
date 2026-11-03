@@ -15,19 +15,29 @@ import {offlineMode} from '../offlineMode'
 import {notify, NotifyKind, copyToClipboard} from '../helpers'
 import {
   serverOf,
-  encodeCx1,
   registerUsername,
-  unregisterUsername
+  updateUsername,
+  unregisterUsername,
+  ServiceError
 } from '../lnurlcash'
-import {addressBranch, addressProofKey} from '../cashSecrets'
+import {
+  hasCashRoot,
+  addressShareCx1,
+  addressShareKey,
+  legacyAddressProofKey
+} from '../cashSecrets'
 import {
   registeredAddresses,
   addRegisteredAddress,
-  nextAddressSlot,
+  nextAddressShare,
+  skipAddressShare,
+  moveRegisteredAddress,
+  addressKeyOf,
   removeRegisteredAddress,
   forgetRegisteredAddress,
   forgottenAddresses,
   dismissForgottenAddress,
+  type AddressKey,
   type RegisteredAddress
 } from '../addressRegistry'
 import {isValidNpub} from '../nostrAddress'
@@ -41,7 +51,7 @@ import {
 // and 'unknown' get no extra text (the mint's own error already says it)
 const OWNERSHIP_PROBLEM: Partial<Record<AddressOwnership, string>> = {
   'not-ours':
-    "The mint has this name registered to a different key than this wallet's seed derives - claimed under another seed or an older wallet version, or re-claimed by someone else. This wallet can't unclaim it, and can't find notes paid to it.",
+    "The mint has this name registered to a different key than this wallet's seed derives - claimed under another seed, or re-claimed by someone else. This wallet can't unclaim it, and can't find notes paid to it.",
   unregistered:
     'The mint no longer knows this name at all - it was already freed (or the mint was reset).'
 }
@@ -53,12 +63,26 @@ export type AddressDialogProps = {
   onClose: () => void
 }
 
-// LUD-25's cx1 registration (see 25.md's Seed & derivation) AND
-// managing an already-claimed one - npub, unclaiming - scoped to one mint
-// at a time and opened from that mint's card on the Address page. A mint
-// can hold many addresses: each new claim registers its own HD-child
-// branch (cashSecrets.ts's FIRST_ADDRESS_SLOT/addressBranch), so they never
-// share keys or a note counter.
+const NO_SEED =
+  'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
+
+// the key a registration's proofs are signed with - see cashSecrets.ts
+const proofKeyOf = (host: string, key: AddressKey): Uint8Array | null =>
+  key.kind === 'share'
+    ? addressShareKey(host, key.share)
+    : legacyAddressProofKey(host, key.slot)
+
+// how many shares a claim moves past when the mint says one was used
+// already (from another device on the same seed)
+const SHARE_ATTEMPTS = 20
+
+// LUD-26 Lightning Address registration AND managing an already-claimed
+// one - npub, moving, unclaiming - scoped to one mint at a time and opened
+// from that mint's card on the Address page. A mint can hold many
+// addresses: each claim registers a fresh share S/0'/2/n'
+// (cashSecrets.ts's addressShareCx1), so they never share keys or a note
+// counter. A name registered before LUD-26 keeps working the old way until
+// it is moved to a share ("Move to a new key").
 // Address IDENTITY only: checking for new notes, and the auto-check
 // scheduler that triggers that automatically, live in the sibling
 // AddressScanDialog, opened from its own button on the same card.
@@ -95,38 +119,30 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       notify('Not a valid npub.', NotifyKind.ERROR)
       return
     }
-    // addressBranch/addressProofKey derive under the bare host (serverOf),
-    // never props.server's own full origin directly - see src/lib/urls.ts's
-    // serverOf for why a seed-derived branch must not fragment across
-    // schemes/ports the way a signing-key pin legitimately does
     const host = serverOf(props.server)
-    if (!addressBranch(host)) {
-      notify(
-        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
-        NotifyKind.ERROR
-      )
+    if (!hasCashRoot()) {
+      notify(NO_SEED, NotifyKind.ERROR)
       return
     }
     setClaiming(true)
     try {
-      // a name the mint already has on THIS wallet's branch (forgotten on
-      // this device, or claimed from another device on the same seed) is
-      // just added back locally - no POST, which would otherwise also
-      // replace whatever npub is registered with it there. Only a new npub
-      // still needs the round trip. A name on someone else's branch is
-      // refused here with a clearer reason than the mint's own "Invalid
-      // ownership signature."
-      const {ownership, slot: ownedSlot} = await resolveAddressOwnership(
-        props.server,
-        name
-      )
-      if (ownership === 'not-ours') {
-        throw new Error(
-          `${name}@${serverOf(props.server)} is registered at this mint to a different key than this wallet's seed - it can't be reclaimed from here.`
-        )
-      }
-      if (ownership === 'ours' && !npubValue) {
-        addRegisteredAddress(props.server, name, undefined, ownedSlot)
+      // a name this device recorded the key of (forgotten here) is just
+      // added back locally when the mint still has it - no request that
+      // could touch it. A new npub moves it to a fresh share (a PUT
+      // carrying the npub), since a POST never overwrites a registration.
+      const {ownership, key} = await resolveAddressOwnership(props.server, name)
+      if (ownership === 'ours' && key) {
+        if (npubValue) {
+          await moveTo(name, key, npubValue)
+        } else {
+          addRegisteredAddress(
+            props.server,
+            name,
+            undefined,
+            key.kind === 'share' ? key.share : undefined,
+            key.kind === 'legacy' ? key.slot : undefined
+          )
+        }
         setClaimedName(name)
         notify(
           `Reclaimed ${name}@${serverOf(props.server)} - the mint still has it registered to this wallet.`,
@@ -134,30 +150,41 @@ const AddressDialog: Component<AddressDialogProps> = props => {
         )
         return
       }
-      // re-registering one of ours (to change its npub) keeps its own
-      // branch - SERVICE checks the proof against the cx1 already on file.
-      // A fresh claim takes the next unused slot
-      const slot =
-        ownership === 'ours' ? ownedSlot : nextAddressSlot(props.server)
-      const branch = addressBranch(host, slot)
-      // this branch's own index-0 wallet note secret - required as this
-      // request's ownership proof (see lib/signature.ts's
-      // signAddressProof), even for a fresh claim: SERVICE checks it
-      // against whatever's on file, or the submitted cx1 if nothing is
-      const proofKey = addressProofKey(host, slot)
-      if (!branch || !proofKey) {
-        throw new Error(
-          'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
-        )
+      // a fresh claim takes the next unused share - moving past any the
+      // mint has seen already (claimed from another device on this seed)
+      let share = nextAddressShare(props.server)
+      for (let attempt = 0; ; attempt++) {
+        const cx1 = addressShareCx1(host, share)
+        const shareKey = addressShareKey(host, share)
+        if (!cx1 || !shareKey) throw new Error(NO_SEED)
+        try {
+          const {pr} = await registerUsername(
+            props.server,
+            name,
+            cx1,
+            shareKey,
+            npubValue || undefined
+          )
+          if (pr) {
+            throw new Error(
+              `This mint charges a fee to register an address (invoice ${pr.slice(0, 24)}…). Paying it from here is not supported yet.`
+            )
+          }
+          break
+        } catch (err) {
+          skipAddressShare(props.server, share)
+          if (
+            attempt < SHARE_ATTEMPTS &&
+            err instanceof ServiceError &&
+            /cx1 already used/i.test(err.reason)
+          ) {
+            share++
+            continue
+          }
+          throw err
+        }
       }
-      await registerUsername(
-        props.server,
-        name,
-        encodeCx1(branch.pubkeyXOnly, branch.chainCode),
-        proofKey,
-        npubValue || undefined
-      )
-      addRegisteredAddress(props.server, name, npubValue || undefined, slot)
+      addRegisteredAddress(props.server, name, npubValue || undefined, share)
       setClaimedName(name)
       notify(
         `Registered ${name}@${serverOf(props.server)}.`,
@@ -168,6 +195,59 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     } finally {
       setClaiming(false)
     }
+  }
+
+  // LUD-26's PUT: moves `name` from the key on file to a fresh share,
+  // never freeing it - how a pre-LUD-26 registration gets onto a share, and
+  // how a new npub is sent. Notes credited to the old key stay there; a
+  // full rescan sweeps them (addressRecovery.ts's runAddressScan).
+  const moveTo = async (name: string, current: AddressKey, npub?: string) => {
+    const host = serverOf(props.server)
+    const currentKey = proofKeyOf(host, current)
+    if (!currentKey) throw new Error(NO_SEED)
+    let share = nextAddressShare(props.server)
+    for (let attempt = 0; ; attempt++) {
+      const cx1 = addressShareCx1(host, share)
+      const shareKey = addressShareKey(host, share)
+      if (!cx1 || !shareKey) throw new Error(NO_SEED)
+      try {
+        await updateUsername(
+          props.server,
+          name,
+          currentKey,
+          cx1,
+          shareKey,
+          npub
+        )
+        break
+      } catch (err) {
+        skipAddressShare(props.server, share)
+        if (
+          attempt < SHARE_ATTEMPTS &&
+          err instanceof ServiceError &&
+          /cx1 already used/i.test(err.reason)
+        ) {
+          share++
+          continue
+        }
+        throw err
+      }
+    }
+    if (
+      !registeredAddresses().some(
+        a => a.server === props.server && a.username === name
+      )
+    ) {
+      addRegisteredAddress(
+        props.server,
+        name,
+        undefined,
+        current.kind === 'share' ? current.share : undefined,
+        current.kind === 'legacy' ? current.slot : undefined
+      )
+    }
+    moveRegisteredAddress(props.server, name, share)
+    if (npub) addRegisteredAddress(props.server, name, npub, share)
   }
 
   // ---- manage (already registered) ----
@@ -187,13 +267,25 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     props.onClose()
   }
 
-  const unclaim = async (addr: RegisteredAddress) => {
-    const proofKey = addressProofKey(serverOf(addr.server), addr.slot)
-    if (!proofKey) {
+  const move = async (addr: RegisteredAddress) => {
+    setBusy(true)
+    try {
+      await moveTo(addr.username, addressKeyOf(addr), addr.npub)
       notify(
-        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.',
-        NotifyKind.ERROR
+        `Moved ${addr.username}@${serverOf(addr.server)} to a new key. Run a full rescan to sweep notes paid to the old one.`,
+        NotifyKind.SUCCESS
       )
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unclaim = async (addr: RegisteredAddress) => {
+    const proofKey = proofKeyOf(serverOf(addr.server), addressKeyOf(addr))
+    if (!proofKey) {
+      notify(NO_SEED, NotifyKind.ERROR)
       return
     }
     setBusy(true)
@@ -329,8 +421,26 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
+            <Show when={addr().share === undefined}>
+              <p class="warning">
+                Registered before LUD-26: the mint keeps paying this address the
+                old way until you move it to a new key. Moving keeps the name;
+                notes already paid to it stay yours.
+              </p>
+            </Show>
             <Show when={confirm() === null}>
               <div class="btns">
+                <Show when={addr().share === undefined}>
+                  <button
+                    disabled={busy() || offlineMode() || state() !== 'unlocked'}
+                    onClick={() => move(addr())}
+                  >
+                    <Show when={busy()} fallback={<IoRefreshSharp />}>
+                      <IoRefreshSharp class="spin" />
+                    </Show>
+                    &nbsp;Move to a new key
+                  </button>
+                </Show>
                 <button
                   class="icon-btn"
                   disabled={busy()}

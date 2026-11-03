@@ -15,21 +15,19 @@
 //      actual bearer secret), cw1 (a script-path note's own
 //      script-path spend: leaf, control block, witness), cs1 (a SERVICE
 //      issuance certificate, recoverable ECDSA, amount in its HRP), cx1 (a
-//      watch-only branch export: pubkey + chain code).
-//   2. The non-hardened, taproot-style per-note key tweak a watch-only cx1
-//      branch derives pk_i from - this is NOT standard BIP32 child
-//      derivation (which hashes differently and needs HMAC-SHA512); it's
-//      the exact scheme lnurl-mint's own derivation.py implements, and
-//      must match byte-for-byte or a note minted to this wallet's branch
-//      would be unfindable (see recoverableNotes.test.ts's cross-checked
-//      vectors, generated from that actual mint code, not just internal
-//      self-consistency).
+//      share's extended public key: chain code + compressed pubkey, LUD-26).
+//   2. A share's note keys from its cx1 alone - plain BIP-32 CKDpub
+//      (LUD-26), what a SERVICE crediting a Lightning Address derives, and
+//      the superseded per-note taproot-style tweak (before luds a6c4652),
+//      kept read-only so a wallet can find and sweep notes it made under
+//      it.
 //   3. BIP341 script-path commitment derivation (deriveScriptPathCommitment
 //      et al, near the bottom of this file) - which taproot output key Q a
 //      revealed (script, control block) proves, the read side of a cw1.
 import {bech32m} from '@scure/base'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
-import {schnorr} from '@noble/curves/secp256k1.js'
+import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
+import {HDKey, HARDENED_OFFSET} from '@scure/bip32'
 import {encodeBolt11AmountSuffix, decodeBolt11AmountSuffix} from './bolt11'
 
 // ---- bech32m codec ----
@@ -260,43 +258,82 @@ export const decodeCs1WithAmount = (
   const amountMsat = decodeBolt11AmountSuffix(trimmed.slice(2, sep))
   if (amountMsat === null) return null
   const signature = decodeFixed(trimmed.slice(0, sep), trimmed, 65)
-  return signature ? {amountMsat, signature} : null
+  // r || s || recovery-id, the recovery id 0 to 3 (LUD-25's Encoding)
+  return signature && signature[64]! <= 3 ? {amountMsat, signature} : null
 }
 
 export const isCs1WithAmount = (value: string): boolean =>
   decodeCs1WithAmount(value) !== null
 
-export type Cx1 = {pubkeyXOnly: Uint8Array; chainCode: Uint8Array}
+// A share's extended public key (LUD-26): chain code || P, P compressed,
+// BIP-32's own order - 65 bytes, 113 characters. Whoever holds one can list
+// every note on the share (deriveNotePubkey), and spend none of them.
+export type Cx1 = {chainCode: Uint8Array; pubkey: Uint8Array}
 
-export const encodeCx1 = (
-  pubkeyXOnly: Uint8Array,
-  chainCode: Uint8Array
-): string =>
-  encodeFixed('cx', new Uint8Array([...pubkeyXOnly, ...chainCode]), 64)
+export const encodeCx1 = (cx1: Cx1): string =>
+  encodeFixed('cx', new Uint8Array([...cx1.chainCode, ...cx1.pubkey]), 65)
 
+// null unless the payload is 65 bytes and its last 33 a compressed curve
+// point - no note could ever be derived from anything else. The superseded
+// 64-byte shape is decodeLegacyCx1's.
 export const decodeCx1 = (value: string): Cx1 | null => {
-  const bytes = decodeFixed('cx', value, 64)
-  if (!bytes) return null
-  return {pubkeyXOnly: bytes.slice(0, 32), chainCode: bytes.slice(32)}
+  const bytes = decodeFixed('cx', value, 65)
+  if (!bytes || (bytes[32] !== 2 && bytes[32] !== 3)) return null
+  try {
+    secp256k1.Point.fromBytes(bytes.slice(32))
+  } catch {
+    return null
+  }
+  return {chainCode: bytes.slice(0, 32), pubkey: bytes.slice(32)}
 }
 export const isCx1 = (value: string): boolean => decodeCx1(value) !== null
 
-// ---- per-note key tweak ----
+// x(P): what a registration proof by this share verifies against
+export const cx1PubkeyXOnly = (cx1: Cx1): Uint8Array => cx1.pubkey.slice(1)
+
+// ---- LUD-26: a share's notes, from its cx1 alone ----
+//
+// Plain BIP-32 CKDpub: note i of the share is the share's child i, and its
+// note key Q is x(child). Exactly what a SERVICE holding the cx1 credits,
+// and what this wallet derives privately as S/a'/2/n'/i (branchDerivation.ts).
+// i is never hardened.
+export const deriveNotePubkey = (cx1: Cx1, index: number): Uint8Array => {
+  if (!Number.isInteger(index) || index < 0 || index >= HARDENED_OFFSET) {
+    throw new Error('A note index is a non-hardened BIP-32 index.')
+  }
+  const child = new HDKey({
+    publicKey: cx1.pubkey,
+    chainCode: cx1.chainCode
+  }).deriveChild(index)
+  return child.publicKey!.slice(1)
+}
+
+// ---- superseded: the per-note tweak (before luds a6c4652) ----
 //
 //   t     = tagged_hash("LNURLcash/derive", P || chain_code || ser32(purpose) || ser32(i))
 //   Q     = lift_x(P) + t·G
 //   pk_i  = x(Q)
 //
-// ser32(i) is a 4-byte BIG-ENDIAN index - lnurl-mint's own derivation.py
-// flags this width choice as "genuinely interoperability-critical" since
-// the spec text doesn't pin it; this must match exactly. `purpose` (added
-// alongside `i`, same ser32 width) splits a branch into three independent
-// counters, so a WALLET's own indices and a SERVICE's auto-minted ones can
-// never collide by coincidence, and each kind of note restores on its own
-// (25.md's Seed & derivation):
-export const NOTE_PURPOSE_WALLET = 0
-export const NOTE_PURPOSE_CHANGE = 1
-export const NOTE_PURPOSE_LIGHTNING_ADDRESS = 2
+// on a branch node m/139'/d1/d2/d3/d4 over the host as stored, exported as
+// the 64-byte cx1 = x(P) || chain_code. `purpose` split the branch into
+// three counters (0 wallet, 1 change, 2 Lightning Address); before luds
+// 50d740a there was no ser32(purpose) at all (purpose null here). Notes
+// minted under either are still money, so the wallet derives them here to
+// find and sweep them into LUD-26 keys - never to mint anything new.
+export const LEGACY_NOTE_PURPOSE_WALLET = 0
+export const LEGACY_NOTE_PURPOSE_CHANGE = 1
+export const LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS = 2
+
+export type LegacyCx1 = {pubkeyXOnly: Uint8Array; chainCode: Uint8Array}
+
+export const encodeLegacyCx1 = (cx1: LegacyCx1): string =>
+  encodeFixed('cx', new Uint8Array([...cx1.pubkeyXOnly, ...cx1.chainCode]), 64)
+
+export const decodeLegacyCx1 = (value: string): LegacyCx1 | null => {
+  const bytes = decodeFixed('cx', value, 64)
+  if (!bytes) return null
+  return {pubkeyXOnly: bytes.slice(0, 32), chainCode: bytes.slice(32)}
+}
 
 const NOTE_DERIVE_TAG = 'LNURLcash/derive'
 
@@ -319,49 +356,47 @@ const CURVE_ORDER = schnorr.Point.CURVE().n
 const tweakScalar = (
   branchPubkeyXOnly: Uint8Array,
   chainCode: Uint8Array,
-  purpose: number,
+  purpose: number | null,
   index: number
 ): bigint => {
-  const t = schnorr.utils.taggedHash(
-    NOTE_DERIVE_TAG,
-    branchPubkeyXOnly,
-    chainCode,
-    ser32BE(purpose),
-    ser32BE(index)
-  )
+  const t =
+    purpose === null
+      ? schnorr.utils.taggedHash(
+          NOTE_DERIVE_TAG,
+          branchPubkeyXOnly,
+          chainCode,
+          ser32BE(index)
+        )
+      : schnorr.utils.taggedHash(
+          NOTE_DERIVE_TAG,
+          branchPubkeyXOnly,
+          chainCode,
+          ser32BE(purpose),
+          ser32BE(index)
+        )
   return bytesToNumberBE(t) % CURVE_ORDER
 }
 
-// watch-only: needs only the branch's PUBLIC key + chain code (cx1's own
-// payload) - this is what lets a SERVICE (or anyone holding cx1) derive
-// pk_i without ever touching a private key
-export const deriveNotePubkey = (
-  branchPubkeyXOnly: Uint8Array,
-  chainCode: Uint8Array,
-  purpose: number,
+// watch-only: needs only the legacy branch's x-only key + chain code
+export const legacyDeriveNotePubkey = (
+  cx1: LegacyCx1,
+  purpose: number | null,
   index: number
 ): Uint8Array => {
-  const t = tweakScalar(branchPubkeyXOnly, chainCode, purpose, index)
-  const branchPoint = schnorr.utils.lift_x(bytesToNumberBE(branchPubkeyXOnly))
+  const t = tweakScalar(cx1.pubkeyXOnly, cx1.chainCode, purpose, index)
+  const branchPoint = schnorr.utils.lift_x(bytesToNumberBE(cx1.pubkeyXOnly))
   const notePoint = branchPoint.add(schnorr.Point.BASE.multiply(t))
   return schnorr.utils.pointToBytes(notePoint)
 }
 
-// only the wallet (holder of the branch's actual private key) can do this.
-// BIP-340/341's own even-Y convention: `branchPubkeyXOnly` (whatever
-// deriveNotePubkey is given) always names the EVEN-y point at that x
-// (lift_x's own contract) - so if the raw private scalar's true point has
-// ODD y, it must be negated (mod n) BEFORE adding the tweak, or the
-// derived secret's own public point won't match what deriveNotePubkey
-// (or the SERVICE, independently) computes from the x-only bytes alone.
-// Getting this parity step wrong is the single easiest way for this whole
-// scheme to silently derive a keypair that doesn't match its own address -
-// see recoverableNotes.test.ts's round-trip check (sk_i's own pubkey must equal
-// deriveNotePubkey's output), which exists specifically to catch that.
-export const deriveNoteSecretKey = (
+// only the holder of the legacy branch's private key can do this. BIP-340's
+// even-y convention: the x-only key names the EVEN-y point, so a raw scalar
+// whose point has odd y is negated before the tweak is added, or the
+// derived secret's own point would not match legacyDeriveNotePubkey's.
+export const legacyDeriveNoteSecretKey = (
   branchPrivateKey: Uint8Array,
   chainCode: Uint8Array,
-  purpose: number,
+  purpose: number | null,
   index: number
 ): Uint8Array => {
   const branchPubkeyXOnly = schnorr.getPublicKey(branchPrivateKey)

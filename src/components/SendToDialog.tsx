@@ -21,7 +21,8 @@ import {
   isCk1,
   AmbiguousMintError,
   AmbiguousMutationError,
-  type InternalTransferHint
+  canPayInternally,
+  type PayRequestInfo
 } from '../lnurlcash'
 import {notify, NotifyKind, msatToSats} from '../helpers'
 import {parseRecipient, type Recipient} from '../sendRecipient'
@@ -50,12 +51,11 @@ const RECIPIENT_HINT: Record<Recipient['kind'], string> = {
 // - a cp1 pasted in by hand: that exact pubkey. Whoever holds its private
 //   key proves ownership later with a ck1 signature (see the musig2 addon's
 //   own worked example) - this wallet never sees that key.
-// - a username@this-mint: its registered branch's next unused purpose-2
-//   (Lightning Address) key, with the branch and hinted next index taken
-//   from that address's own payRequest (LUD-25's "Internal transfer",
-//   text/cpub) via internalTransfer.ts's payInternalTransfer - pays a
-//   registered address without Lightning, landing where the recipient's own
-//   address check (addressRecovery.ts) finds it.
+// - a username@this-mint: a registered Lightning Address, paid without
+//   Lightning by LUD-26's "Internal transfer" (internalTransfer.ts's
+//   payInternalTransfer): the notes go whole to the address's callback and
+//   the mint credits the recipient's share, where their own address check
+//   (addressRecovery.ts) finds it.
 //
 // One or many input notes, naming the recipient as either the WHOLE output
 // (amount left blank - a combine, or a plain send if there's only one input)
@@ -75,11 +75,9 @@ const SendToDialog: Component<SendToDialogProps> = props => {
   )
   const recipient = createMemo(() => parseRecipient(recipientInput(), host()))
 
-  // a username's branch + hinted next index, from its payRequest - which
-  // must be minted by this same mint, or it's not an internal send at all
-  const lookupUsername = async (
-    username: string
-  ): Promise<InternalTransferHint> => {
+  // a username's payRequest - which must be a registered address at this
+  // same mint, or it's not an internal send at all
+  const lookupUsername = async (username: string): Promise<PayRequestInfo> => {
     const address = `${username}@${host()}`
     const url = resolveMintInput(address)
     if (!url) throw new Error(`${address} is not a valid address.`)
@@ -93,12 +91,12 @@ const SendToDialog: Component<SendToDialogProps> = props => {
         `${address} isn't minted by the same mint as these notes.`
       )
     }
-    if (!info.internalTransfer) {
+    if (!canPayInternally(info, props.bearers[0]!.url)) {
       throw new Error(
-        `${address} doesn't accept internal sends (no registered key advertised).`
+        `${address} doesn't accept internal sends (not a registered address).`
       )
     }
-    return info.internalTransfer
+    return info
   }
 
   const send = async () => {
@@ -143,25 +141,24 @@ const SendToDialog: Component<SendToDialogProps> = props => {
           ? `pubkey ${target.cp1}`
           : `${target.username}@${host()}`
       // resolved before anything is burned - a bad username fails here
-      const hint =
+      const payee =
         target.kind === 'username'
           ? await lookupUsername(target.username)
           : null
       const cp1 = target.kind === 'cp1' ? target.cp1 : ''
 
-      let index: number | null = null
       let change: {k1: string; signature?: string} | null = null
       try {
-        if (hint) {
+        if (payee) {
           const result = await payInternalTransfer(
+            payee,
+            base.url,
             base.callback,
             k1s,
             amountMsat,
-            sum,
-            hint
+            sum
           )
-          index = result.index
-          if (result.kind === 'split') {
+          if (result.change) {
             change = {k1: result.change, signature: result.changeSignature}
           }
         } else if (changeMsat === 0) {
@@ -198,11 +195,21 @@ const SendToDialog: Component<SendToDialogProps> = props => {
         const outcome = await probeBurnedNote(base.url)
         if (outcome === 'live') throw err
         // the recipient's output is never this wallet's to lose - only a
-        // split's change secret is
-        const changeK1 =
-          changeMsat > 0 && err instanceof AmbiguousMutationError
-            ? err.newSecrets[0]
-            : undefined
+        // split's change secret is: the last one carried out. An internal
+        // transfer's own output is the wallet's until it was sent, so it is
+        // kept too (and found spent on refresh if it did go out).
+        const carried =
+          err instanceof AmbiguousMutationError ? err.newSecrets : []
+        const changeK1 = changeMsat > 0 ? carried.at(-1) : undefined
+        if (payee && carried.length > (changeK1 ? 1 : 0)) {
+          await addBearer({
+            url: withNewK1(base.url, carried[0]!, amountMsat),
+            callback: base.callback,
+            amount: amountMsat,
+            verified: false,
+            mintPubkey: base.mintPubkey
+          })
+        }
         if (outcome === 'unknown') {
           if (changeK1) {
             await addBearer({
@@ -266,12 +273,11 @@ const SendToDialog: Component<SendToDialogProps> = props => {
         }
       }
 
-      const at = index !== null ? ` (index ${index})` : ''
       const kept =
         keptMsat > 0 ? `, kept ${msatToSats(keptMsat)} sats change` : ''
       logActivity(
         'transfer',
-        `Sent ${msatToSats(amountMsat)} sats from ${host()} to ${label}${at}${kept}.`,
+        `Sent ${msatToSats(amountMsat)} sats from ${host()} to ${label}${kept}.`,
         base.label
       )
       notify(

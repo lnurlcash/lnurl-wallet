@@ -162,33 +162,56 @@ describe('forgotten addresses', () => {
   })
 })
 
-describe('address slots', () => {
+describe('address shares', () => {
   const SERVER = 'https://mint.example.test'
 
-  it('hands out slot 2 first, then one past every known slot', () => {
-    expect(mod.nextAddressSlot(SERVER)).toBe(2)
-    mod.addRegisteredAddress(SERVER, 'alice', undefined, 2)
-    mod.addRegisteredAddress(SERVER, 'bob', undefined, 3)
-    expect(mod.nextAddressSlot(SERVER)).toBe(4)
-    expect(mod.nextAddressSlot('https://other.example.test')).toBe(2)
+  it('hands out share 0 first, then one past every share used', () => {
+    expect(mod.nextAddressShare(SERVER)).toBe(0)
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, 0)
+    mod.addRegisteredAddress(SERVER, 'bob', undefined, 1)
+    expect(mod.nextAddressShare(SERVER)).toBe(2)
+    expect(mod.nextAddressShare('https://other.example.test')).toBe(0)
   })
 
-  it('ignores legacy slot-less addresses when picking a slot', () => {
-    mod.addRegisteredAddress(SERVER, 'legacy')
-    expect(mod.nextAddressSlot(SERVER)).toBe(2)
+  it('ignores pre-LUD-26 registrations when picking a share', () => {
+    mod.addRegisteredAddress(SERVER, 'legacy', undefined, undefined, 3)
+    expect(mod.registeredAddresses()[0]).toMatchObject({slot: 3})
+    expect(mod.nextAddressShare(SERVER)).toBe(0)
   })
 
-  it("never reuses a forgotten address's slot", () => {
-    mod.addRegisteredAddress(SERVER, 'alice', undefined, 2)
+  it('never reuses a share, even once its address is gone', () => {
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, 0)
     mod.forgetRegisteredAddress(SERVER, 'alice')
-    expect(mod.forgottenAddresses()[0]?.slot).toBe(2)
-    expect(mod.nextAddressSlot(SERVER)).toBe(3)
+    expect(mod.forgottenAddresses()[0]?.share).toBe(0)
+    mod.dismissForgottenAddress(SERVER, 'alice')
+    expect(mod.nextAddressShare(SERVER)).toBe(1)
+    mod.skipAddressShare(SERVER, 4)
+    expect(mod.nextAddressShare(SERVER)).toBe(5)
   })
 
-  it('persists the slot across a reload', async () => {
+  it('moves a registration to a new share, keeping the old key to sweep', () => {
+    mod.addRegisteredAddress(SERVER, 'alice', undefined, undefined, 2)
+    mod.markAddressScanned(SERVER, 'alice', 7)
+    mod.moveRegisteredAddress(SERVER, 'alice', 0)
+    const [moved] = mod.registeredAddresses()
+    expect(moved).toMatchObject({
+      share: 0,
+      retired: [{kind: 'legacy', slot: 2}]
+    })
+    expect(moved?.slot).toBeUndefined()
+    expect(moved?.nextScanIndex).toBeUndefined()
+    expect(mod.addressKeyOf(moved!)).toEqual({kind: 'share', share: 0})
+  })
+
+  it('persists the share and retired keys across a reload', async () => {
     mod.addRegisteredAddress(SERVER, 'alice', undefined, 4)
+    mod.moveRegisteredAddress(SERVER, 'alice', 5)
     vi.resetModules()
     const reloaded = await import('./addressRegistry')
-    expect(reloaded.registeredAddresses()[0]?.slot).toBe(4)
+    expect(reloaded.registeredAddresses()[0]).toMatchObject({
+      share: 5,
+      retired: [{kind: 'share', share: 4}]
+    })
+    expect(reloaded.nextAddressShare(SERVER)).toBe(6)
   })
 })

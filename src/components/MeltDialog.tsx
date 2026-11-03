@@ -17,6 +17,7 @@ import type {
   MeltResult,
   InternalTransferResult
 } from '../lnurlcash'
+import {canPayInternally} from '../lnurlcash'
 import {
   isBolt11Invoice,
   isLightningAddress,
@@ -319,13 +320,13 @@ const MeltDialog: Component<MeltDialogProps> = props => {
       // melts (not this one invoice, which is spent once paid regardless)
       // - save it, kept apart from Mint.tsx's own storeable mints (see
       // storeableLinks.ts - a melt destination isn't necessarily a mint).
-      // Records whether it advertised internal-transfer support (text/
-      // xpub) at this same lookup, so the saved-addresses list below can
-      // mark that as a confirmed fact instead of guessing at it later.
+      // Records whether it is a mint's address (a withdrawLink, which
+      // LUD-26's internal transfer pays into) at this same lookup, so the
+      // saved-addresses list below can mark that as a confirmed fact.
       if (!result.disposable) {
         addStoreableMeltAddress(
           lnAddressText(),
-          info.internalTransfer !== undefined
+          info.withdrawLink !== undefined
         )
       }
       setLnAddressPayRequest(null)
@@ -367,27 +368,20 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   }
 
   // picks notes at the recipient's own mint (see pickInternalTransferBearers)
-  // and burns them straight onto the recipient's next derived pubkey (see
-  // lib's payInternalTransfer) - no invoice, no Lightning round trip, and
-  // nothing to poll afterward (finishMelt exists for a melt's async
-  // settlement; this isn't one)
+  // and sends them whole to the address's callback (see lib's
+  // payInternalTransfer - split or merged into one note of this wallet's
+  // first when needed); the mint credits the recipient's share - no
+  // invoice, no Lightning round trip, and nothing to poll afterward
   const payWithInternalTransfer = async () => {
     const info = lnAddressPayRequest()
-    const hint = internalTransferHint()
-    if (!info || !hint) return
+    if (!info || !internalTransferHint()) return
     const msat = satsToMsat(lnAddressAmountSats())
     if (!lnAddressAmountSats() || !Number.isFinite(msat) || msat <= 0) {
       notify('Enter an amount in sats.', NotifyKind.ERROR)
       return
     }
-    // minSendable/maxSendable are LUD-06 bounds on what the callback will
-    // turn into an INVOICE - meaningless here, since an internal transfer
-    // never requests one (payInternalTransfer burns straight onto the
-    // recipient's derived pubkey via SERVICE's split/merge endpoint
-    // instead - see lib/internalTransfer.ts, whose own only amount check
-    // is "not more than the selected notes are worth"). The mint is free
-    // to reject an amount it doesn't like there; nothing about the invoice
-    // bounds applies first.
+    // minSendable/maxSendable bound what the callback accepts, a whole
+    // note included - lib/internalTransfer.ts checks them before sending
     const picked = pickInternalTransferBearers(internalTransferBearers(), msat)
     const total = picked.reduce((sum, b) => sum + b.amount, 0)
     if (total < msat || picked.length === 0) {
@@ -406,43 +400,43 @@ const MeltDialog: Component<MeltDialogProps> = props => {
       let changeSignature: string | undefined
       try {
         const result: InternalTransferResult = await payInternalTransfer(
+          info,
+          base.url,
           base.callback,
           k1s,
           msat,
-          total,
-          hint
+          total
         )
-        if (result.kind === 'split') {
-          changeK1 = result.change
-          changeSignature = result.changeSignature
-        }
+        changeK1 = result.change
+        changeSignature = result.changeSignature
       } catch (err) {
         if (!(err instanceof AmbiguousMutationError)) throw err
-        // the request may have landed despite the failure - probe one
-        // input before deciding what (if anything) the carried change
-        // secret is worth, same reconciliation mergeSelectionIfNeeded/
-        // splitAndPay already do for their own mutations
+        // a split or merge landed (or may have) and what followed failed:
+        // the new notes it carries out are this wallet's money until a
+        // refresh says otherwise - a split's [output, change], a merge's
+        // [output]. The output may already have reached the payee.
         const outcome = await probeBurnedNote(base.url)
         if (outcome === 'live') throw err // nothing burned - a plain failure
-        if (outcome === 'unknown') {
-          if (err.newSecrets.length > 0) {
-            await addBearer({
-              url: withNewK1(base.url, err.newSecrets[0], total - msat),
-              callback: base.callback,
-              amount: total - msat,
-              verified: false,
-              mintPubkey: base.mintPubkey
-            })
-          }
-          throw new Error(
-            'The internal transfer may have gone through but could not be confirmed - ' +
-              (err.newSecrets.length > 0
-                ? 'the possible change is stored unverified alongside your originals. Refresh it to reconcile before trying again.'
-                : 'the input notes are still shown as unspent. Refresh them before trying again.')
-          )
+        const amounts =
+          err.newSecrets.length === 2 ? [msat, total - msat] : [total]
+        for (const [i, secret] of err.newSecrets.entries()) {
+          await addBearer({
+            url: withNewK1(base.url, secret, amounts[i]!),
+            callback: base.callback,
+            amount: amounts[i]!,
+            verified: false,
+            mintPubkey: base.mintPubkey
+          })
         }
-        // 'gone': the burn landed - any carried secret is the only money left
-        if (err.newSecrets.length > 0) changeK1 = err.newSecrets[0]
+        if (outcome === 'gone') {
+          for (const bearer of picked) removeBearer(bearer.id)
+        }
+        throw new Error(
+          'The internal transfer may not have completed - ' +
+            (outcome === 'gone'
+              ? 'your notes were exchanged for new ones, stored unverified. Refresh them to see whether the payment went out.'
+              : 'any new notes are stored unverified alongside your originals. Refresh them to reconcile before trying again.')
+        )
       }
       // every input is burned server-side from here on - any change is the
       // only money left from this selection, so (when present) it's
@@ -515,21 +509,20 @@ const MeltDialog: Component<MeltDialogProps> = props => {
 
   const unspentBearers = createMemo(() => bearers().filter(b => !b.spent))
 
-  // LUD-25's Internal transfer: eligible only if the looked-up
-  // address published a cx1 (Seed & derivation) AND this wallet holds a
-  // verified, browser-held note at that SAME mint - device-backed notes
-  // are excluded because the vault always generates its own output secret
-  // (deviceOrchestration.ts's deviceMerge/deviceSplit), with no way yet to
-  // name an external recipient's pubkey as that output instead.
-  const internalTransferHint = createMemo(
-    () => lnAddressPayRequest()?.internalTransfer ?? null
-  )
-  const internalTransferBearers = createMemo(() => {
+  // LUD-26's Internal transfer: eligible only if the looked-up address is
+  // a mint's (its payRequest names a withdrawLink) AND this wallet holds a
+  // verified, browser-held note on that SAME domain - device-backed notes
+  // are excluded because the vault holds their spends, and an internal
+  // transfer hands one to the mint as the payment itself.
+  const internalTransferHint = createMemo(() => {
     const info = lnAddressPayRequest()
-    if (!info || !internalTransferHint()) return []
-    const server = serverOf(info.callback)
+    return info?.withdrawLink ? info : null
+  })
+  const internalTransferBearers = createMemo(() => {
+    const info = internalTransferHint()
+    if (!info) return []
     return unspentBearers().filter(
-      b => !b.deviceId && b.callback !== '' && serverOf(b.url) === server
+      b => !b.deviceId && b.callback !== '' && canPayInternally(info, b.url)
     )
   })
   const internalTransferAvailableMsat = createMemo(() =>
@@ -1169,7 +1162,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                 <p class="bearer-hint">
                   You hold {msatToSats(internalTransferAvailableMsat())} sats at{' '}
                   {serverOf(info().callback)} - paying this address can skip
-                  Lightning entirely (LUD-25 internal transfer).
+                  Lightning entirely (LUD-26 internal transfer).
                 </p>
               </Show>
               <Show

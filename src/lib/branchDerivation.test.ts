@@ -6,13 +6,21 @@ import {schnorr} from '@noble/curves/secp256k1.js'
 import {
   CASH_ROOT_PURPOSE,
   lud05PathSuffix,
-  deriveDomainBranchNode
+  deriveDomainBranchNode,
+  deriveServiceRoot,
+  deriveNoteKey,
+  deriveShareNode,
+  notePathIndices,
+  serviceDomainOf,
+  shareCx1,
+  legacyCx1Of
 } from './branchDerivation'
 import {
   deriveNotePubkey,
-  deriveNoteSecretKey,
+  legacyDeriveNotePubkey,
+  legacyDeriveNoteSecretKey,
   encodeCp1,
-  NOTE_PURPOSE_WALLET
+  LEGACY_NOTE_PURPOSE_WALLET
 } from './recoverableNotes'
 
 describe('deriveDomainBranchNode', () => {
@@ -115,14 +123,13 @@ describe('LUD-25 branch derivation - literal spec-path vector', () => {
     )
   })
 
-  it('step 6: index-0 note pubkey off the branch (the per-note tweak from recoverableNotes.ts)', () => {
+  it('step 6 (legacy, sweep only): index-0 note pubkey by the superseded per-note tweak', () => {
     const master = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC))
     const cashRoot = master.deriveChild(CASH_ROOT_PURPOSE)
     const branch = deriveDomainBranchNode(cashRoot, MINT_DOMAIN)
-    const notePubkey0 = deriveNotePubkey(
-      branch.publicKey!.slice(1),
-      branch.chainCode!,
-      NOTE_PURPOSE_WALLET,
+    const notePubkey0 = legacyDeriveNotePubkey(
+      legacyCx1Of(branch),
+      LEGACY_NOTE_PURPOSE_WALLET,
       0
     )
     expect(bytesToHex(notePubkey0)).toBe(
@@ -133,14 +140,14 @@ describe('LUD-25 branch derivation - literal spec-path vector', () => {
     )
   })
 
-  it("step 7: the branch's own private key derives a secret whose pubkey round-trips to the same notePubkey0", () => {
+  it("step 7 (legacy, sweep only): the branch's own private key derives a secret whose pubkey round-trips to the same notePubkey0", () => {
     const master = HDKey.fromMasterSeed(mnemonicToSeedSync(MNEMONIC))
     const cashRoot = master.deriveChild(CASH_ROOT_PURPOSE)
     const branch = deriveDomainBranchNode(cashRoot, MINT_DOMAIN)
-    const noteSecretKey0 = deriveNoteSecretKey(
+    const noteSecretKey0 = legacyDeriveNoteSecretKey(
       branch.privateKey!,
       branch.chainCode!,
-      NOTE_PURPOSE_WALLET,
+      LEGACY_NOTE_PURPOSE_WALLET,
       0
     )
     expect(bytesToHex(noteSecretKey0)).toBe(
@@ -148,13 +155,75 @@ describe('LUD-25 branch derivation - literal spec-path vector', () => {
     )
     expect(bytesToHex(schnorr.getPublicKey(noteSecretKey0))).toBe(
       bytesToHex(
-        deriveNotePubkey(
-          branch.publicKey!.slice(1),
-          branch.chainCode!,
-          NOTE_PURPOSE_WALLET,
+        legacyDeriveNotePubkey(
+          legacyCx1Of(branch),
+          LEGACY_NOTE_PURPOSE_WALLET,
           0
         )
       )
     )
+  })
+})
+
+describe('LUD-26 note paths below S', () => {
+  const cashRoot = HDKey.fromMasterSeed(
+    mnemonicToSeedSync(
+      'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
+    )
+  ).deriveChild(CASH_ROOT_PURPOSE)
+  const H = 2 ** 31
+
+  it('hashes the domain without port, lowercased', () => {
+    expect(serviceDomainOf('https://Mint.Example:8443/w?k1=x')).toBe(
+      'mint.example'
+    )
+    expect(serviceDomainOf('lnurlw://mint.example/w')).toBe('mint.example')
+    expect(serviceDomainOf('mint.example')).toBe('mint.example')
+    expect(
+      bytesToHex(deriveServiceRoot(cashRoot, 'mint.example:8443').publicKey!)
+    ).toBe(
+      bytesToHex(deriveDomainBranchNode(cashRoot, 'mint.example').publicKey!)
+    )
+  })
+
+  it("lays wallet, change and share notes out as S/a'/0/i, S/a'/1/i, S/a'/2/n'/i", () => {
+    expect(notePathIndices({chain: 'wallet', account: 0, index: 7})).toEqual([
+      H,
+      0,
+      7
+    ])
+    expect(notePathIndices({chain: 'change', account: 1, index: 0})).toEqual([
+      H + 1,
+      1,
+      0
+    ])
+    expect(
+      notePathIndices({chain: 'share', account: 0, share: 3, index: 2})
+    ).toEqual([H, 2, H + 3, 2])
+    expect(() =>
+      notePathIndices({chain: 'wallet', account: H, index: 0})
+    ).toThrow()
+    expect(() =>
+      notePathIndices({chain: 'wallet', account: 0, index: H})
+    ).toThrow()
+  })
+
+  it("a share's notes from its cx1 are the ones the wallet holds the keys to", () => {
+    const S = deriveServiceRoot(cashRoot, 'mint.example')
+    const cx1 = shareCx1(deriveShareNode(S, 0, 1))
+    for (const index of [0, 1, 20]) {
+      const key = deriveNoteKey(S, {
+        chain: 'share',
+        account: 0,
+        share: 1,
+        index
+      })
+      expect(bytesToHex(deriveNotePubkey(cx1, index))).toBe(
+        bytesToHex(key.outputKey)
+      )
+      expect(bytesToHex(schnorr.getPublicKey(key.secretKey))).toBe(
+        bytesToHex(key.outputKey)
+      )
+    }
   })
 })

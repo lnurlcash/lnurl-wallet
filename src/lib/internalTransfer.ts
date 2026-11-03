@@ -1,174 +1,200 @@
-// LUD-25's "Internal transfer" (25.md): if a payee has registered a
-// cx1 (Seed & derivation) at a mint, SERVICE MAY publish it in their
-// payRequest metadata as a `text/cpub` entry, `cx1<...>:<i>` (their own
-// best-known next-unused index for that branch). A WALLET that already
-// holds a note at that SAME SERVICE can then skip Lightning entirely:
-// derive the payee's next pubkey pk_i from their cx1, and rotate, split or
-// merge (Redeeming a bearer note) naming it as p1 directly, instead of
-// generating a fresh secret for itself the way an ordinary mutation does.
-// `i` is only ever a hint - SERVICE rejects it if some other request beat
-// this one to it, and WALLET just retries at the next index. The
-// recipient's pk_i is always derived on purpose 2 (Lightning Address,
-// Seed & derivation) - an internal transfer is just another rail onto the
-// SAME branch a real Lightning payment would land on, sharing that
-// purpose's one counter rather than a WALLET's own purpose-0 notes.
+// LUD-26's "Internal transfer": a WALLET holding a note on the same SERVICE
+// as a registered Lightning Address may pay it without Lightning, by sending
+// the note itself to the address's payRequest `callback` - `amount` (the
+// note's full value) and `k1` (its spend) - instead of asking for an
+// invoice. The SERVICE handles the spend as a rotate whose resulting note it
+// picks: it burns the note and credits its full value, free of fees, to the
+// payee's share's next unused note, which the payer never learns. The two
+// are the same mint when the payRequest's `withdrawLink` is on the note's
+// own domain; anywhere else this would hand a bearer secret to a SERVICE
+// that does not hold the note, so it is refused before anything is sent.
+//
+// To pay part of a note, or several notes at once, the wallet first splits
+// or merges into a fresh note of its own worth exactly what it sends, then
+// sends that one. Any failure after that point carries the new notes'
+// secrets out (AmbiguousMutationError) - they are this wallet's money either
+// way, and the caller keeps them as notes until a lookup says otherwise.
 import {serverOf} from './urls'
-import {
-  AmbiguousMintError,
-  AmbiguousMutationError,
-  ServiceError
-} from './errors'
-import {
-  deriveNotePubkey,
-  decodeCx1,
-  encodeCp1,
-  isCk1,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS,
-  type Cx1
-} from './recoverableNotes'
+import {AmbiguousMintError, AmbiguousMutationError} from './errors'
+import {serviceDomainOf} from './branchDerivation'
+import {isCk1, isPubkeyCommitment} from './recoverableNotes'
+import {lnurlFetch} from './net'
 import {
   mergeNotesWithHash,
   splitNoteWithHash,
   generateOutputSecret,
-  disclosedValue
+  disclosedValue,
+  fetchNoteInfoByHash,
+  fetchNoteInfoByPubkey
 } from './request'
 
-export type InternalTransferHint = {cx1: Cx1; startIndex: number}
-
-// pulls a payee's cx1 export + hinted next index out of a payRequest's
-// metadata (per this section's own `["text/cpub", "cx1<...>:<i>"]` entry),
-// mirroring fees.ts's parseMintFee - JSON.parse, scan for the matching
-// entry type, never throw. `i` isn't validated against anything here (a
-// stale or adversarial hint is harmless - see payInternalTransfer's own
-// retry-on-conflict), only checked for being a well-formed non-negative
-// integer.
-export const parseInternalTransferHint = (
-  metadata: string
-): InternalTransferHint | null => {
-  let entries: unknown
-  try {
-    entries = JSON.parse(metadata)
-  } catch {
-    return null
-  }
-  if (!Array.isArray(entries)) return null
-  for (const entry of entries) {
-    if (!Array.isArray(entry) || entry[0] !== 'text/cpub') continue
-    if (typeof entry[1] !== 'string') continue
-    const sep = entry[1].lastIndexOf(':')
-    if (sep < 0) continue
-    const cx1 = decodeCx1(entry[1].slice(0, sep))
-    const startIndex = Number(entry[1].slice(sep + 1))
-    if (!cx1 || !Number.isInteger(startIndex) || startIndex < 0) continue
-    return {cx1, startIndex}
-  }
-  return null
+// what of a payee's payRequest an internal transfer needs
+export type InternalTransferPayee = {
+  callback: string
+  withdrawLink?: string
+  commentAllowed?: number
+  minSendable: number
+  maxSendable: number
 }
 
-const isIndexInUse = (err: unknown): boolean =>
-  err instanceof ServiceError && /already in use/i.test(err.reason)
+// whether a payRequest is a registered LUD-26 Lightning Address: it carries
+// its mint's withdrawLink, but - unlike the mint's own payRequest, whose
+// comment names the note to mint - MUST NOT set commentAllowed, since the
+// SERVICE picks the note it credits
+export const isRegisteredAddress = (payee: {
+  withdrawLink?: string
+  commentAllowed?: number
+}): boolean => !!payee.withdrawLink && !payee.commentAllowed
 
-// bounded the same defensive way addresses.ts's scanForAddressNotes bounds
-// its own index walk - a stale hint, or a mint that keeps reporting every
-// index tried as taken, must not spin this forever
-const MAX_INDEX_ATTEMPTS = 25
+const domainOfUrl = (url: string): string =>
+  serviceDomainOf(url.replace(/^lnurlw:/i, 'https:'))
 
-export type InternalTransferResult =
-  | {kind: 'merge'; index: number; signature: string}
-  | {
-      kind: 'split'
-      index: number
-      signature: string
-      change: string
-      changeSignature?: string
-    }
+// whether `payee` is a registered Lightning Address at the mint `noteUrl`
+// (any URL of the note's mint - its note URL, withdraw link or callback) is
+// a note of
+export const canPayInternally = (
+  payee: InternalTransferPayee,
+  noteUrl: string
+): boolean => {
+  if (!payee.withdrawLink || !isRegisteredAddress(payee)) return false
+  try {
+    return domainOfUrl(payee.withdrawLink) === domainOfUrl(noteUrl)
+  } catch {
+    return false
+  }
+}
 
-// burns k1s (one note, or several - same "one or many" input shape every
-// mutation in this kit already takes) and credits pk_i, on the recipient's
-// own branch, with `amountMsat`. When `amountMsat` equals the inputs'
-// combined value this is a plain merge naming pk_i as the WHOLE output
-// (a single input makes it an ordinary free rotate - SERVICE sees no
-// difference, see rotateNoteWithHash/mergeNotesWithHash's own shared wire
-// shape); otherwise it's a split, naming pk_i as the first output and a
-// fresh wallet-held secret as change. Normal split/merge fees apply either
-// way (Mint fee's for split and combine) - only a genuine single-input,
-// full-value rotate is free.
+const assertSendable = (payee: InternalTransferPayee, amountMsat: number) => {
+  if (amountMsat < payee.minSendable || amountMsat > payee.maxSendable) {
+    throw new Error(
+      `${amountMsat} msat is outside what that address accepts (${payee.minSendable}-${payee.maxSendable} msat).`
+    )
+  }
+}
+
+const assertSameMint = (payee: InternalTransferPayee, noteUrl: string) => {
+  if (!canPayInternally(payee, noteUrl)) {
+    throw new Error(
+      "That Lightning Address is not at the note's mint - pay it over Lightning instead."
+    )
+  }
+}
+
+// Sends one whole note, worth exactly `amountMsat`, to the payee. A refusal
+// is the SERVICE's answer (classified as for any spend - "already in use"
+// is the note already spent); a lost answer is ambiguous, and the note may
+// already be the payee's.
+export const sendNoteInternally = async (
+  payee: InternalTransferPayee,
+  noteUrl: string,
+  k1: string,
+  amountMsat: number
+): Promise<void> => {
+  assertSameMint(payee, noteUrl)
+  assertSendable(payee, amountMsat)
+  const url = new URL(payee.callback)
+  url.searchParams.set('amount', String(amountMsat))
+  url.searchParams.set('k1', k1)
+  const body = await lnurlFetch(url)
+  if (body?.status !== 'OK') {
+    throw new AmbiguousMintError(
+      'The service did not confirm the transfer - the note may already be spent.'
+    )
+  }
+}
+
+export type InternalTransferResult = {
+  // what the payee was credited: `amountMsat`, or for several notes paid
+  // whole the merged note's value, which a fee-charging mint's merge refund
+  // may have raised
+  paidMsat: number
+  // a split's change, this wallet's own new note
+  change?: string
+  changeSignature?: string
+}
+
+// Pays `amountMsat` out of `k1s` (worth `totalInputMsat` together) to a
+// Lightning Address at their own mint: one note worth exactly that is sent
+// as is; anything else is split (amount < total) or merged (several notes,
+// whole) into a fresh note of this wallet's first. `withdrawLink` and
+// `callback` are the notes' own mint's informational withdraw endpoint and
+// its callback.
 export const payInternalTransfer = async (
+  payee: InternalTransferPayee,
+  withdrawLink: string,
   callback: string,
   k1s: string[],
   amountMsat: number,
-  totalInputMsat: number,
-  hint: InternalTransferHint
+  totalInputMsat: number
 ): Promise<InternalTransferResult> => {
   if (amountMsat > totalInputMsat) {
     throw new Error('Cannot pay more than the selected notes are worth.')
   }
+  assertSameMint(payee, callback)
+  assertSendable(payee, amountMsat)
+  if (k1s.length === 1 && amountMsat === totalInputMsat) {
+    await sendNoteInternally(payee, callback, k1s[0]!, amountMsat)
+    return {paidMsat: amountMsat}
+  }
+
   const domain = serverOf(callback)
   const preferPubkey = k1s.every(isCk1)
-  let index = hint.startIndex
-  for (let attempt = 0; attempt < MAX_INDEX_ATTEMPTS; attempt++) {
-    const recipientOutput = encodeCp1(
-      deriveNotePubkey(
-        hint.cx1.pubkeyXOnly,
-        hint.cx1.chainCode,
-        NOTE_PURPOSE_LIGHTNING_ADDRESS,
-        index
-      )
-    )
-    if (amountMsat === totalInputMsat) {
-      try {
-        const {signature} = await mergeNotesWithHash(
-          callback,
-          k1s,
-          recipientOutput
-        )
-        if (!signature)
-          throw new Error('Recipient cp1 output has no certificate.')
-        return {kind: 'merge', index, signature}
-      } catch (err) {
-        if (isIndexInUse(err)) {
-          index++
-          continue
-        }
-        throw err
-      }
-    }
-    // the change output IS this wallet's own money - generated fresh per
-    // attempt so a retried index never reuses a secret already disclosed
-    // (as a hash/pubkey commitment) to a request that may yet still land
-    const changeK1 = generateOutputSecret(domain, preferPubkey, 'change')
+  // a fresh note of this wallet's own, worth what is sent
+  const output = generateOutputSecret(domain, preferPubkey, 'output')
+  if (amountMsat === totalInputMsat) {
     try {
-      const result = await splitNoteWithHash(
-        callback,
-        k1s,
-        amountMsat,
-        recipientOutput,
-        disclosedValue(changeK1)
-      )
-      if (!result.signature)
-        throw new Error('Recipient cp1 output has no certificate.')
-      return {
-        kind: 'split',
-        index,
-        signature: result.signature,
-        change: changeK1,
-        changeSignature: result.changeSignature
-      }
+      await mergeNotesWithHash(callback, k1s, disclosedValue(output))
     } catch (err) {
-      if (isIndexInUse(err)) {
-        index++
-        continue
-      }
-      // the request may have landed despite the failure - unlike splitNote's
-      // own equivalent catch, the recipient's output is never this wallet's
-      // to lose, only the change secret is, so only that rides the error
       if (err instanceof AmbiguousMintError) {
-        throw new AmbiguousMutationError((err as Error).message, [changeK1])
+        throw new AmbiguousMutationError((err as Error).message, [output])
       }
       throw err
     }
+    return sendKept(payee, withdrawLink, callback, output, [output], {})
   }
-  throw new Error(
-    `${domain} kept reporting every index tried as already in use - could not complete the internal transfer.`
-  )
+
+  const change = generateOutputSecret(domain, preferPubkey, 'change')
+  let changeSignature: string | undefined
+  try {
+    const result = await splitNoteWithHash(
+      callback,
+      k1s,
+      amountMsat,
+      disclosedValue(output),
+      disclosedValue(change)
+    )
+    changeSignature = result.changeSignature
+  } catch (err) {
+    if (err instanceof AmbiguousMintError) {
+      throw new AmbiguousMutationError((err as Error).message, [output, change])
+    }
+    throw err
+  }
+  return sendKept(payee, withdrawLink, callback, output, [output, change], {
+    change,
+    ...(changeSignature === undefined ? {} : {changeSignature})
+  })
+}
+
+// Sends the wallet's own fresh note `output` whole, at its real value. Any
+// failure carries every new note's secret out: the split or merge before it
+// has landed, so they are this wallet's money until a lookup says otherwise.
+const sendKept = async (
+  payee: InternalTransferPayee,
+  withdrawLink: string,
+  callback: string,
+  output: string,
+  secrets: string[],
+  extra: Omit<InternalTransferResult, 'paidMsat'>
+): Promise<InternalTransferResult> => {
+  try {
+    const ref = disclosedValue(output)
+    const info = isPubkeyCommitment(ref)
+      ? await fetchNoteInfoByPubkey(withdrawLink, ref)
+      : await fetchNoteInfoByHash(withdrawLink, ref)
+    await sendNoteInternally(payee, callback, output, info.maxWithdrawable)
+    return {paidMsat: info.maxWithdrawable, ...extra}
+  } catch (err) {
+    throw new AmbiguousMutationError((err as Error).message, secrets)
+  }
 }

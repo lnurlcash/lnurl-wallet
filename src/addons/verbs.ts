@@ -11,8 +11,6 @@ import {
   decodeCp1,
   decodeCx1,
   deriveNotePubkey,
-  NOTE_PURPOSE_WALLET,
-  parseInternalTransferHint,
   requireNoteK1,
   rotateNoteWithHash,
   verifyNoteSignatureForKey,
@@ -217,6 +215,7 @@ export const VERBS: Record<string, VerbHandler> = {
     const pubkeyVerified = bearer.mintPubkey
       ? verifyNoteSignatureForKey(
           pubkeyHex,
+          bearer.url,
           bearer.amount,
           signature,
           bearer.mintPubkey
@@ -728,18 +727,11 @@ export const VERBS: Record<string, VerbHandler> = {
     }
   },
 
-  // resolves a THIRD PARTY's LUD-25 pubkey from a cp1/cx1 address, a full
-  // Lightning Address, or a registered username - the MuSig2 addon's "add
-  // an external pubkey" flow, for a co-signer who has never handed over a
-  // raw 33-byte compressed hex. A full Lightning Address (any domain, e.g.
-  // "alice@example.com") is tried first and needs nothing else - it names
-  // its own mint. `mintNote` (one of THIS wallet's own notes) only matters
-  // for the bare-username fallback below, which has no domain of its own,
-  // so it's resolved as "username@<that note's own mint>" - the
-  // participant must be registered at the SAME mint the chosen note
-  // already belongs to, not just anywhere. cp1/cx1 need no domain at all
-  // (both are self-contained) and resolve identically regardless of which
-  // note (if any usable one exists) was picked.
+  // resolves a THIRD PARTY's pubkey from a cp1 or cx1 - the MuSig2 addon's
+  // "add an external pubkey" flow, for a co-signer who has never handed
+  // over a raw 33-byte compressed hex. A Lightning Address or username no
+  // longer resolves: LUD-26 addresses don't publish their key. `mintNote`
+  // is accepted but unused.
   //
   // Every path returns the SAME shape - a bare 33-byte compressed hex
   // string, exactly what externalPubkeyInput/addExternalParticipant
@@ -752,10 +744,8 @@ export const VERBS: Record<string, VerbHandler> = {
   // adds a participant.
   //
   // cp1 and any derived cx1 pubkey are x-only (BIP-340) - compressed as
-  // `02 || x`, never `03 || x`: every note key in this document's own
-  // derivation (Seed & derivation, both the top-level `sk_i` formula and
-  // a registered branch's own `sk_0`) is already normalized to the
-  // even-y point before its x-only form is ever published, so `02` is
+  // `02 || x`, never `03 || x`: a note is named by its x-only Q, and a
+  // BIP-340 signer negates its key for an odd y, so `02` is
   // the one BIP-340 convention (and MuSig2/BIP-327 verification) already
   // assumes for it - never a guess between the two.
   'note.resolveAddressPubkey': async (args, ctx) => {
@@ -771,78 +761,19 @@ export const VERBS: Record<string, VerbHandler> = {
 
     const cx1 = decodeCx1(address)
     if (cx1) {
-      // index 0 - the branch's own "first secret" (Seed & derivation),
-      // the closest thing to a stable per-branch identity key; unlike a
-      // payment there is no "next unused" to race against here, so
-      // there's no reason to prefer any other index
-      const pubkey = deriveNotePubkey(
-        cx1.pubkeyXOnly,
-        cx1.chainCode,
-        NOTE_PURPOSE_WALLET,
-        0
-      )
-      return `02${bytesToHex(pubkey)}`
+      // the share's note 0 - the closest thing to a stable per-share
+      // identity key; unlike a payment there is no "next unused" to race
+      // against here, so there's no reason to prefer any other index
+      return `02${bytesToHex(deriveNotePubkey(cx1, 0))}`
     }
 
-    // shared by the full-Lightning-Address path (any domain) and the
-    // bare-username-at-a-known-mint path below - both end the same way,
-    // once the actual "user@domain" string to resolve is in hand: fetch
-    // its payRequest, read the LUD-25 branch it may have
-    // registered (parseInternalTransferHint), and derive that branch's
-    // own stable index-0 pubkey (same reasoning as the cx1 branch above)
-    const resolveLud25Pubkey = async (
-      lookupAddress: string,
-      displayAddress: string
-    ): Promise<string> => {
-      const url = resolveLnurlInput(lookupAddress)
-      if (!url) throw new Error(`Could not resolve ${displayAddress}.`)
-      const body = (await lnurlFetch(url)) as {
-        tag?: string
-        metadata?: string
-      }
-      if (body?.tag !== 'payRequest') {
-        throw new Error(
-          `${displayAddress} did not resolve to a payable address.`
-        )
-      }
-      const hint = parseInternalTransferHint(String(body.metadata ?? ''))
-      if (!hint) {
-        throw new Error(
-          `${displayAddress} hasn't published a LUD-25 address (no text/cpub metadata) - they'd need to register a Lightning Address there first, or hand you their pubkey/cp1/cx1 directly.`
-        )
-      }
-      const pubkey = deriveNotePubkey(
-        hint.cx1.pubkeyXOnly,
-        hint.cx1.chainCode,
-        NOTE_PURPOSE_WALLET,
-        0
-      )
-      return `02${bytesToHex(pubkey)}`
-    }
-
-    // a full Lightning Address (any domain) resolves entirely on its own -
-    // unlike the bare-username path below, it never needs mintNote to
-    // supply a domain
-    if (isLightningAddress(address)) {
-      return resolveLud25Pubkey(address, address)
-    }
-
-    // mirrors the mint's own _USERNAME_PATTERN (router.py) - same shape
-    // guard addressRegistry.ts's own copy applies to a stored record,
-    // just here against an about-to-be-looked-up one
-    if (!/^[a-z0-9_.-]{1,32}$/.test(address.toLowerCase())) {
-      throw new Error(
-        'Not a valid compressed pubkey (paste it directly instead), cp1/cx1 address, Lightning Address, or username.'
-      )
-    }
-    if (!args.mintNote) {
-      throw new Error(
-        `Pick one of your notes above first, to choose which mint to look "${address}" up at.`
-      )
-    }
-    const bearer = resolveNote(ctx, args.mintNote)
-    const domain = serverOf(bearer.url)
-    const fullAddress = `${address.toLowerCase()}@${domain}`
-    return resolveLud25Pubkey(fullAddress, fullAddress)
+    // LUD-26 Lightning Addresses no longer publish the key on file (the
+    // old text/cpub entry is gone), so a name alone can't be turned into a
+    // pubkey any more
+    throw new Error(
+      isLightningAddress(address) || /^[a-z0-9_.-]{1,32}$/i.test(address)
+        ? `${address} can't be resolved to a pubkey - Lightning Addresses no longer publish their key. Ask for a pubkey, cp1 or cx1 instead.`
+        : 'Not a valid compressed pubkey (paste it directly instead), cp1 or cx1.'
+    )
   }
 }
