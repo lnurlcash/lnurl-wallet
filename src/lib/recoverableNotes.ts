@@ -245,26 +245,56 @@ export const isCw1 = (value: string): boolean => decodeCw1(value) !== null
 // this can't reuse encodeFixed/decodeFixed's own fixed-`hrp` signature
 // directly the way its siblings above do; it computes the HRP text itself
 // first, then delegates to the same two helpers for the bech32m mechanics.
-export const encodeCs1WithAmount = (
+const encodeCertificate = (
+  prefix: string,
   amountMsat: number,
   signature: Uint8Array
 ): string =>
-  encodeFixed(`cs${encodeBolt11AmountSuffix(amountMsat)}`, signature, 65)
+  encodeFixed(`${prefix}${encodeBolt11AmountSuffix(amountMsat)}`, signature, 65)
 
-export const decodeCs1WithAmount = (
+const decodeCertificate = (
+  prefix: string,
   value: string
 ): {amountMsat: number; signature: Uint8Array} | null => {
   const trimmed = value.trim().toLowerCase()
   const sep = trimmed.lastIndexOf('1')
-  if (sep < 2 || !trimmed.slice(0, sep).startsWith('cs')) return null
-  const amountMsat = decodeBolt11AmountSuffix(trimmed.slice(2, sep))
+  if (sep < 2 || !trimmed.slice(0, sep).startsWith(prefix)) return null
+  const amountMsat = decodeBolt11AmountSuffix(trimmed.slice(prefix.length, sep))
   if (amountMsat === null) return null
   const signature = decodeFixed(trimmed.slice(0, sep), trimmed, 65)
   return signature ? {amountMsat, signature} : null
 }
 
+export const encodeCs1WithAmount = (
+  amountMsat: number,
+  signature: Uint8Array
+): string => encodeCertificate('cs', amountMsat, signature)
+
+export const decodeCs1WithAmount = (
+  value: string
+): {amountMsat: number; signature: Uint8Array} | null =>
+  decodeCertificate('cs', value)
+
 export const isCs1WithAmount = (value: string): boolean =>
   decodeCs1WithAmount(value) !== null
+
+// A cr1 rotation certificate: SERVICE's signature that one note was burned
+// into exactly one other (see signature.ts's verifyRotationCertificate).
+// The same shape as a cs1, amount in the human-readable part included
+// ("cr10n" for 1000 msat), under its own prefix so neither is ever taken
+// for the other.
+export const encodeCr1WithAmount = (
+  amountMsat: number,
+  signature: Uint8Array
+): string => encodeCertificate('cr', amountMsat, signature)
+
+export const decodeCr1WithAmount = (
+  value: string
+): {amountMsat: number; signature: Uint8Array} | null =>
+  decodeCertificate('cr', value)
+
+export const isCr1WithAmount = (value: string): boolean =>
+  decodeCr1WithAmount(value) !== null
 
 export type Cx1 = {pubkeyXOnly: Uint8Array; chainCode: Uint8Array}
 

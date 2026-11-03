@@ -27,6 +27,7 @@ import {
   isCk1,
   isCw1,
   isPubkeyCommitment,
+  isCr1WithAmount,
   isCs1WithAmount,
   encodeCp1,
   outputKeyOfCw1
@@ -353,6 +354,8 @@ export type WithdrawSuccessResponse = {
   status: 'OK'
   c?: string
   c2?: string
+  // a rotate's rotation certificate (optional): see rotateNoteWithHash
+  r?: string
   // LUD-25 melt proof (optional): only present on a melt's response, and
   // only when SERVICE advertises it - see meltNote
   pr?: string
@@ -444,7 +447,14 @@ export const meltNote = async (
 // generateSecret(). rotateNote/splitNote/mergeNotes below are just the
 // caller-generates-its-own-secret case of these.
 
-export type HashedMutationResult = {signature?: string}
+export type HashedMutationResult = {
+  signature?: string
+  // a rotate only: SERVICE's cr1 certificate that the burned note became
+  // this one (signature.ts's verifyRotationCertificate). Optional on the
+  // wire - absent from a SERVICE that does not issue them, and never from a
+  // split or merge.
+  rotation?: string
+}
 
 // Key-path outputs must be certified. A plain hash output is
 // deliberately unsigned: there is no public note identifier to certify
@@ -475,7 +485,16 @@ export const rotateNoteWithHash = async (
     ['p1', refOf(h, short)]
   ])
   const signature = mutationSignature(body, 'c', h)
-  return signature === undefined ? {} : {signature}
+  // optional, so a malformed one is dropped rather than failing a rotate
+  // that already landed - whoever needs it verifies it, or retries for it
+  const rotation =
+    typeof body.r === 'string' && isCr1WithAmount(body.r)
+      ? body.r.trim()
+      : undefined
+  return {
+    ...(signature === undefined ? {} : {signature}),
+    ...(rotation === undefined ? {} : {rotation})
+  }
 }
 
 export type HashedSplitResult = {
@@ -542,7 +561,23 @@ export const mergeNotesWithHashShort = (
   h: string
 ): Promise<HashedMutationResult> => mergeNotesWithHash(callback, k1s, h, true)
 
-export type RotateResult = {k1: string; signature?: string}
+export type RotateResult = {
+  k1: string
+  signature?: string
+  // a rotate's rotation certificate, when SERVICE sent one - see
+  // HashedMutationResult. Never set by mergeNotes.
+  rotation?: string
+}
+
+// rotateNoteWithHash's own result, around the fresh secret it was for
+const rotateResult = (
+  k1: string,
+  result: HashedMutationResult
+): RotateResult => ({
+  k1,
+  signature: result.signature,
+  ...(result.rotation === undefined ? {} : {rotation: result.rotation})
+})
 
 // An output whose OWN k1 already proves key ownership - ck1 directly, or a
 // script-path note's cw1 (its leaf's own signature, or for a keyless leaf
@@ -615,8 +650,10 @@ export const rotateNote = async (
 ): Promise<RotateResult> => {
   const newK1 = generateOutputSecret(serverOf(callback), isUpgradedSecret(k1))
   try {
-    const result = await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
-    return {k1: newK1, signature: result.signature}
+    return rotateResult(
+      newK1,
+      await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
+    )
   } catch (err) {
     // the request may have landed - the fresh secret is then the only copy
     // of the rotated note, so it rides the error rather than vanishing
@@ -649,8 +686,10 @@ export const upgradeNote = async (
     )
   }
   try {
-    const result = await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
-    return {k1: newK1, signature: result.signature}
+    return rotateResult(
+      newK1,
+      await rotateNoteWithHash(callback, k1, disclosedValue(newK1))
+    )
   } catch (err) {
     // the request may have landed - the fresh secret is then the only copy
     // of the upgraded note, so it rides the error rather than vanishing

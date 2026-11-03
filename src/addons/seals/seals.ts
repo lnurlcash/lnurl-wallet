@@ -45,11 +45,20 @@
 //   Nothing here is secret. The recipient (or anyone else) client-side
 //   validates the whole thing themselves (sealChainProblem) - nobody has
 //   to trust the sender, same posture RGB's own client-side validation
-//   takes. NOT YET included: per-transition mint certification signatures
-//   (so today this proves the presented history is internally
-//   self-consistent - one unbroken, unforked chain - not yet that every
-//   step was independently confirmed by the mint; a real gap, flagged
-//   rather than glossed over).
+//   takes. The chain alone only proves the presented history is
+//   internally self-consistent: anyone who knows a state can lock a note of
+//   their own to a made-up next state, and an owner can split the note and
+//   lock both halves to two different ones. So a consignment also carries
+//   the mint's own rotation certificate (cr1, see lib/signature.ts) for
+//   every transition: its signature that THIS state's note was burned into
+//   exactly THAT state's note. A note is burned once, so a fully certified
+//   history has no fork and no look-alike in it - checked offline
+//   (sealCertificateProblem), against nothing but the mint's signing key.
+//   A consignment from a mint that issues none stays valid, just
+//   uncertified. Two things a certified history still does not say: that
+//   its LAST note is unspent (only the mint knows), and who issued the
+//   seal - certificates start at the first transition, so the genesis is
+//   vouched for by nothing but its own owner key and the mint it sits at.
 //
 //   Encoded the same way this kit encodes every other wire value it
 //   invents (see src/lib/recoverableNotes.ts's own top comment) - a single
@@ -80,7 +89,15 @@ import {
 } from '@noble/hashes/utils.js'
 import {schnorr} from '@noble/curves/secp256k1.js'
 import {bech32m} from '@scure/base'
-import {encodeCw1} from '../../lib/recoverableNotes'
+import {
+  decodeCr1WithAmount,
+  encodeCr1WithAmount,
+  encodeCw1
+} from '../../lib/recoverableNotes'
+import {
+  MINT_PUBKEY_PATTERN,
+  verifyRotationCertificate
+} from '../../lib/signature'
 import {
   compileLeaf,
   NUMS_INTERNAL_KEY_HEX,
@@ -372,11 +389,63 @@ export const sealChainProblem = (states: unknown): string => {
   return ''
 }
 
+// The mint's own certificate for one transition: the cr1 it answered the
+// rotate with that burned state `stateIndex - 1`'s note into state
+// `stateIndex`'s (so 1 for the first transfer - genesis itself has none).
+export type SealCertificate = {stateIndex: number; cr1: string}
+
 export type SealConsignment = {
   urlTemplate: string
   amountMsat: number
   // genesis .. current, in order
   states: SealState[]
+  // at most one per transition, in no particular order; empty for a
+  // consignment nobody certified
+  certificates: SealCertificate[]
+}
+
+// A certificate's own domain tag - what tells it apart from a state in the
+// run of length-prefixed parts below, the same way DOMAIN_TAG marks a
+// state. Followed by the state index it leads into and the cr1's raw 65
+// signature bytes: its amount is the consignment's own, never repeated.
+const CERTIFICATE_TAG = utf8ToBytes('LNURLcash/seal/cert/v0')
+
+const encodeSealCertificate = (
+  certificate: SealCertificate,
+  amountMsat: number
+): Uint8Array => {
+  const decoded = decodeCr1WithAmount(String(certificate?.cr1 ?? ''))
+  if (!decoded || decoded.amountMsat !== amountMsat) {
+    throw new Error('A certificate is not a cr1 for this seal’s own amount.')
+  }
+  if (!isPositiveInt(certificate.stateIndex)) {
+    throw new Error('A certificate names no transition.')
+  }
+  return concatBytes(
+    CERTIFICATE_TAG,
+    encodeStateIndex(certificate.stateIndex),
+    decoded.signature
+  )
+}
+
+const decodeSealCertificate = (
+  bytes: Uint8Array,
+  amountMsat: number
+): SealCertificate | null => {
+  const tagLength = CERTIFICATE_TAG.length
+  if (bytes.length !== tagLength + 4 + 65) return null
+  if (!bytesEqual(bytes.slice(0, tagLength), CERTIFICATE_TAG)) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const stateIndex = view.getUint32(tagLength, false)
+  if (stateIndex === 0) return null
+  try {
+    return {
+      stateIndex,
+      cr1: encodeCr1WithAmount(amountMsat, bytes.slice(tagLength + 4))
+    }
+  } catch {
+    return null
+  }
 }
 
 // Wire layout, all integers big-endian (mirrors recoverableNotes.ts's own
@@ -384,6 +453,12 @@ export type SealConsignment = {
 //   u64 amountMsat
 //   || u16 len(urlTemplate) || urlTemplate (utf8)
 //   || (u16 len(state_i) || encodeSealState(state_i))*   [genesis..current]
+//   || (u16 len(cert) || CERTIFICATE_TAG || u32 stateIndex || sig(65))*
+//
+// Certificates come after every state and are optional, so a consignment
+// with none is byte-for-byte what it was before they existed. The other
+// direction does not hold: a wallet from before certificates reads a
+// certificate as a malformed state and rejects the whole consignment.
 //
 // u64, not u32 like cw1's own locktime/sequence fields: amountMsat isn't
 // Bitcoin-consensus-bounded the way those are, and u32's ~4.29 billion
@@ -409,7 +484,8 @@ const encodeAmountMsat = (amountMsat: number): Uint8Array => {
 // this wallet just finished locking/transitioning to).
 export const encodeSealConsignment = (
   lockedNote: unknown,
-  states: unknown
+  states: unknown,
+  certificates?: unknown
 ): string | null => {
   const locked = lockedNote as {urlTemplate: string; amountMsat: number} | null
   if (!locked || !Array.isArray(states) || states.length === 0) return null
@@ -437,14 +513,31 @@ export const encodeSealConsignment = (
       }
       return encoded
     })
+    // a certificate that is malformed, for another amount, or for a
+    // transition this history doesn't have fails the whole encode: handing
+    // out a consignment that silently dropped one would look certified to
+    // its sender and uncertified to everyone else
+    const seen = new Set<number>()
+    const certificateParts = (
+      Array.isArray(certificates) ? (certificates as SealCertificate[]) : []
+    ).map(certificate => {
+      const part = encodeSealCertificate(certificate, locked.amountMsat)
+      const index = certificate.stateIndex
+      if (index >= stateParts.length || seen.has(index)) {
+        throw new Error('A certificate names a transition this seal lacks.')
+      }
+      seen.add(index)
+      return part
+    })
+    const parts = [...stateParts, ...certificateParts]
     let total = amountBytes.length + urlBytes.length
-    for (const part of stateParts) total += 2 + part.length
+    for (const part of parts) total += 2 + part.length
     const payload = new Uint8Array(total)
     payload.set(amountBytes, 0)
     payload.set(urlBytes, amountBytes.length)
     const view = new DataView(payload.buffer)
     let offset = amountBytes.length + urlBytes.length
-    for (const part of stateParts) {
+    for (const part of parts) {
       view.setUint16(offset, part.length, false)
       payload.set(part, offset + 2)
       offset += 2 + part.length
@@ -479,23 +572,101 @@ export const decodeSealConsignment = (
     }
     const {text: urlTemplate, next} = decodeLengthPrefixed(bytes, 8)
     if (!urlTemplate) return null
+    const amountMsat = Number(amountBig)
     let offset = next
     const states: SealState[] = []
+    const certificates: SealCertificate[] = []
     while (offset < bytes.length) {
       if (offset + 2 > bytes.length) return null
       const length = view.getUint16(offset, false)
       offset += 2
       if (offset + length > bytes.length) return null
-      const state = decodeSealState(bytes.slice(offset, offset + length))
+      const part = bytes.slice(offset, offset + length)
+      offset += length
+      const certificate = decodeSealCertificate(part, amountMsat)
+      if (certificate) {
+        certificates.push(certificate)
+        continue
+      }
+      // every state comes before the first certificate
+      if (certificates.length > 0) return null
+      const state = decodeSealState(part)
       if (!state) return null
       states.push(state)
-      offset += length
     }
     if (states.length === 0) return null
-    return {urlTemplate, amountMsat: Number(amountBig), states}
+    const indexes = certificates.map(c => c.stateIndex)
+    if (
+      new Set(indexes).size !== indexes.length ||
+      indexes.some(index => index >= states.length)
+    ) {
+      return null
+    }
+    return {urlTemplate, amountMsat, states, certificates}
   } catch {
     return null
   }
+}
+
+// '' when the mint whose signing key is `mintPubkeyHex` certified EVERY
+// transition of this consignment, else the first reason it didn't. Pure
+// and offline, like sealChainProblem, which it runs first: each state's
+// own output key is recomputed from the state itself (planSealLock), and
+// each certificate must be that mint's cr1 for exactly "the note of state
+// i - 1 became the note of state i", for this consignment's amount.
+//
+// What '' proves, given the mint's key: no transition here is a note
+// somebody minted on the side, and none is one half of a split - each
+// note is the only one its predecessor was ever burned into. It does not
+// say the LAST note is still unspent; only the mint knows that (see
+// verbs.ts's seal.check). A genesis-only consignment has no transition
+// and so nothing to certify.
+export const sealCertificateProblem = (
+  consignment: unknown,
+  mintPubkeyHex: unknown
+): string => {
+  const parsed =
+    typeof consignment === 'string'
+      ? decodeSealConsignment(consignment)
+      : (consignment as SealConsignment | null)
+  if (!parsed || !Array.isArray(parsed.states)) {
+    return 'That doesn’t look like a valid seal consignment.'
+  }
+  const chainProblem = sealChainProblem(parsed.states)
+  if (chainProblem) return chainProblem
+  const mintPubkey = String(mintPubkeyHex ?? '')
+    .trim()
+    .toLowerCase()
+  if (!MINT_PUBKEY_PATTERN.test(mintPubkey)) {
+    return 'Missing the mint’s own signing key.'
+  }
+  let outputKeys: string[]
+  try {
+    outputKeys = parsed.states.map(state => planSealLock(state).outputKeyHex)
+  } catch {
+    return 'A state does not lock to a valid output key.'
+  }
+  const certificates = Array.isArray(parsed.certificates)
+    ? parsed.certificates
+    : []
+  for (let i = 1; i < parsed.states.length; i++) {
+    const certificate = certificates.find(c => c.stateIndex === i)
+    if (!certificate) {
+      return `State ${i}: the mint did not certify this transition.`
+    }
+    if (
+      !verifyRotationCertificate(
+        outputKeys[i - 1]!,
+        outputKeys[i]!,
+        parsed.amountMsat,
+        certificate.cr1,
+        mintPubkey
+      )
+    ) {
+      return `State ${i}: its certificate is not this mint’s, or not for this transition.`
+    }
+  }
+  return ''
 }
 
 // what a pasted consignment says about itself, live while typing/pasting
