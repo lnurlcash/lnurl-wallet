@@ -115,8 +115,7 @@ export const PUBLIC_MINTS = [
   '@mint.600.wtf',
   '@lnurl.21mint.me',
   '@moneyer.dev',
-  '@lnurl.21linz.at',
-  '@minty.exe.xyz'
+  '@lnurl.21linz.at'
 ]
 
 const STORAGE_KEY = 'lnurlcash_trusted_mints'

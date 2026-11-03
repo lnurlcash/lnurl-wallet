@@ -10,7 +10,6 @@ import {
 import {
   encodeCk1,
   legacyDeriveNoteSecretKey,
-  LEGACY_NOTE_PURPOSE_WALLET,
   LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './lib/recoverableNotes'
@@ -283,13 +282,14 @@ export const legacySecretAtIndex = (
   )
 }
 
-// what an old registration's proofs were signed with - its branch's
-// purpose-0 index-0 key - and so what signs the PUT moving it to a share
+// what signs the PUT (and DELETE) of an old registration: LUD-26 checks a
+// proof against x(P) of the cx1 on file, and an old 64-byte cx1's P is the
+// branch (or slot) node itself - its own key, not the purpose-0 index-0
+// tweak the pre-LUD-26 proofs used
 export const legacyAddressProofKey = (
   domain: string,
   slot?: number
-): Uint8Array | null =>
-  legacySecretAtIndex(domain, LEGACY_NOTE_PURPOSE_WALLET, 0, slot)
+): Uint8Array | null => legacyNode(domain, slot)?.privateKey ?? null
 
 export const legacyAddressSecretAtIndex = (
   domain: string,
