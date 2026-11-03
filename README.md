@@ -46,11 +46,15 @@ What this wallet does beyond what the spec mandates:
 
 [LUD-26](https://github.com/lnurl/luds/blob/lnurlcash/26.md) replaced how
 seed-derived notes, Lightning Addresses and mint certificates are made. Your
-funds are not lost, but an existing wallet has to be carried across:
+funds are not lost, but an existing wallet has to be carried across. The
+wallet shows a warning while anything below is left to do: app-wide, on the
+Wallet page (with a one-click refresh) and on the Addresses page.
 
 - **Seed-derived notes** made before the upgrade sit on the old scheme.
   Every rescan (Mint page, and the restore flow) also sweeps that scheme, so
-  they are found and kept; refresh them to move them onto the new paths.
+  they are found and kept; refresh them to move them onto the new paths. The
+  same warning covers key-path notes received from someone else, which a
+  seed restore would not find at all.
   New notes use fresh counters from index 0.
 - **Lightning Addresses** registered before the upgrade keep receiving the
   old way until you move them: open the address and choose **Move to a new

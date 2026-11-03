@@ -16,6 +16,7 @@ import './styles/background.scss'
 import Nav from './components/Nav'
 import Footer from './components/Footer'
 import AddressAutoScanner from './components/AddressAutoScanner'
+import MigrationBanner from './components/MigrationBanner'
 import Hero from './pages/Hero'
 import Wallet from './pages/Wallet'
 import Setup from './pages/Setup'
@@ -55,6 +56,9 @@ const App = (props: any) => {
         itself) - see the component's own top comment for what it does and
         does not cover */}
         <AddressAutoScanner />
+        {/* what the LUD-26 upgrade left to do by hand - see
+        lud26Migration.ts */}
+        <MigrationBanner />
         {/* a render-time throw (e.g. one malformed stored record) must
         never take down the whole app shell - show a recoverable error
         instead of a permanently blank page */}

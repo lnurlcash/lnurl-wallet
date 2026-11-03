@@ -17,7 +17,9 @@ test.describe('Point of Sale addon', () => {
       mint =>
         localStorage.setItem(
           'lnurlcash_registered_addresses',
-          JSON.stringify([{server: mint, username: 'shop', registeredAt: 0}])
+          JSON.stringify([
+            {server: mint, username: 'shop', registeredAt: 0, share: 0}
+          ])
         ),
       MINT
     )

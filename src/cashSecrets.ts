@@ -14,6 +14,7 @@ import {
   LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
   type Cx1
 } from './lib/recoverableNotes'
+import {bytesToHex} from '@noble/hashes/utils.js'
 import {signNoteOwnership} from './lib/signature'
 
 // LUD-26 seed-recoverable note secrets: deterministic secrets for the
@@ -199,6 +200,50 @@ export const shareSecretAtIndex = (
     ? deriveNoteKey(root, {chain: 'share', account: ACCOUNT, share, index})
         .secretKey
     : null
+}
+
+// x-only keys (hex) of every note this seed could have made at `domain`
+// under LUD-26: the wallet and change chains up to their counters plus
+// `margin`, and each of `shares` up to its own index bound. Anything this
+// wallet holds as a ck1 outside this set is not recoverable from the seed
+// by an ordinary rescan - a note from before LUD-26, or one received from
+// someone else - and a refresh moves it onto the wallet chain
+// (lud26Migration.ts). Empty with no cash root loaded.
+export const seedNoteKeys = (
+  domain: string,
+  shares: {share: number; upTo: number}[] = [],
+  margin = 20
+): Set<string> => {
+  const keys = new Set<string>()
+  const root = serviceRoot(domain)
+  if (!root) return keys
+  const S = serviceDomainOf(domain)
+  const chain = (path: string, parent: () => HDKey, upTo: number) => {
+    const node = cached(`${path} ${S}`, parent)
+    for (let i = 0; i < upTo; i++) {
+      keys.add(bytesToHex(node.deriveChild(i).publicKey!.slice(1)))
+    }
+  }
+  const account = () =>
+    cached(`S/0' ${S}`, () => root.deriveChild(HARDENED_OFFSET + ACCOUNT))
+  chain(
+    "S/0'/0",
+    () => account().deriveChild(0),
+    nextCashAddressSecretIndex(domain) + margin
+  )
+  chain(
+    "S/0'/1",
+    () => account().deriveChild(1),
+    nextChangeSecretIndex(domain) + margin
+  )
+  for (const {share, upTo} of shares) {
+    chain(
+      `S/0'/2/${share}'`,
+      () => deriveShareNode(root, ACCOUNT, share),
+      upTo + margin
+    )
+  }
+  return keys
 }
 
 // ---- superseded derivation (before LUD-26), read-only, for sweeping ----

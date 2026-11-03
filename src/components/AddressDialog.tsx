@@ -12,12 +12,14 @@ import {
 import Dialog from './Dialog'
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
-import {notify, NotifyKind, copyToClipboard} from '../helpers'
+import {notify, NotifyKind, copyToClipboard, msatToSats} from '../helpers'
+import Qr from './Qr'
 import {
   serverOf,
   registerUsername,
   updateUsername,
   unregisterUsername,
+  decodeBolt11AmountMsat,
   ServiceError
 } from '../lnurlcash'
 import {
@@ -106,6 +108,10 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     forgottenAddresses().filter(a => a.server === props.server)
   )
 
+  // LUD-26 address fee: the invoice a registration answered with. The name
+  // is held for this wallet's share and starts working once it is paid.
+  const [feeInvoice, setFeeInvoice] = createSignal<string | null>(null)
+
   // `reclaimName`: one of forgottenHere()'s names, claimed straight from
   // its own button instead of the username field
   const claim = async (reclaimName?: string) => {
@@ -165,11 +171,9 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             shareKey,
             npubValue || undefined
           )
-          if (pr) {
-            throw new Error(
-              `This mint charges a fee to register an address (invoice ${pr.slice(0, 24)}…). Paying it from here is not supported yet.`
-            )
-          }
+          // a mint charging an address fee holds the name for this share
+          // until its invoice is paid - shown below, once recorded
+          if (pr) setFeeInvoice(pr)
           break
         } catch (err) {
           skipAddressShare(props.server, share)
@@ -187,7 +191,9 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       addRegisteredAddress(props.server, name, npubValue || undefined, share)
       setClaimedName(name)
       notify(
-        `Registered ${name}@${serverOf(props.server)}.`,
+        feeInvoice()
+          ? `${name}@${serverOf(props.server)} is held for you - pay the registration fee to activate it.`
+          : `Registered ${name}@${serverOf(props.server)}.`,
         NotifyKind.SUCCESS
       )
     } catch (err) {
@@ -421,6 +427,28 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
+            <Show when={feeInvoice()}>
+              {pr => (
+                <div class="warning">
+                  <p>
+                    This mint charges a fee to register an address
+                    <Show when={decodeBolt11AmountMsat(pr())}>
+                      {msat => <> ({msatToSats(msat())} sats)</>}
+                    </Show>
+                    . The name is held for you; it starts receiving once this
+                    invoice is paid - from your wallet's Send, or any Lightning
+                    wallet.
+                  </p>
+                  <Qr value={pr().toUpperCase()} />
+                  <div class="btns">
+                    <button onClick={() => copyToClipboard(pr())}>
+                      <IoCopySharp />
+                      &nbsp;Copy invoice
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Show>
             <Show when={addr().share === undefined}>
               <p class="warning">
                 Registered before LUD-26: the mint keeps paying this address the
