@@ -1,155 +1,182 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {schnorr} from '@noble/curves/secp256k1.js'
+import {sha256} from '@noble/hashes/sha2.js'
+import {hexToBytes, utf8ToBytes} from '@noble/hashes/utils.js'
+import {HDKey} from '@scure/bip32'
 import {
   registerUsername,
+  updateUsername,
   unregisterUsername,
   scanForAddressNotes,
   resolveScanStartIndex
 } from './addresses'
 import {
+  cx1PubkeyXOnly,
   deriveNotePubkey,
   encodeCp1,
-  NOTE_PURPOSE_WALLET,
+  encodeCx1,
   type Cx1
 } from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
 const MINT_KEY = `02${'11'.repeat(32)}`
-// a 64-byte BIP-340 Schnorr signature (signAddressProof, luds#ck1) - was a
-// 65-byte recoverable-ECDSA one (130 hex chars) before that change
-const SIG_PATTERN = /^[0-9a-f]{128}$/
+const SERVER = 'https://mint.example.com'
+const shareNode = (n: number) =>
+  HDKey.fromMasterSeed(new Uint8Array(32).fill(7)).derive(`m/0'/2/${n}'`)
+const cx1Of = (node: HDKey): Cx1 => ({
+  chainCode: node.chainCode!,
+  pubkey: node.publicKey!
+})
+
+type Sent = {url: URL; method?: string; form: URLSearchParams}
+const stubService = (answer: unknown = {status: 'OK'}) => {
+  const sent: Sent[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL, init?: RequestInit) => {
+      sent.push({
+        url: new URL(input.toString()),
+        method: init?.method,
+        form: new URLSearchParams((init?.body as string) ?? '')
+      })
+      return {json: async () => answer} as Response
+    })
+  )
+  return sent
+}
+
+// the proof the SERVICE checks: BIP-340 by the share key over sha256(message)
+const verifies = (sigHex: string, message: string, node: HDKey) =>
+  schnorr.verify(
+    hexToBytes(sigHex),
+    sha256(utf8ToBytes(message)),
+    cx1PubkeyXOnly(cx1Of(node))
+  )
 
 describe('registerUsername', () => {
-  it('POSTs cx1 and a sig proof to /p/{username}', async () => {
-    const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
-      const request = new URL(input.toString())
-      expect(request.pathname).toBe('/p/alice')
-      expect(init?.method).toBe('POST')
-      expect(request.searchParams.get('cx1')).toBe('cx1fakevalue')
-      expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
-      return {json: async () => ({status: 'OK'})} as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    await registerUsername(
-      'https://mint.example.com',
-      'alice',
-      'cx1fakevalue',
-      proofKey
-    )
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+  it('POSTs the cx1 and a register proof by its share key, form-encoded', async () => {
+    const sent = stubService()
+    const node = shareNode(0)
+    const cx1 = encodeCx1(cx1Of(node))
+    expect(
+      await registerUsername(SERVER, 'Alice', cx1Of(node), node.privateKey!)
+    ).toEqual({})
+    expect(sent).toHaveLength(1)
+    const [{url, method, form}] = sent as [Sent]
+    expect(url.pathname).toBe('/.well-known/lnurlp/alice')
+    expect(url.search).toBe('')
+    expect(method).toBe('POST')
+    expect(form.get('cx1')).toBe(cx1)
+    expect(form.has('npub')).toBe(false)
+    expect(
+      verifies(
+        form.get('sig')!,
+        `LNURLcash:register:mint.example.com:alice:${cx1}`,
+        node
+      )
+    ).toBe(true)
   })
 
-  it('omits npub entirely when not given', async () => {
-    const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const request = new URL(input.toString())
-      expect(request.searchParams.has('npub')).toBe(false)
-      return {json: async () => ({status: 'OK'})} as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    await registerUsername(
-      'https://mint.example.com',
-      'alice',
-      'cx1fakevalue',
-      proofKey
-    )
-  })
-
-  it('sends npub exactly as given, when provided', async () => {
-    const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const request = new URL(input.toString())
-      expect(request.searchParams.get('npub')).toBe('npub1fakevalue')
-      return {json: async () => ({status: 'OK'})} as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    await registerUsername(
-      'https://mint.example.com',
-      'alice',
-      'cx1fakevalue',
-      proofKey,
-      'npub1fakevalue'
-    )
+  it('sends npub exactly as given, and returns an address fee invoice', async () => {
+    const sent = stubService({status: 'OK', pr: 'lnbc1fee'})
+    const node = shareNode(0)
+    expect(
+      await registerUsername(
+        SERVER,
+        'alice',
+        cx1Of(node),
+        node.privateKey!,
+        'npub1fakevalue'
+      )
+    ).toEqual({pr: 'lnbc1fee'})
+    expect(sent[0]!.form.get('npub')).toBe('npub1fakevalue')
   })
 
   it('throws on a rejected registration, with the service reason', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          ({
-            json: async () => ({
-              status: 'ERROR',
-              reason:
-                'Ownership proof required to overwrite an existing registration.'
-            })
-          }) as Response
-      )
-    )
+    stubService({status: 'ERROR', reason: 'cx1 already used'})
+    const node = shareNode(0)
     await expect(
-      registerUsername(
-        'https://mint.example.com',
-        'alice',
-        'cx1fakevalue',
-        schnorr.utils.randomSecretKey()
+      registerUsername(SERVER, 'alice', cx1Of(node), node.privateKey!)
+    ).rejects.toThrow(/cx1 already used/)
+  })
+})
+
+describe('updateUsername', () => {
+  it('PUTs the new cx1, an update proof by the key on file and a register proof by the new one', async () => {
+    const sent = stubService()
+    const current = shareNode(0)
+    const next = shareNode(1)
+    const cx1 = encodeCx1(cx1Of(next))
+    await updateUsername(
+      SERVER,
+      'alice',
+      current.privateKey!,
+      cx1Of(next),
+      next.privateKey!
+    )
+    const [{url, method, form}] = sent as [Sent]
+    expect(url.pathname).toBe('/.well-known/lnurlp/alice')
+    expect(method).toBe('PUT')
+    expect(form.get('cx1')).toBe(cx1)
+    expect(
+      verifies(
+        form.get('sig')!,
+        `LNURLcash:update:mint.example.com:alice:${cx1}`,
+        current
       )
-    ).rejects.toThrow(/Ownership proof required/)
+    ).toBe(true)
+    expect(
+      verifies(
+        form.get('newsig')!,
+        `LNURLcash:register:mint.example.com:alice:${cx1}`,
+        next
+      )
+    ).toBe(true)
+  })
+
+  it('throws on a rejected update', async () => {
+    stubService({status: 'ERROR', reason: 'unknown user'})
+    await expect(
+      updateUsername(
+        SERVER,
+        'alice',
+        shareNode(0).privateKey!,
+        cx1Of(shareNode(1)),
+        shareNode(1).privateKey!
+      )
+    ).rejects.toThrow(/unknown user/)
   })
 })
 
 describe('unregisterUsername', () => {
-  it('DELETEs /p/{username} with a sig proof', async () => {
-    const proofKey = schnorr.utils.randomSecretKey()
-    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
-      const request = new URL(input.toString())
-      expect(request.pathname).toBe('/p/alice')
-      expect(init?.method).toBe('DELETE')
-      expect(request.searchParams.get('sig')).toMatch(SIG_PATTERN)
-      return {json: async () => ({status: 'OK'})} as Response
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    await unregisterUsername('https://mint.example.com', 'alice', proofKey)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+  it('DELETEs with an unregister proof by the key on file', async () => {
+    const sent = stubService()
+    const node = shareNode(0)
+    await unregisterUsername(SERVER, 'alice', node.privateKey!)
+    const [{url, method, form}] = sent as [Sent]
+    expect(url.pathname).toBe('/.well-known/lnurlp/alice')
+    expect(method).toBe('DELETE')
+    expect(
+      verifies(
+        form.get('sig')!,
+        'LNURLcash:unregister:mint.example.com:alice',
+        node
+      )
+    ).toBe(true)
   })
 
   it('throws on a rejected unregistration, with the service reason', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          ({
-            json: async () => ({
-              status: 'ERROR',
-              reason: 'Invalid ownership signature.'
-            })
-          }) as Response
-      )
-    )
+    stubService({status: 'ERROR', reason: 'Invalid ownership signature.'})
     await expect(
-      unregisterUsername(
-        'https://mint.example.com',
-        'alice',
-        schnorr.utils.randomSecretKey()
-      )
+      unregisterUsername(SERVER, 'alice', shareNode(0).privateKey!)
     ).rejects.toThrow(/Invalid ownership signature/)
   })
 })
 
 describe('scanForAddressNotes', () => {
-  const branch: Cx1 = {
-    pubkeyXOnly: schnorr.getPublicKey(schnorr.utils.randomSecretKey()),
-    chainCode: new Uint8Array(32).fill(0x42)
-  }
-
-  const pubkeyAt = (index: number) =>
-    deriveNotePubkey(
-      branch.pubkeyXOnly,
-      branch.chainCode,
-      NOTE_PURPOSE_WALLET,
-      index
-    )
+  const share = cx1Of(shareNode(0))
+  const pubkeyAt = (index: number) => deriveNotePubkey(share, index)
 
   it('finds notes at known indices and stops after the gap limit', async () => {
     // notes exist at index 0 and 2 only
@@ -178,8 +205,7 @@ describe('scanForAddressNotes', () => {
 
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 3}
     )
     expect(results.map(r => r.index)).toEqual([0, 2])
@@ -210,8 +236,7 @@ describe('scanForAddressNotes', () => {
     const seen: number[] = []
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 2, onFound: r => seen.push(r.index)}
     )
     expect(seen).toEqual([0, 1, 2])
@@ -240,15 +265,10 @@ describe('scanForAddressNotes', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const progressed: number[] = []
-    await scanForAddressNotes(
-      'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
-      {
-        gapLimit: 2,
-        onProgress: index => progressed.push(index)
-      }
-    )
+    await scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+      gapLimit: 2,
+      onProgress: index => progressed.push(index)
+    })
     expect(progressed).toEqual([0, 1, 2])
   })
 
@@ -268,8 +288,7 @@ describe('scanForAddressNotes', () => {
     vi.stubGlobal('fetch', fetchMock)
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 1, rateLimitBackoffMs: 1}
     )
     expect(results).toEqual([])
@@ -308,8 +327,7 @@ describe('scanForAddressNotes', () => {
     const spent: number[] = []
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 3, onSpent: index => spent.push(index)}
     )
     // the spent note at 0 is never returned as something to recover, but
@@ -329,14 +347,9 @@ describe('scanForAddressNotes', () => {
       })
     )
     await expect(
-      scanForAddressNotes(
-        'https://mint.example.com/withdraw',
-        branch,
-        NOTE_PURPOSE_WALLET,
-        {
-          gapLimit: 5
-        }
-      )
+      scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+        gapLimit: 5
+      })
     ).rejects.toThrow()
   })
 
@@ -373,8 +386,7 @@ describe('scanForAddressNotes', () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([0]))
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 5, startIndex: 3, checkBehind: true}
     )
     expect(results.map(r => r.index)).toEqual([0])
@@ -388,8 +400,7 @@ describe('scanForAddressNotes', () => {
     const probed: number[] = []
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {
         gapLimit: 5,
         startIndex: 10,
@@ -406,17 +417,12 @@ describe('scanForAddressNotes', () => {
   it('checkBehind clamps its window at 0 and never probes a negative index', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes(
-      'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
-      {
-        gapLimit: 5,
-        startIndex: 2,
-        checkBehind: true,
-        onProgress: index => probed.push(index)
-      }
-    )
+    await scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+      gapLimit: 5,
+      startIndex: 2,
+      checkBehind: true,
+      onProgress: index => probed.push(index)
+    })
     expect(Math.min(...probed)).toBe(0)
   })
 
@@ -424,8 +430,7 @@ describe('scanForAddressNotes', () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([0]))
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 5, startIndex: 3}
     )
     expect(results).toEqual([])
@@ -437,8 +442,7 @@ describe('scanForAddressNotes', () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([30]))
     const results = await scanForAddressNotes(
       'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
+      pubkeyAt,
       {gapLimit: 5, minIndex: 30}
     )
     expect(results.map(r => r.index)).toEqual([30])
@@ -447,16 +451,11 @@ describe('scanForAddressNotes', () => {
   it('minIndex forces coverage through exactly that index and no further once nothing is found', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes(
-      'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
-      {
-        gapLimit: 3,
-        minIndex: 10,
-        onProgress: index => probed.push(index)
-      }
-    )
+    await scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+      gapLimit: 3,
+      minIndex: 10,
+      onProgress: index => probed.push(index)
+    })
     // consecutiveUnknown keeps accumulating past gapLimit throughout the
     // forced stretch (it isn't reset at minIndex) - so the moment index
     // passes 10, the ordinary stop condition is already satisfied and the
@@ -473,31 +472,21 @@ describe('scanForAddressNotes', () => {
     // more indices past minIndex afterward, same as any other hit would
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([8]))
     const probed: number[] = []
-    await scanForAddressNotes(
-      'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
-      {
-        gapLimit: 3,
-        minIndex: 10,
-        onProgress: index => probed.push(index)
-      }
-    )
+    await scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+      gapLimit: 3,
+      minIndex: 10,
+      onProgress: index => probed.push(index)
+    })
     expect(probed).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
   })
 
   it('omitting minIndex behaves exactly as before (plain gapLimit stop)', async () => {
     vi.stubGlobal('fetch', fakeMintWithLiveIndices([]))
     const probed: number[] = []
-    await scanForAddressNotes(
-      'https://mint.example.com/withdraw',
-      branch,
-      NOTE_PURPOSE_WALLET,
-      {
-        gapLimit: 4,
-        onProgress: index => probed.push(index)
-      }
-    )
+    await scanForAddressNotes('https://mint.example.com/withdraw', pubkeyAt, {
+      gapLimit: 4,
+      onProgress: index => probed.push(index)
+    })
     expect(probed).toEqual([0, 1, 2, 3])
   })
 })

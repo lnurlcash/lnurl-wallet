@@ -1,29 +1,45 @@
 import {createSignal} from 'solid-js'
 import {serviceOriginOf} from './lnurlcash'
 import {isValidNpub} from './nostrAddress'
-import {FIRST_ADDRESS_SLOT} from './cashSecrets'
+import {LEGACY_FIRST_ADDRESS_SLOT} from './cashSecrets'
 
-// LUD-25 (see 25.md's "Seed & derivation") - usernames THIS wallet
-// has registered for itself at a mint (GET /register), each backed by its
-// own watch-only branch (see cashSecrets.ts's cashAddressBranch). Distinct
+// LUD-26 - usernames THIS wallet has registered for itself at a mint, each
+// backed by its own share (see cashSecrets.ts's addressShareCx1). Distinct
 // from trustedMints.ts's own `username` field, which caches the local-part
 // a mint's own GENERIC identity was reached at ("mint" out of "mint@host")
 // - unrelated to a holder's personally-claimed address, which has no home
 // there. Not yet included in backup/restore (storage.ts) - a lost device
 // loses track of what it registered, though the registration itself still
 // stands at the mint and can be reclaimed by typing the name into
-// AddressDialog's claim view (no re-POST needed); the branch itself is
-// always re-derivable from the seed regardless (see cashAddressBranch).
+// AddressDialog's claim view (no re-POST needed); the share itself is
+// always re-derivable from the seed regardless (see addressShareCx1).
+// which key a registration's notes are credited to: a LUD-26 share, or a
+// pre-LUD-26 branch (`slot` undefined: the old domain branch itself)
+export type AddressKey =
+  {kind: 'share'; share: number} | {kind: 'legacy'; slot?: number}
+
+export const addressKeyOf = (a: {share?: number; slot?: number}): AddressKey =>
+  a.share !== undefined
+    ? {kind: 'share', share: a.share}
+    : {kind: 'legacy', ...(a.slot !== undefined && {slot: a.slot})}
+
 export type RegisteredAddress = {
   // full SERVICE origin, same convention as trustedMints.ts's own `server`
   server: string
   username: string
   registeredAt: number
-  // which HD child of this mint's branch this address registered as its
-  // cx1 (see cashSecrets.ts's FIRST_ADDRESS_SLOT) - undefined for an
-  // address registered before addresses got their own branch, which uses
-  // the mint's domain branch itself
+  // the share S/0'/2/n' whose cx1 is on file (cashSecrets.ts's
+  // addressShareCx1). Undefined for a registration made before LUD-26,
+  // which the mint keeps paying the old way until AddressDialog moves it
+  // to a share (updateUsername) - see `slot` for which old branch it is.
+  share?: number
+  // a pre-LUD-26 registration only: which hardened child of the old domain
+  // branch it registered (cashSecrets.ts's LEGACY_FIRST_ADDRESS_SLOT), or
+  // undefined for the domain branch itself
   slot?: number
+  // keys this address was moved off (moveRegisteredAddress): LUD-26 leaves
+  // notes credited there where they are, so a full rescan sweeps them too
+  retired?: AddressKey[]
   // whatever npub AddressDialog sent alongside this claim (see
   // lib/addresses.ts's registerUsername), purely for this device's own
   // display - SERVICE is the one that actually serves it as a NIP-05
@@ -38,10 +54,8 @@ export type RegisteredAddress = {
   // resume floor for the next incremental "check notes" pass (as opposed
   // to a full "rescan all" from 0) - see addressRecovery.ts's
   // scanRegisteredAddress's own `nextScanIndex` return field for how this
-  // advances: past whatever this device has itself confirmed used, and
-  // past whatever index SERVICE's own payRequest metadata hints at
-  // (LUD-25's text/cpub, internalTransfer.ts's
-  // parseInternalTransferHint) - never regresses
+  // advances: past whatever this device has itself confirmed used - never
+  // regresses
   nextScanIndex?: number
 }
 
@@ -68,9 +82,35 @@ const USERNAME_PATTERN = /^[a-z0-9_.-]{1,32}$/
 const readSlot = (value: unknown): number | undefined =>
   typeof value === 'number' &&
   Number.isInteger(value) &&
-  value >= FIRST_ADDRESS_SLOT
+  value >= LEGACY_FIRST_ADDRESS_SLOT
     ? value
     : undefined
+
+const readShare = (value: unknown): number | undefined =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= 0 &&
+  value < 2 ** 31
+    ? value
+    : undefined
+
+const readKey = (value: any): AddressKey | null => {
+  if (value?.kind === 'share') {
+    const share = readShare(value.share)
+    return share === undefined ? null : {kind: 'share', share}
+  }
+  if (value?.kind === 'legacy') {
+    const slot = readSlot(value.slot)
+    return {kind: 'legacy', ...(slot !== undefined && {slot})}
+  }
+  return null
+}
+
+const readRetired = (value: unknown): AddressKey[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const keys = value.flatMap(k => readKey(k) ?? [])
+  return keys.length > 0 ? keys : undefined
+}
 
 const normalizeOrigin = (value: string): string | null => {
   const origin = serviceOriginOf(value)
@@ -112,13 +152,17 @@ const readStored = (): RegisteredAddress[] => {
         typeof a?.nextScanIndex === 'number' && a.nextScanIndex >= 0
           ? a.nextScanIndex
           : undefined
-      const slot = readSlot(a?.slot)
+      const share = readShare(a?.share)
+      const slot = share === undefined ? readSlot(a?.slot) : undefined
+      const retired = readRetired(a?.retired)
       return [
         {
           server,
           username,
           registeredAt: a.registeredAt,
+          ...(share !== undefined && {share}),
           ...(slot !== undefined && {slot}),
+          ...(retired && {retired}),
           ...(npub && {npub}),
           ...(autoScanMinutes && {autoScanMinutes}),
           ...(lastAutoScanAt && {lastAutoScanAt}),
@@ -148,10 +192,13 @@ const persist = (addresses: RegisteredAddress[]): void => {
 // clearing, or swapping one on a re-claim) updates this device's own
 // record too, mirroring SERVICE's own "always replaces wholesale, never
 // merges" npub semantics (see lib/addresses.ts's registerUsername)
+// `share` is the share now on file; a pre-LUD-26 registration (found by a
+// reclaim) has none, only its old `slot`.
 export const addRegisteredAddress = (
   server: string,
   username: string,
   npub?: string,
+  share?: number,
   slot?: number
 ): void => {
   const origin = normalizeOrigin(server)
@@ -163,9 +210,21 @@ export const addRegisteredAddress = (
   dropForgotten(origin, name)
   const current = registeredAddresses()
   const existing = current.find(a => a.server === origin && a.username === name)
+  if (share !== undefined) markShareUsed(origin, share)
+  const legacySlot = share === undefined ? slot : undefined
   if (existing) {
-    if (existing.npub === npub && existing.slot === slot) return
-    persist(current.map(a => (a === existing ? {...a, npub, slot} : a)))
+    if (
+      existing.npub === npub &&
+      existing.share === share &&
+      existing.slot === legacySlot
+    ) {
+      return
+    }
+    persist(
+      current.map(a =>
+        a === existing ? {...a, npub, share, slot: legacySlot} : a
+      )
+    )
     return
   }
   persist([
@@ -174,24 +233,83 @@ export const addRegisteredAddress = (
       server: origin,
       username: name,
       registeredAt: Date.now(),
-      ...(slot !== undefined && {slot}),
+      ...(share !== undefined && {share}),
+      ...(legacySlot !== undefined && {slot: legacySlot}),
       npub
     }
   ])
 }
 
-// the slot a NEW address at `server` should register (see cashSecrets.ts's
-// FIRST_ADDRESS_SLOT): one past every slot this device knows is taken
-// there, registered or merely forgotten. Only as good as this device's own
-// records - a name claimed from another device on the same seed isn't
-// known here until it's reclaimed (addressRecovery.ts's
-// resolveAddressOwnership finds its slot then)
-export const nextAddressSlot = (server: string): number => {
+// A SERVICE never accepts a share twice ("cx1 already used"), even after
+// its name was unregistered, so the next share at a mint is one past every
+// share this device ever used there - kept as a counter, since an
+// unregistered address leaves no record behind. A share used from another
+// device on the same seed isn't known here: AddressDialog moves on to the
+// next one when the SERVICE says so.
+const SHARE_COUNTER_KEY = 'lnurlcash_lud26_share_indices'
+
+const readShareCounters = (): Record<string, number> => {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(SHARE_COUNTER_KEY) ?? '{}'
+    )
+    const counters: Record<string, number> = Object.create(null)
+    if (typeof parsed !== 'object' || parsed === null) return counters
+    for (const [origin, value] of Object.entries(parsed)) {
+      if (readShare(value) !== undefined) counters[origin] = value as number
+    }
+    return counters
+  } catch {
+    return Object.create(null)
+  }
+}
+
+const markShareUsed = (origin: string, share: number): void => {
+  const counters = readShareCounters()
+  if ((counters[origin] ?? 0) > share) return
+  counters[origin] = share + 1
+  localStorage.setItem(SHARE_COUNTER_KEY, JSON.stringify(counters))
+}
+
+export const nextAddressShare = (server: string): number => {
   const origin = normalizeOrigin(server)
-  const taken = [...registeredAddresses(), ...forgottenAddresses()]
-    .filter(a => a.server === origin && a.slot !== undefined)
-    .map(a => a.slot!)
-  return Math.max(FIRST_ADDRESS_SLOT - 1, ...taken) + 1
+  if (!origin) return 0
+  const known = [...registeredAddresses(), ...forgottenAddresses()]
+    .filter(a => a.server === origin && a.share !== undefined)
+    .map(a => a.share! + 1)
+  return Math.max(readShareCounters()[origin] ?? 0, ...known)
+}
+
+// records a share as spent at `server` without a registration to show for
+// it - one the SERVICE refused as "cx1 already used", or one handed to a
+// registration that failed after the request went out
+export const skipAddressShare = (server: string, share: number): void => {
+  const origin = normalizeOrigin(server)
+  if (origin) markShareUsed(origin, share)
+}
+
+// moves this device's record of a registration to the share it was just
+// moved to (lib/addresses.ts's updateUsername): the old slot is gone, and
+// the scan floor starts over at the new share's index 0
+export const moveRegisteredAddress = (
+  server: string,
+  username: string,
+  share: number
+): void => {
+  const origin = normalizeOrigin(server)
+  if (!origin) return
+  markShareUsed(origin, share)
+  const name = username.trim().toLowerCase()
+  const record = registeredAddresses().find(
+    a => a.server === origin && a.username === name
+  )
+  if (!record) return
+  updateAddress(server, username, {
+    share,
+    slot: undefined,
+    nextScanIndex: undefined,
+    retired: [...(record.retired ?? []), addressKeyOf(record)]
+  })
 }
 
 // Forgets this device's own record of a registration - purely local
@@ -221,8 +339,10 @@ export const removeRegisteredAddress = (
 export type ForgottenAddress = {
   server: string
   username: string
-  // kept so nextAddressSlot never hands a forgotten name's branch to a new
-  // one - see RegisteredAddress.slot
+  // kept so a reclaim knows which key the registration was made with, and
+  // nextAddressShare never hands a forgotten name's share to a new one -
+  // see RegisteredAddress
+  share?: number
   slot?: number
 }
 
@@ -239,9 +359,17 @@ const readForgotten = (): ForgottenAddress[] => {
         typeof a?.server === 'string' ? normalizeOrigin(a.server) : null
       const username =
         typeof a?.username === 'string' ? a.username.toLowerCase() : ''
-      const slot = readSlot(a?.slot)
+      const share = readShare(a?.share)
+      const slot = share === undefined ? readSlot(a?.slot) : undefined
       return server && USERNAME_PATTERN.test(username)
-        ? [{server, username, ...(slot !== undefined && {slot})}]
+        ? [
+            {
+              server,
+              username,
+              ...(share !== undefined && {share}),
+              ...(slot !== undefined && {slot})
+            }
+          ]
         : []
     })
   } catch {
@@ -274,15 +402,20 @@ export const forgetRegisteredAddress = (
 ): void => {
   const origin = normalizeOrigin(server)
   const name = username.trim().toLowerCase()
-  const slot = registeredAddresses().find(
+  const record = registeredAddresses().find(
     a => a.server === origin && a.username === name
-  )?.slot
+  )
   removeRegisteredAddress(server, username)
   if (!origin) return
   dropForgotten(origin, name)
   persistForgotten([
     ...forgottenAddresses(),
-    {server: origin, username: name, ...(slot !== undefined && {slot})}
+    {
+      server: origin,
+      username: name,
+      ...(record?.share !== undefined && {share: record.share}),
+      ...(record?.slot !== undefined && {slot: record.slot})
+    }
   ])
 }
 

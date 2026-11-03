@@ -87,6 +87,7 @@ import {
   setNoteGroupByMint
 } from '../notePrefs'
 import {notify, NotifyKind, msatToSats, pasteFromClipboard} from '../helpers'
+import {notesToMigrate} from '../lud26Migration'
 import {decodeTag, parseLabelTags} from '../noteTags'
 import {takeMeltInvoice} from '../meltHandoff'
 import {receiveIntoWallet} from '../receive'
@@ -946,6 +947,23 @@ const Wallet: Component = () => {
     }
   }
 
+  // LUD-26: ck1 notes this seed's new chains don't cover (see
+  // lud26Migration.ts) - a refresh rotates each onto the wallet chain
+  const migrateNotes = createMemo(() =>
+    state() === 'unlocked' ? notesToMigrate(bearers()) : []
+  )
+  const [migrating, setMigrating] = createSignal(false)
+  const refreshNotesToMigrate = async () => {
+    setMigrating(true)
+    try {
+      for (const bearer of migrateNotes()) {
+        await refreshOneBearer(bearer)
+      }
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   // a local-only lock (see storage.ts's Bearer.spent) - no network call,
   // just stops this wallet from acting on notes it considers given away.
   // A device-backed note's on-device copy is retired alongside (queued for
@@ -1561,6 +1579,34 @@ const Wallet: Component = () => {
                   </div>
                 </>
               </Dialog>
+            </Show>
+            <Show when={migrateNotes().length > 0}>
+              <div class="warning">
+                <p>
+                  {migrateNotes().length} note
+                  {migrateNotes().length === 1 ? '' : 's'} (
+                  {msatToSats(
+                    migrateNotes().reduce((sum, b) => sum + b.amount, 0)
+                  )}{' '}
+                  sats) {migrateNotes().length === 1 ? 'is' : 'are'} not on your
+                  seed's LUD-26 derivation - made before the upgrade, or
+                  received from someone else. They're fully spendable, but
+                  restoring from your seed alone might not find them. Refresh
+                  them to move them onto your seed.
+                </p>
+                <div class="btns">
+                  <button
+                    disabled={migrating() || refreshingAll() || offlineMode()}
+                    onClick={refreshNotesToMigrate}
+                  >
+                    <Show when={migrating()}>
+                      <IoRefreshSharp class="spin" />
+                      &nbsp;
+                    </Show>
+                    Refresh {migrateNotes().length === 1 ? 'it' : 'them'} now
+                  </button>
+                </div>
+              </div>
             </Show>
             <section class="wallet-hero">
               <div class="wallet-stats">

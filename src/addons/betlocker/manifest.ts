@@ -275,7 +275,7 @@ const lockUi: UiNode[] = [
       {
         type: 'Input',
         bind: 'counterpartyAddress',
-        label: 'Their Lightning Address, cx1/cp1 address, or username'
+        label: 'Their cx1 or cp1 address'
       },
       {
         type: 'Button',
@@ -1205,7 +1205,7 @@ const betlockerManifest: AddonManifest = {
     {
       verb: 'note.resolveAddressPubkey',
       reason:
-        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to optionally name who else can redeem a bet you lock'
+        'Resolve a cx1/cp1 address into a pubkey, to optionally name who else can redeem a bet you lock'
     },
     {
       verb: 'note.claim',

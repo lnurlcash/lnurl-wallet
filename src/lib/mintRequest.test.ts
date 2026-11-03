@@ -11,24 +11,25 @@ import {
 } from './mintRequest'
 import {hashK1} from './signature'
 import {bearerNoteIdOfHash, bearerNoteIdOfPreimage} from './spend'
-import {encodeCp1, encodeCs1WithAmount, encodeCx1} from './recoverableNotes'
+import {encodeCp1, encodeCs1WithAmount} from './recoverableNotes'
 
 afterEach(() => vi.unstubAllGlobals())
 
 const K1 = 'a'.repeat(64)
+const DOMAIN = 'mint.example'
 
 // signed the same way LUD-13 signs its auth seed phrase - see
 // signature.test.ts for the full rationale behind each step here
 const signAsMint = (priv: Uint8Array, k1: string, amountMsat: number): string =>
   signAsMintForId(priv, bearerNoteIdOfPreimage(k1), amountMsat)
 
-// a mint's cs1 certificate over "LNURLcash:<amount_msat>:<hex(Q)>"
+// a mint's cs1 certificate over "LNURLcash:<domain>:<amount_msat>:<hex(Q)>"
 const signAsMintForId = (
   priv: Uint8Array,
   idHex: string,
   amountMsat: number
 ): string => {
-  const message = utf8ToBytes(`LNURLcash:${amountMsat}:${idHex}`)
+  const message = utf8ToBytes(`LNURLcash:${DOMAIN}:${amountMsat}:${idHex}`)
   const digest = sha256(
     sha256(
       new Uint8Array([...utf8ToBytes('Lightning Signed Message:'), ...message])
@@ -43,58 +44,6 @@ const signAsMintForId = (
     new Uint8Array([...libSig.subarray(1), libSig[0]!])
   )
 }
-
-describe('fetchPayRequest - LUD-25 internal transfer hint', () => {
-  it('wires a text/cpub metadata entry through to internalTransfer', async () => {
-    const cx1 = encodeCx1(
-      schnorr.getPublicKey(schnorr.utils.randomSecretKey()),
-      hexToBytes('ab'.repeat(32))
-    )
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          ({
-            json: async () => ({
-              tag: 'payRequest',
-              callback: 'https://mint.example.com/p/cb',
-              minSendable: 1000,
-              maxSendable: 1_000_000,
-              metadata: JSON.stringify([
-                ['text/plain', 'alice@mint.example.com'],
-                ['text/cpub', `${cx1}:3`]
-              ])
-            })
-          }) as Response
-      )
-    )
-    const info = await fetchPayRequest('https://mint.example.com/lnurlp/alice')
-    expect(info.internalTransfer?.startIndex).toBe(3)
-    expect(info.internalTransfer?.cx1).toBeDefined()
-  })
-
-  it('leaves internalTransfer undefined without a text/cpub entry', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          ({
-            json: async () => ({
-              tag: 'payRequest',
-              callback: 'https://mint.example.com/p/cb',
-              minSendable: 1000,
-              maxSendable: 1_000_000,
-              metadata: JSON.stringify([
-                ['text/plain', 'alice@mint.example.com']
-              ])
-            })
-          }) as Response
-      )
-    )
-    const info = await fetchPayRequest('https://mint.example.com/lnurlp/alice')
-    expect(info.internalTransfer).toBeUndefined()
-  })
-})
 
 describe('bound-mint receipt authentication', () => {
   it('authenticates a settled bound-mint receipt from h without revealing k1', () => {
@@ -120,7 +69,14 @@ describe('bound-mint receipt authentication', () => {
 
     expect(requireBoundMintQuote(quote, h, amountMsat)).toEqual(quote.mint)
     expect(
-      validateBoundMintReceipt(quote, verification, h, amountMsat, pubHex)
+      validateBoundMintReceipt(
+        quote,
+        verification,
+        h,
+        amountMsat,
+        pubHex,
+        quote.verify
+      )
     ).toEqual({h: q, amountMsat, signature: sig})
     expect(() =>
       validateBoundMintReceipt(
@@ -128,9 +84,21 @@ describe('bound-mint receipt authentication', () => {
         {...verification, mint: {...verification.mint, h: 'bb'.repeat(32)}},
         h,
         amountMsat,
-        pubHex
+        pubHex,
+        quote.verify
       )
     ).toThrow(/does not match/)
+    // a certificate binds the mint's domain: another mint's receipt fails
+    expect(() =>
+      validateBoundMintReceipt(
+        quote,
+        verification,
+        h,
+        amountMsat,
+        pubHex,
+        'https://other.example'
+      )
+    ).toThrow(/invalid signature/)
   })
 
   it('accepts a bound-mint receipt for a key-path note, named by its cp1', () => {
@@ -165,7 +133,14 @@ describe('bound-mint receipt authentication', () => {
       amountMsat
     })
     expect(
-      validateBoundMintReceipt(quote, verification, cp1, amountMsat, pubHex)
+      validateBoundMintReceipt(
+        quote,
+        verification,
+        cp1,
+        amountMsat,
+        pubHex,
+        quote.verify
+      )
     ).toEqual({h: pkHex, amountMsat, signature: sig})
   })
 })

@@ -3,8 +3,8 @@ import {test, expect} from '@playwright/test'
 import {setUpWallet, enableAddon} from './helpers'
 
 // the exact payRequest a holder reported earlier: two duplicate text/plain
-// metadata entries, this wallet's own text/cpub (LUD-25 internal transfer)
-// extension, and NIP-57 zap fields - the response formatLnurlResponse /
+// metadata entries, a text/cpub entry (the internal-transfer hint mints
+// advertised before LUD-26), and NIP-57 zap fields - the response formatLnurlResponse /
 // metadataEntries (src/addons/lnurlTools/manifest.ts) need to handle
 const PAY_REQUEST_BODY = {
   tag: 'payRequest',
@@ -59,7 +59,9 @@ test.describe('LNURL Tools addon', () => {
     await expect(items).toHaveCount(4)
     await expect(items.nth(0)).toContainText('Description 1:')
     await expect(items.nth(1)).toContainText('Identifier:')
-    await expect(items.nth(2)).toContainText('Internal transfer cpub (LUD-25):')
+    await expect(items.nth(2)).toContainText(
+      'Internal transfer cpub (before LUD-26):'
+    )
     await expect(items.nth(3)).toContainText('Description 2:')
 
     // JsonDisplay's syntax-coloured raw dump

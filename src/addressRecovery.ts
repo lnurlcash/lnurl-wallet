@@ -1,8 +1,9 @@
-import {bytesToHex} from '@noble/hashes/utils.js'
+import {schnorr} from '@noble/curves/secp256k1.js'
 import {
-  addressBranch,
-  addressSecretAtIndex,
-  FIRST_ADDRESS_SLOT
+  shareSecretAtIndex,
+  legacyAddressSecretAtIndex,
+  addressShareCx1,
+  hasCashRoot
 } from './cashSecrets'
 import {
   resolveMintInput,
@@ -12,11 +13,9 @@ import {
   noteK1,
   withNewK1,
   scanForAddressNotes,
-  resolveScanStartIndex,
   encodeCk1,
   signNoteOwnership,
   k1SpendsNote,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS,
   ServiceError
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
@@ -24,22 +23,22 @@ import {msatToSats} from './helpers'
 import {
   markAddressScanned,
   registeredAddresses,
-  forgottenAddresses
+  forgottenAddresses,
+  addressKeyOf,
+  type AddressKey
 } from './addressRegistry'
 import type {Bearer, ActivityKind} from './storage'
 import type {IndexStatus} from './recovery'
 import type {NewBearer} from './WalletContext'
 
-// LUD-25 counterpart to recovery.ts's scanMintForNotes - same shape,
-// same dedup convention (existing bearers checked by serverOf+noteK1, see
-// receive.ts), but scans a REGISTERED address's own watch-only branch
-// (cashSecrets.ts's addressBranch, one per address) at
-// NOTE_PURPOSE_LIGHTNING_ADDRESS - never the counters recovery.ts's own
-// NOTE_PURPOSE_WALLET/NOTE_PURPOSE_CHANGE scans walk - via the
-// public-commitment lookup (src/lib/addresses.ts's scanForAddressNotes) rather than
-// re-deriving legacy hash-based secrets. Every note this finds signs its
-// own ck1 on the spot (signNoteOwnership) - the scan itself never redeems
-// anything, it only proves this wallet CAN.
+// LUD-26 counterpart to recovery.ts's scanMintForNotes - same shape, same
+// dedup convention (existing bearers checked by serverOf+noteK1, see
+// receive.ts), but scans a REGISTERED address's share S/0'/2/n'/i (or, for
+// a registration from before LUD-26, its old branch under purpose 2 - see
+// AddressKey) via the public-commitment lookup (src/lib/addresses.ts's
+// scanForAddressNotes). Every note this finds signs its own ck1 on the spot
+// (signNoteOwnership) - the scan itself never redeems anything, it only
+// proves this wallet CAN.
 
 export type AddressScanOutcome = {
   server: string
@@ -50,24 +49,14 @@ export type AddressScanOutcome = {
   // nextScanIndex, which tracks that across calls even when this one finds
   // nothing new)
   highestIndex: number | null
-  // the index this pass actually started its forward walk from (after
-  // resolveScanStartIndex reconciled the caller's own floor against
-  // SERVICE's hint) - what checkBehind's window sits just below. Purely
-  // informational (a caller display value), never fed back into a later
-  // call the way nextScanIndex is.
+  // the index this pass started its forward walk from - what checkBehind's
+  // window sits just below. Purely informational (a caller display value),
+  // never fed back into a later call the way nextScanIndex is.
   checkedFrom: number
-  // SERVICE's own advertised next-unused-index hint for this pass (LUD-25
-  // LUD-25's text/cpub metadata, see mintRequest.ts's
-  // PayRequestInfo.internalTransfer) - null when SERVICE didn't advertise
-  // one, or this pass never got far enough to learn it. Purely
-  // informational: resolveScanStartIndex already decided how (or whether)
-  // to use it: never trust this alone as "already recovered."
-  serviceHint: number | null
   // resume floor for the NEXT incremental "check notes" pass, as opposed
-  // to a full "rescan all" (startIndex: 0) - the higher of: whatever floor
+  // to a full "rescan all" (startIndex: 0) - the higher of whatever floor
   // the caller already passed in (never regresses below what's already
-  // been checked), this scan's own highest found index + 1, and - after a
-  // clean pass that covered everything up to it - SERVICE's own hint. Always
+  // been checked) and this scan's own highest found index + 1. Always
   // present, even on an error before any of that was learned, so a caller
   // can feed it straight back into addressRegistry.ts's markAddressScanned
   // unconditionally
@@ -76,14 +65,13 @@ export type AddressScanOutcome = {
 }
 
 export type AddressScanOptions = {
-  // the address's own branch (addressRegistry.ts's RegisteredAddress.slot,
-  // see cashSecrets.ts's FIRST_ADDRESS_SLOT) - undefined is the legacy
-  // domain branch. runAddressScan fills it in from the registry
-  slot?: number
+  // which key the notes were credited to - the share on file, a share the
+  // address was moved off, or a pre-LUD-26 branch. runAddressScan fills it
+  // in from the registry
+  key?: AddressKey
   startIndex?: number
-  // startIndex was picked by hand (AddressScanDialog's start index field): walk
-  // from exactly there, never letting SERVICE's hint move it, and don't
-  // treat it as an already-checked floor either - nothing below it was
+  // startIndex was picked by hand (AddressScanDialog's start index field):
+  // don't treat it as an already-checked floor - nothing below it was
   // necessarily ever checked, so nextScanIndex only advances past what
   // this pass actually finds (same as a full rescan from 0)
   exactStart?: boolean
@@ -102,146 +90,96 @@ export const addressNoteLabel = (
   index: number
 ): string => `[${username}@${host}] index ${index}`
 
+// the note key at `index` under `key`, or null with no cash root loaded
+const addressSecretAt = (
+  host: string,
+  key: AddressKey,
+  index: number
+): Uint8Array | null =>
+  key.kind === 'share'
+    ? shareSecretAtIndex(host, key.share, index)
+    : legacyAddressSecretAtIndex(host, index, key.slot)
+
 export const scanRegisteredAddress = async (
   server: string,
   username: string,
   existing: Bearer[] = [],
   opts: AddressScanOptions = {}
 ): Promise<AddressScanOutcome> => {
-  const startFloor = opts.startIndex ?? 0
-  const floorOf = (start: number, highest: number | null): number =>
-    Math.max(opts.exactStart ? 0 : start, (highest ?? -1) + 1)
-  // addressBranch/addressSecretAtIndex derive under the bare host
-  // (serverOf, same as this function's own `host` below) - never `server`
-  // itself, which callers pass as a full origin (TrustedMint.server/
-  // RegisteredAddress.server) for identity-tracking purposes unrelated to
-  // this branch. See src/lib/urls.ts's serverOf for why a seed-derived
-  // branch must not fragment across schemes/ports the way a signing-key
-  // pin legitimately does.
+  const startIndex = opts.startIndex ?? 0
+  const failed = (error: string): AddressScanOutcome => ({
+    server,
+    username,
+    recovered: [],
+    highestIndex: null,
+    checkedFrom: startIndex,
+    nextScanIndex: opts.exactStart ? 0 : startIndex,
+    error
+  })
+  // `host` keeps the port: a pre-LUD-26 branch hashed the host as stored,
+  // port included, while a share's S drops it anyway (cashSecrets.ts)
   let host: string
   try {
     host = new URL(server).host
   } catch {
-    return {
-      server,
-      username,
-      recovered: [],
-      highestIndex: null,
-      checkedFrom: startFloor,
-      serviceHint: null,
-      nextScanIndex: floorOf(startFloor, null),
-      error: 'Not a valid mint address.'
-    }
+    return failed('Not a valid mint address.')
   }
-  const branch = addressBranch(host, opts.slot)
-  if (!branch) {
-    return {
-      server,
-      username,
-      recovered: [],
-      highestIndex: null,
-      checkedFrom: startFloor,
-      serviceHint: null,
-      nextScanIndex: floorOf(startFloor, null),
-      error:
-        'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
-    }
+  const key = opts.key ?? {kind: 'share', share: 0}
+  if (!hasCashRoot()) {
+    return failed(
+      'No seed-derived key is loaded for this wallet - restore or re-enter your seed first.'
+    )
   }
 
   const payUrl = resolveMintInput(`${username}@${host}`)
-  if (!payUrl) {
-    return {
-      server,
-      username,
-      recovered: [],
-      highestIndex: null,
-      checkedFrom: startFloor,
-      serviceHint: null,
-      nextScanIndex: floorOf(startFloor, null),
-      error: 'Not a recognizable mint address.'
-    }
-  }
+  if (!payUrl) return failed('Not a recognizable mint address.')
 
   let withdrawUrl: string
-  let startIndex = startFloor
-  let serviceHint: number | null = null
   try {
     const info = await fetchPayRequest(payUrl)
     if (!info.withdrawLink) {
-      return {
-        server,
-        username,
-        recovered: [],
-        highestIndex: null,
-        checkedFrom: startFloor,
-        serviceHint: null,
-        nextScanIndex: floorOf(startFloor, null),
-        error: 'This mint does not advertise LNURLcash minting.'
-      }
+      return failed('This mint does not advertise LNURLcash minting.')
     }
     withdrawUrl = fromLud17(info.withdrawLink)
-    serviceHint = info.internalTransfer?.startIndex ?? null
-    // see resolveScanStartIndex's own doc comment (src/lib/addresses.ts) for
-    // why this must never trust SERVICE's hint to skip a fresh scan (or an
-    // explicit "full rescan", which always calls this with startIndex: 0)
-    // past index 0 - the regression this guards against is documented there
-    startIndex = opts.exactStart
-      ? startFloor
-      : resolveScanStartIndex(startFloor, serviceHint ?? undefined)
   } catch (err) {
-    return {
-      server,
-      username,
-      recovered: [],
-      highestIndex: null,
-      checkedFrom: startFloor,
-      serviceHint: null,
-      nextScanIndex: floorOf(startFloor, null),
-      error: (err as Error).message
-    }
+    return failed((err as Error).message)
   }
 
   const recovered: NewBearer[] = []
   let highestIndex: number | null = null
-  const limit = gapLimit()
+  const nextScanIndex = (): number =>
+    Math.max(opts.exactStart ? 0 : startIndex, (highestIndex ?? -1) + 1)
   try {
     await scanForAddressNotes(
       withdrawUrl,
-      branch,
-      NOTE_PURPOSE_LIGHTNING_ADDRESS,
+      index => {
+        const secretKey = addressSecretAt(host, key, index)
+        if (!secretKey) throw new Error('The wallet locked during the scan.')
+        return schnorr.getPublicKey(secretKey)
+      },
       {
-        gapLimit: limit,
+        gapLimit: gapLimit(),
         startIndex,
         // re-verifies gapLimit indices below startIndex too, every pass -
-        // the safety net that catches startIndex itself being wrong (a
-        // stale local floor, or a SERVICE hint that outran actual
-        // settlement) even when it is - see scanForAddressNotes' own doc
-        // comment
+        // the safety net that catches a stale floor - see
+        // scanForAddressNotes' own doc comment
         checkBehind: true,
-        // the complementary guarantee at the other end: a forward walk must
-        // not give up on some unrelated stretch of abandoned reservations
-        // well short of where SERVICE says it has actually handed out
-        // invoices (next_index advances at invoice-CREATION time, not
-        // settlement - see scanForAddressNotes' own doc comment on
-        // minIndex). +limit is deliberate margin past the hint itself, not
-        // just up to it, so a genuine gapLimit search still happens beyond
-        // it too.
-        minIndex: serviceHint !== null ? serviceHint + limit : undefined,
         onProgress: opts.onProgress,
         onOutcome: (index, outcome) => {
           // 'found' is reported from onFound below instead, once it's known
           // whether this wallet already held it
           if (outcome !== 'found') opts.onIndex?.(index, outcome)
         },
+        // an index answered "already in use" (a burned note) is used too
+        onSpent: index => {
+          highestIndex = Math.max(highestIndex ?? -1, index)
+        },
         // built directly in onFound (not batched after the scan returns), same
-        // as recovery.ts's scanPurposeNotes, so a later index's transport
-        // failure can't discard a note already found this same pass
+        // as recovery.ts's scanChain, so a later index's transport failure
+        // can't discard a note already found this same pass
         onFound: result => {
           highestIndex = Math.max(highestIndex ?? -1, result.index)
-          const secretKey = addressSecretAtIndex(host, result.index, opts.slot)
-          // the cash root can only disappear mid-scan if the wallet locked
-          // while it was running - skip rather than crash; a re-scan once
-          // unlocked again picks this index right back up
+          const secretKey = addressSecretAt(host, key, result.index)
           if (!secretKey) return
           const {pubkeyXOnly: ownershipPubkey, signature: ownershipSignature} =
             signNoteOwnership(secretKey, withdrawUrl)
@@ -281,35 +219,17 @@ export const scanRegisteredAddress = async (
       recovered,
       highestIndex,
       checkedFrom: startIndex,
-      serviceHint,
-      nextScanIndex: floorOf(startIndex, highestIndex),
+      nextScanIndex: nextScanIndex(),
       error: (err as Error).message
     }
   }
-
-  // a pass that finished cleanly has walked every index up to SERVICE's
-  // hint (minIndex forces it there, see above) - so the hint itself becomes
-  // the resume floor, provided everything BELOW where this pass started was
-  // already covered: always true for an ordinary pass (startIndex is either
-  // 0 or a floor resolveScanStartIndex already trusts), and for a hand-
-  // picked exactStart only when its checkBehind window reached all the way
-  // down to 0. An invoice reserved below the hint but paid only later is
-  // still caught by the next pass's own checkBehind window (gapLimit below
-  // the floor), or by a full rescan beyond that.
-  const coveredUpToHint =
-    serviceHint !== null && (!opts.exactStart || startIndex - limit <= 0)
-
   return {
     server,
     username,
     recovered,
     checkedFrom: startIndex,
-    serviceHint,
     highestIndex,
-    nextScanIndex: Math.max(
-      floorOf(startIndex, highestIndex),
-      coveredUpToHint ? serviceHint! : 0
-    )
+    nextScanIndex: nextScanIndex()
   }
 }
 
@@ -334,52 +254,57 @@ export const runAddressScan = async (
   wallet: AddressScanWalletOps,
   opts: AddressScanOptions = {}
 ): Promise<AddressScanOutcome> => {
-  const slot =
-    opts.slot ??
-    registeredAddresses().find(
-      a => a.server === server && a.username === username
-    )?.slot
+  const record = registeredAddresses().find(
+    a => a.server === server && a.username === username
+  )
+  const claim = async (result: AddressScanOutcome) => {
+    for (const note of result.recovered) {
+      await wallet.addBearer(note)
+      wallet.logActivity(
+        'recovered',
+        `Received ${msatToSats(note.amount)} sats at ${username}@${serverOf(server)}.`
+      )
+    }
+  }
   const result = await scanRegisteredAddress(server, username, existing, {
     ...opts,
-    slot
+    key: opts.key ?? (record ? addressKeyOf(record) : undefined)
   })
-  for (const note of result.recovered) {
-    await wallet.addBearer(note)
-    wallet.logActivity(
-      'recovered',
-      `Received ${msatToSats(note.amount)} sats at ${username}@${serverOf(server)}.`
-    )
-  }
+  await claim(result)
   markAddressScanned(server, username, result.nextScanIndex)
+  // a full rescan also sweeps every key the address was moved off: LUD-26
+  // leaves notes credited there where they are
+  if (!opts.key && (opts.startIndex ?? 0) === 0 && record?.retired) {
+    for (const key of record.retired) {
+      const swept = await scanRegisteredAddress(server, username, existing, {
+        key,
+        onProgress: opts.onProgress
+      })
+      await claim(swept)
+      result.recovered.push(...swept.recovered)
+      result.error ??= swept.error
+    }
+  }
   return result
 }
 
-// Whether `username`@`server` is still registered at SERVICE to the branch
-// THIS wallet derives - the question an "Invalid ownership signature."
-// refusal (unclaim, re-register) leaves open. SERVICE publishes the cx1 it
-// has on file in the payRequest's text/cpub entry (internalTransfer.ts), so
-// it can be compared directly:
-// - 'ours': same branch - a refusal was something else (worth a retry)
-// - 'not-ours': registered to some other branch (a different seed, an
-//   address claimed under an older derivation, or someone else re-claimed
-//   it after it was freed) - this wallet can neither unclaim it nor ever
-//   find notes paid to it, so there is nothing left to do but forget it
-// - 'unregistered': SERVICE doesn't know the name at all any more
-// - 'unknown': couldn't tell (offline, no seed, no text/cpub advertised)
+// Whether `username`@`server` is still registered to THIS wallet - the
+// question an "Invalid ownership signature." refusal (unclaim) or a
+// reclaim leaves open. A LUD-26 SERVICE never publishes the cx1 it has on
+// file, so this only goes as far as this device's own records:
+// - 'ours': the SERVICE still knows the name, and this device recorded
+//   which key registered it (registered or forgotten here)
+// - 'unregistered': the SERVICE doesn't know the name at all any more
+// - 'unknown': couldn't tell (offline, no seed, no record here)
+// 'not-ours' is never concluded any more; it stays for callers' messages.
 export type AddressOwnership = 'ours' | 'not-ours' | 'unregistered' | 'unknown'
 
-// how many address slots past the highest one this device knows about a
-// reclaim still checks - covers names claimed from another device on the
-// same seed, which this device has no record of
-const SLOT_PROBE = 20
-
-// checkAddressOwnership, plus WHICH of this wallet's branches the mint has
-// on file (the legacy domain branch is `slot: undefined`) - what a reclaim
-// needs to know to re-add the address with the right keys
+// checkAddressOwnership, plus which key the registration was recorded with
+// - what a reclaim needs to re-add the address
 export const resolveAddressOwnership = async (
   server: string,
   username: string
-): Promise<{ownership: AddressOwnership; slot?: number}> => {
+): Promise<{ownership: AddressOwnership; key?: AddressKey}> => {
   let host: string
   try {
     host = new URL(server).host
@@ -387,34 +312,22 @@ export const resolveAddressOwnership = async (
     return {ownership: 'unknown'}
   }
   const payUrl = resolveMintInput(`${username}@${host}`)
-  if (!payUrl || !addressBranch(host)) return {ownership: 'unknown'}
-  let onFile
+  if (!payUrl || !addressShareCx1(host, 0)) return {ownership: 'unknown'}
   try {
-    onFile = (await fetchPayRequest(payUrl)).internalTransfer?.cx1
+    await fetchPayRequest(payUrl)
   } catch (err) {
     if (err instanceof ServiceError && /unknown user/i.test(err.reason)) {
       return {ownership: 'unregistered'}
     }
     return {ownership: 'unknown'}
   }
-  if (!onFile) return {ownership: 'unknown'}
-  const known = [...registeredAddresses(), ...forgottenAddresses()]
-    .filter(a => a.slot !== undefined)
-    .map(a => a.slot!)
-  const last = Math.max(FIRST_ADDRESS_SLOT - 1, ...known) + SLOT_PROBE
-  const slots: (number | undefined)[] = [undefined]
-  for (let slot = FIRST_ADDRESS_SLOT; slot <= last; slot++) slots.push(slot)
-  for (const slot of slots) {
-    const branch = addressBranch(host, slot)
-    if (
-      branch &&
-      bytesToHex(onFile.pubkeyXOnly) === bytesToHex(branch.pubkeyXOnly) &&
-      bytesToHex(onFile.chainCode) === bytesToHex(branch.chainCode)
-    ) {
-      return {ownership: 'ours', slot}
-    }
-  }
-  return {ownership: 'not-ours'}
+  const name = username.trim().toLowerCase()
+  const record = [...registeredAddresses(), ...forgottenAddresses()].find(
+    a => a.server === server && a.username === name
+  )
+  return record
+    ? {ownership: 'ours', key: addressKeyOf(record)}
+    : {ownership: 'unknown'}
 }
 
 export const checkAddressOwnership = async (

@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 import {bytesToHex, hexToBytes} from '@noble/hashes/utils.js'
-import {schnorr} from '@noble/curves/secp256k1.js'
+import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
 import {bech32, bech32m} from '@scure/base'
 import {
   encodeCp1,
@@ -22,12 +22,17 @@ import {
   encodeCx1,
   decodeCx1,
   isCx1,
+  cx1PubkeyXOnly,
   deriveNotePubkey,
-  deriveNoteSecretKey,
-  NOTE_PURPOSE_WALLET,
-  NOTE_PURPOSE_CHANGE,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS
+  encodeLegacyCx1,
+  decodeLegacyCx1,
+  legacyDeriveNotePubkey,
+  legacyDeriveNoteSecretKey,
+  LEGACY_NOTE_PURPOSE_WALLET,
+  LEGACY_NOTE_PURPOSE_CHANGE,
+  LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS
 } from './recoverableNotes'
+import {HDKey} from '@scure/bip32'
 
 describe('bech32m codec', () => {
   it('round-trips a cp1 (32 bytes)', () => {
@@ -146,7 +151,7 @@ describe('bech32m codec', () => {
   })
 
   it("round-trips a cs1 (65 bytes) - past bech32/BIP-173's 90-char limit", () => {
-    const bytes = hexToBytes('cd'.repeat(65))
+    const bytes = hexToBytes(`${'cd'.repeat(64)}03`)
     const cs1 = encodeCs1WithAmount(1000, bytes)
     expect(cs1.length).toBeGreaterThan(90)
     expect(decodeCs1WithAmount(cs1)?.signature).toEqual(bytes)
@@ -172,14 +177,46 @@ describe('bech32m codec', () => {
     expect(isCk1(short)).toBe(false)
   })
 
-  it('round-trips a cx1 (64 bytes: pubkey || chain code)', () => {
-    const pubkeyXOnly = hexToBytes('11'.repeat(32))
+  it('round-trips a cx1 (65 bytes: chain code || compressed P)', () => {
+    const pubkey = secp256k1.getPublicKey(
+      secp256k1.utils.randomSecretKey(),
+      true
+    )
     const chainCode = hexToBytes('22'.repeat(32))
-    const encoded = encodeCx1(pubkeyXOnly, chainCode)
+    const encoded = encodeCx1({chainCode, pubkey})
+    expect(encoded).toHaveLength(113)
     expect(isCx1(encoded)).toBe(true)
     const decoded = decodeCx1(encoded)
-    expect(decoded?.pubkeyXOnly).toEqual(pubkeyXOnly)
+    expect(decoded?.pubkey).toEqual(pubkey)
     expect(decoded?.chainCode).toEqual(chainCode)
+    expect(cx1PubkeyXOnly(decoded!)).toEqual(pubkey.slice(1))
+  })
+
+  it('rejects a cx1 whose P is not a point on the curve', () => {
+    const bad = bech32m.encode(
+      'cx',
+      bech32m.toWords(
+        new Uint8Array([
+          ...'22'
+            .repeat(32)
+            .match(/../g)!
+            .map(h => parseInt(h, 16)),
+          0x02,
+          ...new Uint8Array(32).fill(0xff)
+        ])
+      ),
+      false
+    )
+    expect(decodeCx1(bad)).toBeNull()
+    expect(isCx1(bad)).toBe(false)
+  })
+
+  it('reads a superseded 64-byte cx1 only as legacy', () => {
+    const pubkeyXOnly = schnorr.getPublicKey(schnorr.utils.randomSecretKey())
+    const chainCode = hexToBytes('22'.repeat(32))
+    const legacy = encodeLegacyCx1({pubkeyXOnly, chainCode})
+    expect(decodeCx1(legacy)).toBeNull()
+    expect(decodeLegacyCx1(legacy)).toEqual({pubkeyXOnly, chainCode})
   })
 
   it('rejects the wrong prefix for a given decoder', () => {
@@ -213,7 +250,10 @@ describe('bech32m codec', () => {
       encodeCk1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(63)))
     ).toThrow()
     expect(() =>
-      encodeCx1(hexToBytes('ab'.repeat(32)), hexToBytes('cd'.repeat(31)))
+      encodeCx1({
+        chainCode: hexToBytes('cd'.repeat(32)),
+        pubkey: hexToBytes('ab'.repeat(32))
+      })
     ).toThrow()
   })
 })
@@ -300,17 +340,24 @@ describe('deriveScriptPathCommitment / outputKeyOfCw1', () => {
 })
 
 describe('cs1WithAmount (LUD-25 "encode amount in offline sig")', () => {
+  // a recovery id must be 0..3: the fixture's last byte 0xcd is none, so
+  // these only pin the encoding (and that decoding refuses it)
   const bytes = hexToBytes('cd'.repeat(65))
+  const valid = hexToBytes(`${'cd'.repeat(64)}01`)
 
   it('round-trips signature and amount together', () => {
-    const cs1 = encodeCs1WithAmount(1000, bytes)
+    const cs1 = encodeCs1WithAmount(1000, valid)
     // matches 25.md's own Encoding-section example verbatim
     expect(cs1.startsWith('cs10n1')).toBe(true)
     expect(decodeCs1WithAmount(cs1)).toEqual({
       amountMsat: 1000,
-      signature: bytes
+      signature: valid
     })
     expect(isCs1WithAmount(cs1)).toBe(true)
+  })
+
+  it('rejects a recovery id above 3', () => {
+    expect(decodeCs1WithAmount(encodeCs1WithAmount(1000, bytes))).toBeNull()
   })
 
   // generated via lnurl-mint/.venv/bin/python3, calling
@@ -356,10 +403,7 @@ describe('cs1WithAmount (LUD-25 "encode amount in offline sig")', () => {
     ]
     for (const v of VECTORS) {
       expect(encodeCs1WithAmount(v.amountMsat, bytes)).toBe(v.cs1)
-      expect(decodeCs1WithAmount(v.cs1)).toEqual({
-        amountMsat: v.amountMsat,
-        signature: bytes
-      })
+      expect(decodeCs1WithAmount(v.cs1)).toBeNull()
     }
   })
 
@@ -372,7 +416,31 @@ describe('cs1WithAmount (LUD-25 "encode amount in offline sig")', () => {
   })
 })
 
-describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation.py", () => {
+describe('deriveNotePubkey (LUD-26: BIP-32 CKDpub from a cx1)', () => {
+  const root = HDKey.fromMasterSeed(hexToBytes('0f'.repeat(32)))
+  const share = root.derive("m/139'/1/2/3/4/0'/2/0'")
+  const cx1 = {chainCode: share.chainCode!, pubkey: share.publicKey!}
+
+  it('is the x-only key of the BIP-32 child the share holder derives privately', () => {
+    for (const i of [0, 1, 19, 2 ** 31 - 1]) {
+      const child = share.deriveChild(i)
+      expect(bytesToHex(deriveNotePubkey(cx1, i))).toBe(
+        bytesToHex(child.publicKey!.slice(1))
+      )
+      expect(bytesToHex(schnorr.getPublicKey(child.privateKey!))).toBe(
+        bytesToHex(child.publicKey!.slice(1))
+      )
+    }
+  })
+
+  it('refuses a hardened or malformed index', () => {
+    for (const i of [2 ** 31, -1, 1.5]) {
+      expect(() => deriveNotePubkey(cx1, i)).toThrow()
+    }
+  })
+})
+
+describe("legacyDeriveNotePubkey - cross-validated against lnurl-mint's superseded derivation.py", () => {
   // generated via: lnurl-mint/.venv/bin/python3, calling
   // lnurl_mint.derivation.derive_pubkey(P, chain_code, PURPOSE_WALLET,
   // index) directly for 3 real secp256k1 x-only pubkeys (from
@@ -500,10 +568,9 @@ describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation
   it("matches the mint's output for every cross-validated vector", () => {
     for (const v of VECTORS) {
       const got = bytesToHex(
-        deriveNotePubkey(
-          hexToBytes(v.P),
-          hexToBytes(v.chainCode),
-          NOTE_PURPOSE_WALLET,
+        legacyDeriveNotePubkey(
+          {pubkeyXOnly: hexToBytes(v.P), chainCode: hexToBytes(v.chainCode)},
+          LEGACY_NOTE_PURPOSE_WALLET,
           v.index
         )
       )
@@ -520,17 +587,22 @@ describe("deriveNotePubkey - cross-validated against lnurl-mint's own derivation
     )
     const keys = new Set(
       [
-        NOTE_PURPOSE_WALLET,
-        NOTE_PURPOSE_CHANGE,
-        NOTE_PURPOSE_LIGHTNING_ADDRESS
-      ].map(purpose => bytesToHex(deriveNotePubkey(P, chainCode, purpose, 0)))
+        LEGACY_NOTE_PURPOSE_WALLET,
+        LEGACY_NOTE_PURPOSE_CHANGE,
+        LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        null
+      ].map(purpose =>
+        bytesToHex(
+          legacyDeriveNotePubkey({pubkeyXOnly: P, chainCode}, purpose, 0)
+        )
+      )
     )
-    expect(keys.size).toBe(3)
+    expect(keys.size).toBe(4)
   })
 })
 
-describe('deriveNoteSecretKey', () => {
-  it('produces a secret whose own public key matches deriveNotePubkey (BIP-340 parity handled correctly)', () => {
+describe('legacyDeriveNoteSecretKey', () => {
+  it('produces a secret whose own public key matches legacyDeriveNotePubkey (BIP-340 parity handled correctly)', () => {
     for (let s = 1; s <= 5; s++) {
       const branchPrivateKey = hexToBytes(
         s.toString(16).padStart(2, '0').repeat(32).slice(0, 64)
@@ -538,21 +610,21 @@ describe('deriveNoteSecretKey', () => {
       const branchPubkeyXOnly = schnorr.getPublicKey(branchPrivateKey)
       const chainCode = hexToBytes('7'.repeat(64))
       for (const purpose of [
-        NOTE_PURPOSE_WALLET,
-        NOTE_PURPOSE_CHANGE,
-        NOTE_PURPOSE_LIGHTNING_ADDRESS
+        LEGACY_NOTE_PURPOSE_WALLET,
+        LEGACY_NOTE_PURPOSE_CHANGE,
+        LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
+        null
       ]) {
         for (const index of [0, 1, 42, 255, 4294967295]) {
-          const secretKey = deriveNoteSecretKey(
+          const secretKey = legacyDeriveNoteSecretKey(
             branchPrivateKey,
             chainCode,
             purpose,
             index
           )
           const pubkeyFromSecret = schnorr.getPublicKey(secretKey)
-          const pubkeyWatchOnly = deriveNotePubkey(
-            branchPubkeyXOnly,
-            chainCode,
+          const pubkeyWatchOnly = legacyDeriveNotePubkey(
+            {pubkeyXOnly: branchPubkeyXOnly, chainCode},
             purpose,
             index
           )
@@ -565,16 +637,16 @@ describe('deriveNoteSecretKey', () => {
   it('is deterministic', () => {
     const branchPrivateKey = schnorr.utils.randomSecretKey()
     const chainCode = hexToBytes('9'.repeat(64))
-    const a = deriveNoteSecretKey(
+    const a = legacyDeriveNoteSecretKey(
       branchPrivateKey,
       chainCode,
-      NOTE_PURPOSE_WALLET,
+      LEGACY_NOTE_PURPOSE_WALLET,
       7
     )
-    const b = deriveNoteSecretKey(
+    const b = legacyDeriveNoteSecretKey(
       branchPrivateKey,
       chainCode,
-      NOTE_PURPOSE_WALLET,
+      LEGACY_NOTE_PURPOSE_WALLET,
       7
     )
     expect(bytesToHex(a)).toBe(bytesToHex(b))
@@ -583,16 +655,16 @@ describe('deriveNoteSecretKey', () => {
   it('produces a different secret for a different index', () => {
     const branchPrivateKey = schnorr.utils.randomSecretKey()
     const chainCode = hexToBytes('9'.repeat(64))
-    const a = deriveNoteSecretKey(
+    const a = legacyDeriveNoteSecretKey(
       branchPrivateKey,
       chainCode,
-      NOTE_PURPOSE_WALLET,
+      LEGACY_NOTE_PURPOSE_WALLET,
       0
     )
-    const b = deriveNoteSecretKey(
+    const b = legacyDeriveNoteSecretKey(
       branchPrivateKey,
       chainCode,
-      NOTE_PURPOSE_WALLET,
+      LEGACY_NOTE_PURPOSE_WALLET,
       1
     )
     expect(bytesToHex(a)).not.toBe(bytesToHex(b))

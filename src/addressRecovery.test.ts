@@ -5,17 +5,15 @@ import {schnorr} from '@noble/curves/secp256k1.js'
 import type {Bearer} from './storage'
 import {parseLabelTags} from './noteTags'
 import {
-  deriveNotePubkey,
   encodeCk1,
   encodeCp1,
-  encodeCx1,
   noteK1,
   noteSignature,
   recoverNoteOwnershipPubkey,
   withNewK1,
-  encodeCs1WithAmount,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS
+  encodeCs1WithAmount
 } from './lnurlcash'
+import type {AddressKey} from './addressRegistry'
 
 const store = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -32,10 +30,9 @@ vi.stubGlobal('localStorage', {
 const SEED =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 const SERVER = 'https://mock-mint.test'
-// scanRegisteredAddress derives its branch from the bare host (serverOf),
-// never SERVER's own full origin directly (see src/lib/urls.ts's serverOf)
-// - so the fake mint below must build its live/spent pubkeys off the SAME
-// host, or nothing it advertises would ever match what a scan derives
+// scanRegisteredAddress derives its keys from the host (serverOf), never
+// SERVER's own full origin - so the fake mint below must build its live
+// pubkeys off the SAME host, or nothing would ever match what a scan derives
 const HOST = 'mock-mint.test'
 const USERNAME = 'alice'
 const MINT_PUBKEY = `02${'cd'.repeat(32)}`
@@ -56,38 +53,38 @@ beforeEach(async () => {
 const jsonResponse = (body: unknown) =>
   Promise.resolve({json: async () => body} as unknown as Response)
 
-// a fake mint whose /w answers cp1-pubkey lookups for a fixed set of "live"
-// indices on the address branch cashAddressBranch(HOST) actually derives -
-// mirrors recovery.test.ts's own fakeMint shape, adapted for p=cp1<pk>
-// instead of h=sha256(k1)
+// the note key a scan derives at `index` under `key` (share 0 by default)
+const secretAt = (
+  index: number,
+  key: AddressKey = {kind: 'share', share: 0}
+) =>
+  key.kind === 'share'
+    ? cashSecrets.shareSecretAtIndex(HOST, key.share, index)!
+    : cashSecrets.legacyAddressSecretAtIndex(HOST, index, key.slot)!
+
+const cp1At = (index: number, key?: AddressKey) =>
+  encodeCp1(schnorr.getPublicKey(secretAt(index, key)))
+
+// a fake mint whose /w answers cp1 lookups: `live` notes, `burned` ones
+// ("already in use"), everything else unknown
 const fakeMint = (
-  liveIndices: number[],
-  sig?: string,
-  xpubHint?: string,
-  slot?: number
+  live: string[],
+  opts: {sig?: string; burned?: string[]; unknownUser?: boolean} = {}
 ) => {
-  const branch = cashSecrets.addressBranch(HOST, slot)!
-  const liveCp1 = new Set(
-    liveIndices.map(i =>
-      encodeCp1(
-        deriveNotePubkey(
-          branch.pubkeyXOnly,
-          branch.chainCode,
-          NOTE_PURPOSE_LIGHTNING_ADDRESS,
-          i
-        )
-      )
-    )
-  )
+  const liveCp1 = new Set(live)
+  const burned = new Set(opts.burned ?? [])
   return (input: string | URL) => {
     const url = new URL(input.toString())
     if (url.pathname === `/.well-known/lnurlp/${USERNAME}`) {
+      if (opts.unknownUser) {
+        return jsonResponse({status: 'ERROR', reason: 'unknown user'})
+      }
       return jsonResponse({
         tag: 'payRequest',
-        callback: `${SERVER}/p/cb?username=${USERNAME}`,
+        callback: `${SERVER}/p/${USERNAME}`,
         minSendable: 1000,
         maxSendable: 100_000_000,
-        metadata: xpubHint ? JSON.stringify([['text/cpub', xpubHint]]) : '[]',
+        metadata: '[]',
         withdrawLink: `${SERVER}/w`
       })
     }
@@ -100,8 +97,11 @@ const fakeMint = (
           mintPubkey: MINT_PUBKEY,
           minWithdrawable: 21000,
           maxWithdrawable: 21000,
-          ...(sig ? {c: sig} : {})
+          ...(opts.sig ? {c: opts.sig} : {})
         })
+      }
+      if (p && burned.has(p)) {
+        return jsonResponse({status: 'ERROR', reason: 'already in use'})
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
     }
@@ -109,25 +109,26 @@ const fakeMint = (
   }
 }
 
+const stub = (live: number[], opts: Parameters<typeof fakeMint>[1] = {}) =>
+  vi.stubGlobal(
+    'fetch',
+    fakeMint(
+      live.map(i => cp1At(i)),
+      opts
+    ) as unknown as typeof fetch
+  )
+
 describe('scanRegisteredAddress', () => {
   it('recovers a live note and signs its own ck1', async () => {
-    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    stub([0])
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.error).toBeUndefined()
     expect(result.recovered).toHaveLength(1)
     expect(result.recovered[0]!.amount).toBe(21000)
     expect(result.highestIndex).toBe(0)
     // the recovered bearer's own k1 is a well-formed ck1 that actually
-    // recovers to the same index's derived pubkey
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const expectedPk = bytesToHex(
-      deriveNotePubkey(
-        branch.pubkeyXOnly,
-        branch.chainCode,
-        NOTE_PURPOSE_LIGHTNING_ADDRESS,
-        0
-      )
-    )
+    // recovers to the share's note 0
+    const expectedPk = bytesToHex(schnorr.getPublicKey(secretAt(0)))
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
     const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
@@ -136,7 +137,7 @@ describe('scanRegisteredAddress', () => {
   })
 
   it('labels a found note with its address tag and scanned index', async () => {
-    vi.stubGlobal('fetch', fakeMint([0, 2]) as unknown as typeof fetch)
+    stub([0, 2])
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     const labels = result.recovered.map(n => parseLabelTags(n.label!))
     expect(labels).toEqual([
@@ -146,15 +147,17 @@ describe('scanRegisteredAddress', () => {
   })
 
   it('attaches an already-disclosed offline-verification sig immediately', async () => {
-    const sig = encodeCs1WithAmount(5000, new Uint8Array(65).fill(0xab))
-    vi.stubGlobal('fetch', fakeMint([0], sig) as unknown as typeof fetch)
+    const sig65 = new Uint8Array(65).fill(0xab)
+    sig65[64] = 1
+    const sig = encodeCs1WithAmount(5000, sig65)
+    stub([0], {sig})
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.recovered).toHaveLength(1)
     expect(noteSignature(result.recovered[0]!.url)).toBe(sig)
   })
 
   it('does not re-recover a note already held', async () => {
-    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    stub([0])
     const first = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     const held: Bearer[] = [
       {
@@ -180,8 +183,8 @@ describe('scanRegisteredAddress', () => {
     // a note held from before ck1s signed the spend sighash still carries
     // its old ck1 (Q || sig over sha256("LNURLcash")): a rescan re-derives
     // today's ck1 for the same Q, which must not be recovered a second time
-    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
-    const secretKey = cashSecrets.addressSecretAtIndex(HOST, 0)!
+    stub([0])
+    const secretKey = secretAt(0)
     const oldCk1 = encodeCk1(
       schnorr.getPublicKey(secretKey),
       schnorr.sign(
@@ -211,17 +214,27 @@ describe('scanRegisteredAddress', () => {
   })
 
   it('reports an error and no crash when no cash root is loaded', async () => {
-    // build the fixture (needs the branch derived) before clearing the root
-    const mock = fakeMint([0])
+    // build the fixture (needs the keys derived) before clearing the root
+    stub([0])
     cashSecrets.setCashRoot(null)
-    vi.stubGlobal('fetch', mock as unknown as typeof fetch)
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.recovered).toHaveLength(0)
     expect(result.error).toMatch(/seed-derived/)
   })
 
-  it('finds nothing on an empty branch', async () => {
-    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+  it('counts a burned note ("already in use") as used, recovering nothing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], {burned: [cp1At(3)]}) as unknown as typeof fetch
+    )
+    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(result.recovered).toHaveLength(0)
+    expect(result.highestIndex).toBe(3)
+    expect(result.nextScanIndex).toBe(4)
+  })
+
+  it('finds nothing on an empty share', async () => {
+    stub([])
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.recovered).toHaveLength(0)
     expect(result.highestIndex).toBeNull()
@@ -229,21 +242,16 @@ describe('scanRegisteredAddress', () => {
   })
 })
 
-// TODO.md's "differentiation between rescan all and check notes where you
-// remember the last checked index or get the index from the lightning
-// address xpub in metadata" - nextScanIndex is what a "check notes" pass
-// (Mint.tsx, AddressAutoScanner.tsx) resumes from next time; opts.startIndex
-// is how a caller applies that resume point (or forces 0 for "rescan all")
 describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   it('resumes past the highest index this pass actually found', async () => {
-    vi.stubGlobal('fetch', fakeMint([2]) as unknown as typeof fetch)
+    stub([2])
     const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     expect(result.highestIndex).toBe(2)
     expect(result.nextScanIndex).toBe(3)
   })
 
   it('never regresses below the caller-supplied floor when nothing is found', async () => {
-    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+    stub([])
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
@@ -254,8 +262,8 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(5)
   })
 
-  it('checkBehind still finds a live note below opts.startIndex (the safety-net window)', async () => {
-    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+  it('checkBehind still finds a live note below opts.startIndex', async () => {
+    stub([0])
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
@@ -267,9 +275,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it('a note beyond the checkBehind window is not found by a nonzero startIndex alone', async () => {
-    // gapLimit(). default 20 - a note far enough below startIndex to fall
-    // outside the checkBehind window is genuinely not covered by this pass
-    vi.stubGlobal('fetch', fakeMint([0]) as unknown as typeof fetch)
+    stub([0])
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
@@ -280,108 +286,8 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
     expect(result.nextScanIndex).toBe(100)
   })
 
-  it("never lets SERVICE's own text/cpub metadata hint skip a fresh device's unscanned floor", async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([0], undefined, `${cx1}:3`) as unknown as typeof fetch
-    )
-    // index 0 is live (a real payment this device has never seen), and the
-    // hint says SERVICE already handed out invoices up to 3 - but
-    // `next_index` advances the moment SERVICE creates an invoice, not once
-    // it settles (lnurl-mint's own claim_next_index), so a bare "check
-    // notes" from a device with no local nextScanIndex yet MUST NOT trust
-    // the hint to skip straight past index 0: nothing below it has actually
-    // been confirmed recovered by this device
-    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
-    expect(result.recovered).toHaveLength(1)
-    expect(result.highestIndex).toBe(0)
-  })
-
-  it('the metadata hint only ever raises an already-nonzero local floor, never lowers it', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:2`) as unknown as typeof fetch
-    )
-    const result = await addressRecovery.scanRegisteredAddress(
-      SERVER,
-      USERNAME,
-      [],
-      {startIndex: 10}
-    )
-    expect(result.nextScanIndex).toBe(10)
-  })
-
-  it('the metadata hint DOES raise an already-nonzero local floor forward', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:5`) as unknown as typeof fetch
-    )
-    // this device already confirmed up through index 1 on a prior pass
-    // (startIndex: 1, a genuine nonzero resume point, not a fresh scan) -
-    // SERVICE's hint of 5 is allowed to skip it ahead from there
-    const result = await addressRecovery.scanRegisteredAddress(
-      SERVER,
-      USERNAME,
-      [],
-      {startIndex: 1}
-    )
-    expect(result.nextScanIndex).toBe(5)
-  })
-
-  it('a full rescan reaches at least the metadata hint + gap limit, past an intervening dead stretch', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    // default gap limit is 20 (see gapLimit.ts) - a plain forward walk from
-    // 0 would give up at index 20, long before reaching this note at 25,
-    // even though SERVICE's own hint (10) says it has handed out well past
-    // the dead stretch sitting in between
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([25], undefined, `${cx1}:10`) as unknown as typeof fetch
-    )
-    const result = await addressRecovery.scanRegisteredAddress(
-      SERVER,
-      USERNAME,
-      [],
-      {startIndex: 0}
-    )
-    expect(result.recovered).toHaveLength(1)
-    expect(result.highestIndex).toBe(25)
-  })
-
-  it('exactStart walks from the typed index, not past it to the hint', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([341], undefined, `${cx1}:342`) as unknown as typeof fetch
-    )
-    const probed: number[] = []
-    const result = await addressRecovery.scanRegisteredAddress(
-      SERVER,
-      USERNAME,
-      [],
-      {startIndex: 300, exactStart: true, onProgress: i => probed.push(i)}
-    )
-    expect(result.checkedFrom).toBe(300)
-    expect(result.recovered).toHaveLength(1)
-    expect(result.highestIndex).toBe(341)
-    expect(result.nextScanIndex).toBe(342)
-    // checkBehind window first (299 down to 280), then forward from 300
-    // through the hint + gap limit
-    expect(probed[0]).toBe(299)
-    expect(probed).toContain(300)
-    expect(Math.max(...probed)).toBe(342 + 20)
-  })
-
   it('exactStart never records an unchecked typed start as a floor', async () => {
-    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+    stub([])
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
@@ -393,7 +299,7 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 
   it('reports every index status, held vs recovered included', async () => {
-    vi.stubGlobal('fetch', fakeMint([0, 2]) as unknown as typeof fetch)
+    stub([0, 2])
     const first = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
     const held = {
       id: 'held',
@@ -413,178 +319,108 @@ describe('scanRegisteredAddress - incremental resume (nextScanIndex)', () => {
   })
 })
 
-describe('resume floor after a clean pass', () => {
-  it("advances to SERVICE's hint once a pass from 0 walked past it", async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
+describe('which key an address is scanned on', () => {
+  const live = (pairs: [number, AddressKey][]) =>
     vi.stubGlobal(
       'fetch',
-      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
+      fakeMint(
+        pairs.map(([i, key]) => cp1At(i, key))
+      ) as unknown as typeof fetch
     )
-    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
-    expect(result.checkedFrom).toBe(0)
-    expect(result.nextScanIndex).toBe(342)
-  })
 
-  it('a hand-picked start whose window never reached 0 does not', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
-    )
+  it('scans the share it is given, not share 0', async () => {
+    live([[1, {kind: 'share', share: 3}]])
     const result = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
       [],
-      {startIndex: 300, exactStart: true}
+      {key: {kind: 'share', share: 3}}
     )
-    expect(result.nextScanIndex).toBe(0)
+    expect(result.recovered).toHaveLength(1)
+    const other = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
+    expect(other.recovered).toHaveLength(0)
   })
 
-  it('a hand-picked start within one gap limit of 0 does', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:342`) as unknown as typeof fetch
-    )
-    const result = await addressRecovery.scanRegisteredAddress(
+  it('scans a pre-LUD-26 registration on its old branch, slot or none', async () => {
+    live([
+      [0, {kind: 'legacy', slot: 2}],
+      [1, {kind: 'legacy'}]
+    ])
+    const slot = await addressRecovery.scanRegisteredAddress(
       SERVER,
       USERNAME,
       [],
-      {startIndex: 15, exactStart: true}
+      {key: {kind: 'legacy', slot: 2}}
     )
-    expect(result.nextScanIndex).toBe(342)
+    expect(slot.recovered).toHaveLength(1)
+    expect(slot.highestIndex).toBe(0)
+    const bare = await addressRecovery.scanRegisteredAddress(
+      SERVER,
+      USERNAME,
+      [],
+      {key: {kind: 'legacy'}}
+    )
+    expect(bare.highestIndex).toBe(1)
   })
 
-  it('an errored pass never advances to the hint', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    const mint = fakeMint([], undefined, `${cx1}:342`)
-    vi.stubGlobal('fetch', ((input: string | URL) =>
-      new URL(input.toString()).pathname === '/w'
-        ? Promise.reject(new Error('network down'))
-        : mint(input)) as unknown as typeof fetch)
-    const result = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
-    expect(result.error).toBeTruthy()
-    expect(result.nextScanIndex).toBe(0)
+  it("runAddressScan uses the registered address's own key", async () => {
+    const registry = await import('./addressRegistry')
+    registry.addRegisteredAddress(SERVER, USERNAME, undefined, 4)
+    live([[0, {kind: 'share', share: 4}]])
+    const added: unknown[] = []
+    const result = await addressRecovery.runAddressScan(SERVER, USERNAME, [], {
+      addBearer: async note => added.push(note),
+      logActivity: () => {}
+    })
+    expect(result.recovered).toHaveLength(1)
+    expect(added).toHaveLength(1)
+    expect(registry.registeredAddresses()[0]?.nextScanIndex).toBe(1)
+  })
+
+  it('a full rescan also sweeps the keys an address was moved off', async () => {
+    const registry = await import('./addressRegistry')
+    registry.addRegisteredAddress(SERVER, USERNAME, undefined, undefined, 2)
+    registry.moveRegisteredAddress(SERVER, USERNAME, 0)
+    live([
+      [0, {kind: 'share', share: 0}],
+      [5, {kind: 'legacy', slot: 2}]
+    ])
+    const ops = {addBearer: async () => {}, logActivity: () => {}}
+    const full = await addressRecovery.runAddressScan(SERVER, USERNAME, [], ops)
+    expect(full.recovered).toHaveLength(2)
+    const incremental = await addressRecovery.runAddressScan(
+      SERVER,
+      USERNAME,
+      [],
+      ops,
+      {startIndex: 1}
+    )
+    expect(incremental.recovered).toHaveLength(1)
   })
 })
 
 describe('checkAddressOwnership', () => {
-  it("is 'ours' when the mint's cx1 is this wallet's own branch", async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
-    )
-    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
-      'ours'
-    )
-  })
-
-  it("is 'not-ours' when the mint has a different branch on file", async () => {
-    const other = cashSecrets.cashAddressBranch('other-mint.test')!
-    const cx1 = encodeCx1(other.pubkeyXOnly, other.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
-    )
-    expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
-      'not-ours'
-    )
+  it("is 'ours' with the recorded key when this device knows the name", async () => {
+    const registry = await import('./addressRegistry')
+    registry.addRegisteredAddress(SERVER, USERNAME, undefined, 2)
+    registry.forgetRegisteredAddress(SERVER, USERNAME)
+    stub([])
+    expect(
+      await addressRecovery.resolveAddressOwnership(SERVER, USERNAME)
+    ).toEqual({ownership: 'ours', key: {kind: 'share', share: 2}})
   })
 
   it("is 'unregistered' when the mint no longer knows the name", async () => {
-    vi.stubGlobal('fetch', (() =>
-      jsonResponse({
-        status: 'ERROR',
-        reason: 'Unknown user.'
-      })) as unknown as typeof fetch)
+    stub([], {unknownUser: true})
     expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
       'unregistered'
     )
   })
 
-  it("is 'unknown' when the mint advertises no cx1", async () => {
-    vi.stubGlobal('fetch', fakeMint([]) as unknown as typeof fetch)
+  it("is 'unknown' for a name this device has no record of", async () => {
+    stub([])
     expect(await addressRecovery.checkAddressOwnership(SERVER, USERNAME)).toBe(
       'unknown'
     )
-  })
-})
-
-describe('many addresses per mint (address slots)', () => {
-  it('scans an address on its own slot branch, not the legacy one', async () => {
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([1], undefined, undefined, 3) as unknown as typeof fetch
-    )
-    const legacy = await addressRecovery.scanRegisteredAddress(SERVER, USERNAME)
-    expect(legacy.recovered).toHaveLength(0)
-    const slotted = await addressRecovery.scanRegisteredAddress(
-      SERVER,
-      USERNAME,
-      [],
-      {slot: 3}
-    )
-    expect(slotted.recovered).toHaveLength(1)
-    const owner = recoverNoteOwnershipPubkey(
-      noteK1(slotted.recovered[0]!.url)!,
-      slotted.recovered[0]!.url
-    )
-    const branch = cashSecrets.addressBranch(HOST, 3)!
-    expect(bytesToHex(owner!.pubkeyXOnly)).toBe(
-      bytesToHex(
-        deriveNotePubkey(
-          branch.pubkeyXOnly,
-          branch.chainCode,
-          NOTE_PURPOSE_LIGHTNING_ADDRESS,
-          1
-        )
-      )
-    )
-  })
-
-  it("runAddressScan uses the registered address's own slot", async () => {
-    const registry = await import('./addressRegistry')
-    registry.addRegisteredAddress(SERVER, USERNAME, undefined, 2)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([0], undefined, undefined, 2) as unknown as typeof fetch
-    )
-    const added: unknown[] = []
-    const result = await addressRecovery.runAddressScan(SERVER, USERNAME, [], {
-      addBearer: async n => added.push(n),
-      logActivity: () => {}
-    })
-    expect(result.recovered).toHaveLength(1)
-    expect(added).toHaveLength(1)
-  })
-
-  it('finds which slot the mint has on file', async () => {
-    const branch = cashSecrets.addressBranch(HOST, 5)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
-    )
-    expect(
-      await addressRecovery.resolveAddressOwnership(SERVER, USERNAME)
-    ).toEqual({ownership: 'ours', slot: 5})
-  })
-
-  it('reports the legacy domain branch as slot undefined', async () => {
-    const branch = cashSecrets.cashAddressBranch(HOST)!
-    const cx1 = encodeCx1(branch.pubkeyXOnly, branch.chainCode)
-    vi.stubGlobal(
-      'fetch',
-      fakeMint([], undefined, `${cx1}:0`) as unknown as typeof fetch
-    )
-    expect(
-      await addressRecovery.resolveAddressOwnership(SERVER, USERNAME)
-    ).toEqual({ownership: 'ours', slot: undefined})
   })
 })

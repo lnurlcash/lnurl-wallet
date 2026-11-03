@@ -63,23 +63,17 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
     if (minutes > 0) void requestNotificationPermission()
   }
 
-  // what the most recent Check notes/Full rescan pass (this dialog
-  // session only - not persisted) actually saw: where it started walking
-  // forward from, and SERVICE's own advertised next-index hint at that
-  // moment. Shown alongside addr.nextScanIndex (this device's own
-  // persisted floor, always available with no scan needed) so a holder can
-  // see all three numbers - SERVICE's, this device's, and where the last
-  // pass actually started - side by side rather than having to trust any
-  // one of them blindly (see resolveScanStartIndex's own doc comment for
-  // why the SERVICE hint alone is never enough).
+  // where the most recent Check notes/Full rescan pass (this dialog
+  // session only - not persisted) started walking forward from, shown
+  // alongside addr.nextScanIndex (this device's own persisted floor)
   const [lastCheck, setLastCheck] = createSignal<{
     checkedFrom: number
-    serviceHint: number | null
   } | null>(null)
 
   // "Check notes"/"Full rescan" - "check notes" resumes from wherever this
-  // address's own nextScanIndex (or SERVICE's own metadata hint) left off,
-  // or from the start index typed in; "full rescan" always re-walks from 0.
+  // address's own nextScanIndex left off, or from the start index typed in;
+  // "full rescan" always re-walks from 0, and also sweeps any key the
+  // address was moved off.
   const checkNotes = async (mode: 'incremental' | 'all') => {
     const addr = registered()
     if (!addr || busy()) return
@@ -111,10 +105,7 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
             setCells(prev => ({...prev, [i]: status}))
         }
       )
-      setLastCheck({
-        checkedFrom: result.checkedFrom,
-        serviceHint: result.serviceHint
-      })
+      setLastCheck({checkedFrom: result.checkedFrom})
       if (result.error) {
         notify(result.error, NotifyKind.ERROR)
       } else {
@@ -152,14 +143,7 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
             <p class="bearer-hint">
               Checked up to index: {addr().nextScanIndex ?? 0}
               <Show when={lastCheck()}>
-                {info => (
-                  <>
-                    {' '}
-                    · started this pass from {info().checkedFrom} · mint's
-                    suggested next index:{' '}
-                    {info().serviceHint ?? 'not advertised'}
-                  </>
-                )}
+                {info => <> · started this pass from {info().checkedFrom}</>}
               </Show>
             </p>
             <label for="address-scan-start-index">Start index</label>

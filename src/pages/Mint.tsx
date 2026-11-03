@@ -673,7 +673,8 @@ const Mint: Component = () => {
         verification,
         pending.h,
         pending.amountMsat,
-        pending.mintPubkey
+        pending.mintPubkey,
+        pending.payRequest.withdrawLink ?? pending.payRequest.callback
       )
       const client = deviceClient()
       if (!client) {

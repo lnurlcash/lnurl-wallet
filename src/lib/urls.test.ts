@@ -365,6 +365,7 @@ describe('note helpers', () => {
 
   describe('amount vs. an amount-encoding cs1 sig', () => {
     const sig65 = new Uint8Array(65).fill(0xab)
+    sig65[64] = 1 // a recovery id is 0..3
     const cs1 = encodeCs1WithAmount(15000, sig65) // e.g. 'cs150n1...'
 
     it('withNewK1/withoutK1 omit amount entirely once sig already carries it', () => {

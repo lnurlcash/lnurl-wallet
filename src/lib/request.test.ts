@@ -28,7 +28,13 @@ import {
 } from './recoverableNotes'
 import {noteRef} from './spend'
 
-const CS1 = encodeCs1WithAmount(1000, new Uint8Array(65).fill(0xab))
+// a recovery id (the last byte) must be 0..3
+const sig65 = (fill: number) => {
+  const sig = new Uint8Array(65).fill(fill)
+  sig[64] = 1
+  return sig
+}
+const CS1 = encodeCs1WithAmount(1000, sig65(0xab))
 import {
   AmbiguousMintError,
   AmbiguousMutationError,
@@ -495,7 +501,7 @@ describe('WithdrawRequestInfo.c: informational GET may already disclose one', ()
   })
 
   it('captures a cs1-encoded certificate, preserved exactly as disclosed', async () => {
-    const cert = encodeCs1WithAmount(21000, new Uint8Array(65).fill(0xcd))
+    const cert = encodeCs1WithAmount(21000, sig65(0xcd))
     vi.stubGlobal(
       'fetch',
       vi.fn(

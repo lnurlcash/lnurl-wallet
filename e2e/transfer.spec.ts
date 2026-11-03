@@ -1,13 +1,13 @@
 import {test, expect, type Page, type Route} from '@playwright/test'
-import {schnorr, secp256k1} from '@noble/curves/secp256k1.js'
+import {secp256k1} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
 
-import {encodeCx1} from '../src/lib/recoverableNotes'
 import {setUpWallet} from './helpers'
 
-// Transferring a note to someone's registered Lightning Address (a payRequest
-// advertising LUD-25's `text/cpub`) is a payment, not a move between mints:
-// the recipient's mint always auto-mints onto the owner's own branch, so
+// Transferring a note to someone's registered Lightning Address (LUD-26: a
+// payRequest naming its mint's withdrawLink, without commentAllowed) is a
+// payment, not a move between mints: the recipient's mint always auto-mints
+// onto the owner's own share, so
 // TransferDialog must request the invoice WITHOUT a comment (and without
 // requiring commentAllowed, which such an address doesn't advertise), melt
 // the source note to pay it, and finish once the payment is confirmed -
@@ -20,10 +20,6 @@ const AMOUNT_MSAT = 10_000
 const INVOICE = 'lnbcmocktransfer'
 const SOURCE_MINT_PUBKEY = bytesToHex(
   secp256k1.getPublicKey(new Uint8Array(32).fill(9), true)
-)
-const CX1 = encodeCx1(
-  schnorr.getPublicKey(new Uint8Array(32).fill(7)),
-  new Uint8Array(32).fill(0x22)
 )
 
 // cross-origin from the dev server, so the browser needs CORS headers to
@@ -69,8 +65,8 @@ const mockSourceMint = async (page: Page) => {
   return state
 }
 
-// the recipient's mint: a registered username's payRequest - text/cpub in
-// its metadata, no commentAllowed - and its pay callback
+// the recipient's mint: a registered username's payRequest - a
+// withdrawLink, no commentAllowed - and its pay callback
 const mockDestinationAddress = async (
   page: Page,
   source: {melted: string | null},
@@ -90,8 +86,7 @@ const mockDestinationAddress = async (
             'text/plain',
             'Mint an lnurlcash bearer note on mint-b.example.test'
           ],
-          ['text/identifier', ADDRESS],
-          ['text/cpub', `${CX1}:0`]
+          ['text/identifier', ADDRESS]
         ]),
         withdrawLink: `${DEST}/w`
       })
@@ -144,7 +139,7 @@ const transferToAddress = async (page: Page) => {
 
 test.describe('Transfer to a Lightning Address', () => {
   for (const withVerify of [true, false]) {
-    test(`pays the advertised cpub without a comment and finishes without a claim (${
+    test(`pays the registered address without a comment and finishes without a claim (${
       withVerify ? 'confirmed by verify' : 'confirmed by the source burning'
     })`, async ({page}) => {
       await setUpWallet(page)
@@ -165,7 +160,7 @@ test.describe('Transfer to a Lightning Address', () => {
       expect(payCallbacks[0].searchParams.get('amount')).toBe(
         String(AMOUNT_MSAT)
       )
-      // the recipient's mint derives the output from its cpub - this wallet
+      // the recipient's mint credits the owner's share - this wallet
       // must never name one
       expect(payCallbacks[0].searchParams.has('comment')).toBe(false)
       expect(source.melted).toBe(INVOICE)

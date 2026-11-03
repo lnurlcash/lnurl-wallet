@@ -47,7 +47,7 @@ const lockUi: UiNode[] = [
       {
         type: 'Input',
         bind: 'claimAddress',
-        label: 'Their Lightning Address, cx1/cp1 address, or username'
+        label: 'Their cx1 or cp1 address'
       },
       {
         type: 'Button',
@@ -462,7 +462,7 @@ const htlcManifest: AddonManifest = {
     {
       verb: 'note.resolveAddressPubkey',
       reason:
-        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to name who can claim a note you lock'
+        'Resolve a cx1/cp1 address into a pubkey, to name who can claim a note you lock'
     },
     {
       verb: 'note.claim',

@@ -84,6 +84,14 @@ export class NoteUnknownError extends Error {
 // "Invalid or already spent k1." since it can't tell which case applies to
 // which k1. Classified here so every note-specific call site gets a
 // consistent, typed error instead of each re-parsing raw reason text.
+// LUD-25 fixes one wording (luds 92abbb3): a burned note is answered
+// exactly "already in use", at the informational GET and the callback
+// alike, and a LUD-26 recovery scan counts it as a used index - so that
+// exact reason is a spent note. The same reason also refuses an output
+// that is already somebody's note; the wording alone cannot tell the two
+// apart, and a caller that named its own outputs looks its inputs up.
+// lnurl-mint's older "Output already in use." names the output only, and
+// stays a plain ServiceError.
 // Only what SERVICE actually said is matched. Anything else - a transport
 // failure, an unparseable body, a rejection carrying no reason at all -
 // is no evidence about the note either way and passes through
@@ -93,7 +101,8 @@ export const classifyNoteError = (err: Error): Error => {
   if (!(err instanceof ServiceError)) return err
   const reason = err.reason
   if (reason === 'pending') return new PendingNoteError()
-  if (/spent/i.test(reason)) return new NoteSpentError(reason)
+  if (/spent/i.test(reason) || reason.trim().toLowerCase() === 'already in use')
+    return new NoteSpentError(reason)
   if (/unknown|not found/i.test(reason)) return new NoteUnknownError(reason)
   return err
 }

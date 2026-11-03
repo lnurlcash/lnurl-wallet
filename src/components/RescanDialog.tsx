@@ -34,12 +34,8 @@ export type RescanDialogProps = {
 // separate counter, checked from the Address page instead (see
 // AddressScanDialog) - this dialog is the same with or without one.
 //
-// NOTE: the two scans still walk two DIFFERENT branches for historical
-// reasons - this one derives its domain via serverOf() (bare host), the
-// address-aware one via the full origin - see addressRecovery.ts's own
-// cashAddressBranch callers vs recovery.ts's. Unifying that key space
-// would need src/lib/request.ts's generatePubkeySecret to also switch
-// conventions, which is a real, separate, higher-stakes migration.
+// Each rescan also sweeps the scheme this wallet used before LUD-26 (the
+// 'legacy' pass): those notes are recovered like any other.
 const RescanDialog: Component<RescanDialogProps> = props => {
   const {bearers, addBearer, logActivity} = useWallet()
 
@@ -102,11 +98,13 @@ const RescanDialog: Component<RescanDialogProps> = props => {
         {
           walletStart,
           changeStart,
-          onIndex: (index, status, pass) =>
+          onIndex: (index, status, pass) => {
+            if (pass === 'legacy') return
             setCell(pass === 'wallet' ? setWalletCells : setChangeCells)(
               index,
               status
             )
+          }
         }
       )
       for (const note of result.recovered) {
@@ -209,8 +207,9 @@ const RescanDialog: Component<RescanDialogProps> = props => {
       <Show when={mintProgress()}>
         {progress => (
           <p class="scan-progress">
-            Checking {progress().pass === 'wallet' ? 'wallet' : 'change'} index{' '}
-            <strong>{progress().index}</strong>
+            Checking{' '}
+            {progress().pass === 'legacy' ? 'pre-LUD-26' : progress().pass}{' '}
+            index <strong>{progress().index}</strong>
           </p>
         )}
       </Show>

@@ -3,9 +3,15 @@ import {schnorr} from '@noble/curves/secp256k1.js'
 import {bytesToHex} from '@noble/hashes/utils.js'
 import {
   deriveNotePubkey,
-  NOTE_PURPOSE_WALLET,
-  NOTE_PURPOSE_LIGHTNING_ADDRESS
+  legacyDeriveNoteSecretKey,
+  LEGACY_NOTE_PURPOSE_WALLET,
+  LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS
 } from './lib/recoverableNotes'
+import {
+  deriveDomainBranchNode,
+  deriveServiceRoot,
+  deriveNoteKey
+} from './lib/branchDerivation'
 
 // same in-memory localStorage stand-in as storage.test.ts/trustedMints.test.ts -
 // cashSecrets.ts persists per-SERVICE indices there, and a fresh module graph
@@ -41,10 +47,11 @@ const loadRoot = () => {
   return node
 }
 
-describe('LUD-25: address branches (cashAddressBranch/cashAddressSecretAtIndex)', () => {
+describe('LUD-26: wallet and change notes below S', () => {
   it('are null with no root set', () => {
-    expect(cashSecrets.cashAddressBranch('mint.example')).toBeNull()
     expect(cashSecrets.cashAddressSecretAtIndex('mint.example', 0)).toBeNull()
+    expect(cashSecrets.changeSecretAtIndex('mint.example', 0)).toBeNull()
+    expect(cashSecrets.addressShareCx1('mint.example', 0)).toBeNull()
     expect(cashSecrets.nextCashAddressSecret('mint.example')).toBeNull()
     expect(() =>
       cashSecrets.requireRecoverableCashAddressSecret('mint.example')
@@ -58,49 +65,41 @@ describe('LUD-25: address branches (cashAddressBranch/cashAddressSecretAtIndex)'
     expect(cashSecrets.nextCashAddressSecret('mint.example')).toBeNull()
   })
 
-  it('exports a 32-byte pubkey + 32-byte chain code', () => {
-    loadRoot()
-    const branch = cashSecrets.cashAddressBranch('mint.example')
-    expect(branch?.pubkeyXOnly).toHaveLength(32)
-    expect(branch?.chainCode).toHaveLength(32)
-  })
-
-  it('is deterministic from the same seed, and differs per domain', () => {
-    loadRoot()
-    const a = cashSecrets.cashAddressBranch('a.example')
-    cashSecrets.setCashRoot(null)
-    loadRoot()
-    const aAgain = cashSecrets.cashAddressBranch('a.example')
-    const b = cashSecrets.cashAddressBranch('b.example')
-    expect(bytesToHex(a!.pubkeyXOnly)).toBe(bytesToHex(aAgain!.pubkeyXOnly))
-    expect(bytesToHex(a!.chainCode)).toBe(bytesToHex(aAgain!.chainCode))
-    expect(bytesToHex(a!.pubkeyXOnly)).not.toBe(bytesToHex(b!.pubkeyXOnly))
-  })
-
-  it("a derived note secret's own public key matches the watch-only derivation from the exported branch (cx1 round-trip)", () => {
-    loadRoot()
-    const branch = cashSecrets.cashAddressBranch('mint.example')!
-    for (const index of [0, 1, 42]) {
-      const secretKey = cashSecrets.cashAddressSecretAtIndex(
-        'mint.example',
-        index
-      )!
-      const pubkeyFromSecret = schnorr.getPublicKey(secretKey)
-      const pubkeyWatchOnly = deriveNotePubkey(
-        branch.pubkeyXOnly,
-        branch.chainCode,
-        NOTE_PURPOSE_WALLET,
-        index
+  it("derives wallet notes at S/0'/0/i and change notes at S/0'/1/i", () => {
+    const root = loadRoot()
+    const S = deriveServiceRoot(root, 'mint.example')
+    for (const index of [0, 1, 7]) {
+      expect(
+        bytesToHex(cashSecrets.cashAddressSecretAtIndex('mint.example', index)!)
+      ).toBe(
+        bytesToHex(
+          deriveNoteKey(S, {chain: 'wallet', account: 0, index}).secretKey
+        )
       )
-      expect(bytesToHex(pubkeyFromSecret)).toBe(bytesToHex(pubkeyWatchOnly))
+      expect(
+        bytesToHex(cashSecrets.changeSecretAtIndex('mint.example', index)!)
+      ).toBe(
+        bytesToHex(
+          deriveNoteKey(S, {chain: 'change', account: 0, index}).secretKey
+        )
+      )
     }
   })
 
-  it('cashAddressSecretAtIndex is pure - repeated calls at the same index are stable', () => {
+  it('names the mint by its hostname: port and scheme do not matter', () => {
     loadRoot()
-    const a = cashSecrets.cashAddressSecretAtIndex('mint.example', 3)!
-    const b = cashSecrets.cashAddressSecretAtIndex('mint.example', 3)!
-    expect(bytesToHex(a)).toBe(bytesToHex(b))
+    const at = (domain: string) =>
+      bytesToHex(cashSecrets.cashAddressSecretAtIndex(domain, 0)!)
+    expect(at('mint.example:8443')).toBe(at('mint.example'))
+    expect(at('https://mint.example')).toBe(at('mint.example'))
+    expect(at('other.example')).not.toBe(at('mint.example'))
+  })
+
+  it('is pure - repeated calls at the same index are stable', () => {
+    loadRoot()
+    expect(
+      bytesToHex(cashSecrets.cashAddressSecretAtIndex('mint.example', 3)!)
+    ).toBe(bytesToHex(cashSecrets.cashAddressSecretAtIndex('mint.example', 3)!))
   })
 })
 
@@ -320,59 +319,96 @@ describe('pending output secrets', () => {
   })
 })
 
-describe('address slots (one branch per registered address)', () => {
-  it('gives every slot its own branch, distinct from the legacy one', () => {
+describe('Lightning Address shares', () => {
+  it("gives every share its own cx1, whose notes the share's holder derives", () => {
     loadRoot()
-    const hex = (slot?: number) =>
-      bytesToHex(cashSecrets.addressBranch('mint.example', slot)!.pubkeyXOnly)
-    expect(cashSecrets.FIRST_ADDRESS_SLOT).toBe(2)
-    expect(hex()).toBe(
-      bytesToHex(cashSecrets.cashAddressBranch('mint.example')!.pubkeyXOnly)
-    )
-    expect(new Set([hex(), hex(2), hex(3), hex(4)]).size).toBe(4)
-    expect(hex(2)).toBe(hex(2))
+    const cx1 = cashSecrets.addressShareCx1('mint.example', 1)!
+    const other = cashSecrets.addressShareCx1('mint.example', 2)!
+    expect(bytesToHex(cx1.pubkey)).not.toBe(bytesToHex(other.pubkey))
+    for (const index of [0, 5]) {
+      const secretKey = cashSecrets.shareSecretAtIndex(
+        'mint.example',
+        1,
+        index
+      )!
+      expect(bytesToHex(schnorr.getPublicKey(secretKey))).toBe(
+        bytesToHex(deriveNotePubkey(cx1, index))
+      )
+    }
   })
 
-  it("proves ownership with the slot branch's own wallet index-0 key", () => {
+  it("signs a share's proofs with the share node's own key", () => {
     loadRoot()
-    expect(bytesToHex(cashSecrets.addressProofKey('mint.example')!)).toBe(
-      bytesToHex(cashSecrets.cashAddressSecretAtIndex('mint.example', 0)!)
+    const cx1 = cashSecrets.addressShareCx1('mint.example', 0)!
+    const key = cashSecrets.addressShareKey('mint.example', 0)!
+    expect(bytesToHex(schnorr.getPublicKey(key))).toBe(
+      bytesToHex(cx1.pubkey.slice(1))
     )
-    const branch = cashSecrets.addressBranch('mint.example', 2)!
+  })
+})
+
+describe('superseded derivation (sweep only)', () => {
+  it('reproduces the old tweak notes off the host as stored', () => {
+    const root = loadRoot()
+    const branch = deriveDomainBranchNode(root, 'mint.example:8443')
     expect(
       bytesToHex(
-        schnorr.getPublicKey(cashSecrets.addressProofKey('mint.example', 2)!)
+        cashSecrets.legacySecretAtIndex(
+          'mint.example:8443',
+          LEGACY_NOTE_PURPOSE_WALLET,
+          4
+        )!
       )
     ).toBe(
       bytesToHex(
-        deriveNotePubkey(
-          branch.pubkeyXOnly,
-          branch.chainCode,
-          NOTE_PURPOSE_WALLET,
+        legacyDeriveNoteSecretKey(
+          branch.privateKey!,
+          branch.chainCode!,
+          LEGACY_NOTE_PURPOSE_WALLET,
+          4
+        )
+      )
+    )
+  })
+
+  it("proves an old registration with its branch's purpose-0 index-0 key, and finds its notes under purpose 2", () => {
+    const root = loadRoot()
+    const slotNode = deriveDomainBranchNode(root, 'mint.example').deriveChild(
+      0x80000000 + 2
+    )
+    expect(
+      bytesToHex(cashSecrets.legacyAddressProofKey('mint.example', 2)!)
+    ).toBe(
+      bytesToHex(
+        legacyDeriveNoteSecretKey(
+          slotNode.privateKey!,
+          slotNode.chainCode!,
+          LEGACY_NOTE_PURPOSE_WALLET,
           0
         )
       )
     )
-  })
-
-  it("derives a slot's address note keys on its own branch", () => {
-    loadRoot()
-    const branch = cashSecrets.addressBranch('mint.example', 3)!
     expect(
-      bytesToHex(
-        schnorr.getPublicKey(
-          cashSecrets.addressSecretAtIndex('mint.example', 7, 3)!
-        )
-      )
+      bytesToHex(cashSecrets.legacyAddressSecretAtIndex('mint.example', 3, 2)!)
     ).toBe(
       bytesToHex(
-        deriveNotePubkey(
-          branch.pubkeyXOnly,
-          branch.chainCode,
-          NOTE_PURPOSE_LIGHTNING_ADDRESS,
-          7
+        legacyDeriveNoteSecretKey(
+          slotNode.privateKey!,
+          slotNode.chainCode!,
+          LEGACY_NOTE_PURPOSE_LIGHTNING_ADDRESS,
+          3
         )
       )
     )
+  })
+
+  it('starts the new counters at 0 whatever the old ones said', () => {
+    store.set(
+      'lnurlcash_cash_address_indices',
+      JSON.stringify({'mint.example': 40})
+    )
+    expect(cashSecrets.nextCashAddressSecretIndex('mint.example')).toBe(0)
+    cashSecrets.clearCashAddressSecretIndices()
+    expect(store.has('lnurlcash_cash_address_indices')).toBe(false)
   })
 })

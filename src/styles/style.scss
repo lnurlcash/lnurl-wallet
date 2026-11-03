@@ -414,6 +414,24 @@ a:where(.icon-btn, .link-btn) {
   }
 }
 
+// app-wide LUD-26 reminder (MigrationBanner.tsx), above the page itself
+.migration-banner {
+  padding-bottom: 0;
+  .warning {
+    position: relative;
+    padding-right: 40px;
+  }
+  p {
+    margin: 6px 0 0;
+  }
+}
+
+.migration-banner-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
 label {
   margin-top: 10px;
   display: block;

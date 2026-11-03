@@ -42,6 +42,34 @@ What this wallet does beyond what the spec mandates:
 - Requires `commentAllowed: 64` on new mints and commits the note's hash as
   the callback `comment`, refusing mints that don't support it.
 
+## Upgrading to LUD-26 derivation (breaking)
+
+[LUD-26](https://github.com/lnurl/luds/blob/lnurlcash/26.md) replaced how
+seed-derived notes, Lightning Addresses and mint certificates are made. Your
+funds are not lost, but an existing wallet has to be carried across. The
+wallet shows a warning while anything below is left to do: app-wide, on the
+Wallet page (with a one-click refresh) and on the Addresses page.
+
+- **Seed-derived notes** made before the upgrade sit on the old scheme.
+  Every rescan (Mint page, and the restore flow) also sweeps that scheme, so
+  they are found and kept; refresh them to move them onto the new paths. The
+  same warning covers key-path notes received from someone else, which a
+  seed restore would not find at all.
+  New notes use fresh counters from index 0.
+- **Lightning Addresses** registered before the upgrade keep receiving the
+  old way until you move them: open the address and choose **Move to a new
+  key**. The name stays yours; a full rescan afterwards sweeps what was
+  paid to the old key. An address can no longer be reclaimed on another
+  device by its name alone - only one this device recorded can be.
+- **Backups** taken before the upgrade restore your notes and mints, but
+  not the old index counters (they belong to the superseded scheme).
+- **Paying a Lightning Address at the same mint** (internal transfer) now
+  sends the note itself to the address; mints that still advertise the old
+  `text/cpub` entry are not paid this way. Lightning Addresses no longer
+  resolve to a pubkey in the add-ons - ask for a cp1 or cx1 instead.
+- **Offline verification** now binds a certificate to the mint's domain.
+  Certificates from before still verify; a refresh replaces them.
+
 ## Security model: encrypted with a key derived from your seed, in your local storage
 
 - At setup a 12-word BIP39 **seed phrase** is generated in your browser. It

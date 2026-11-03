@@ -30,7 +30,8 @@ import {
   requestMintInvoice,
   requireMintComment,
   PendingNoteError,
-  AmbiguousMutationError
+  AmbiguousMutationError,
+  isRegisteredAddress
 } from '../lnurlcash'
 import {
   deviceMeltRequest,
@@ -77,10 +78,10 @@ const TRANSFER_POLL_SECONDS = 5
 // position that convenience is meant for (the legitimate payer checking on
 // its own payment, not a third party snooping the verify endpoint).
 //
-// A destination that is someone's registered Lightning Address (its
-// payRequest advertises a LUD-25 `text/cpub`) is a payment rather than a
-// move: that address's mint always auto-mints onto the owner's own branch
-// and ignores any comment, so the invoice is requested without one and
+// A destination that is someone's registered Lightning Address (a
+// withdrawLink and no commentAllowed, LUD-26) is a payment rather than a
+// move: that address's mint always auto-mints onto the owner's own share
+// and takes no comment, so the invoice is requested without one and
 // there is no destination note for this wallet to claim - the transfer is
 // done once the payment is confirmed.
 const TransferDialog: Component<TransferDialogProps> = props => {
@@ -116,9 +117,12 @@ const TransferDialog: Component<TransferDialogProps> = props => {
 
   const sourceK1 = () => requireNoteK1(props.sourceBearer.url)
 
-  const payingAddress = createMemo(
-    () => payRequest()?.internalTransfer !== undefined
-  )
+  // a registered LUD-26 address auto-mints into its owner's share; a
+  // mint's own payRequest mints the note this wallet names in the comment
+  const payingAddress = createMemo(() => {
+    const info = payRequest()
+    return info !== null && info !== undefined && isRegisteredAddress(info)
+  })
 
   const lookup = async () => {
     const url = resolveMintInput(mintInput())
@@ -235,8 +239,8 @@ const TransferDialog: Component<TransferDialogProps> = props => {
     try {
       let result
       if (payingAddress()) {
-        // the owner's mint derives the output from their advertised cpub -
-        // a comment is at most optional there and never names the output
+        // the owner's mint credits their share's next note - an address
+        // takes no comment, and nothing names the output
         result = await requestInvoice(info, props.sourceBearer.amount)
       } else {
         // Refuse before requesting the destination invoice or spending the

@@ -111,7 +111,7 @@ const issueUi: UiNode[] = [
       {
         type: 'Input',
         bind: 'firstOwnerAddress',
-        label: 'Their Lightning Address, cx1/cp1 address, or username'
+        label: 'Their cx1 or cp1 address'
       },
       {
         type: 'NotePicker',
@@ -396,7 +396,7 @@ const manageUi: UiNode[] = [
       {
         type: 'Input',
         bind: 'myAddress',
-        label: 'Your Lightning Address, cx1/cp1 address, or username'
+        label: 'Your cx1 or cp1 address'
       },
       {
         type: 'Button',
@@ -615,7 +615,7 @@ const sealsManifest: AddonManifest = {
     {
       verb: 'note.resolveAddressPubkey',
       reason:
-        'Resolve a Lightning Address/cx1/cp1/username into a pubkey, to name a seal’s owner, or to check whether a seal is currently yours'
+        'Resolve a cx1/cp1 address into a pubkey, to name a seal’s owner, or to check whether a seal is currently yours'
     },
     {
       verb: 'seal.transition',

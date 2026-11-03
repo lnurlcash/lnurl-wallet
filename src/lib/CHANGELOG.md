@@ -2,6 +2,61 @@
 
 ## 0.14.0 - unreleased
 
+- **Breaking - LUD-26 derivation (luds b62b8bf, a6c4652).** Seed-derived
+  notes are plain BIP-32 below a SERVICE root `S = m/139'/d1/d2/d3/d4`, `S`
+  now hashing the domain without its port: wallet notes `S/a'/0/i`, change
+  notes `S/a'/1/i`, and per-address shares `S/a'/2/n'` whose notes
+  `S/a'/2/n'/i` anyone holding the share's `cx1` derives by CKDpub. New in
+  `branchDerivation.ts`: `serviceDomainOf`, `deriveServiceRoot`, `NotePath`,
+  `notePathIndices`, `deriveNoteKey`, `deriveShareNode`, `shareCx1`,
+  `legacyCx1Of`.
+  - A `cx1` is `bech32m("cx", chainCode || P)` with `P` compressed (65
+    bytes, 113 characters): `Cx1` is `{chainCode, pubkey}`,
+    `encodeCx1(cx1)`, `decodeCx1` checks the point, `cx1PubkeyXOnly`.
+  - `deriveNotePubkey(cx1, index)` is BIP-32 CKDpub and refuses a hardened
+    index. `deriveNoteSecretKey` and `NOTE_PURPOSE_*` are gone.
+  - The superseded tweak scheme stays, read-only, for sweeping: `LEGACY_NOTE_PURPOSE_*`,
+    `LegacyCx1`, `encodeLegacyCx1`/`decodeLegacyCx1`,
+    `legacyDeriveNotePubkey(cx1, purpose | null, index)` and
+    `legacyDeriveNoteSecretKey` (`purpose` null is the pre-purpose variant).
+- **Breaking:** a `cs1` certifies `LNURLcash:<domain>:<amount_msat>:<hex(Q)>`.
+  `verifyNoteSignature`, `verifyNoteSignatureHash` and
+  `verifyNoteSignatureForKey` take the mint's domain (any of its URLs) after
+  the note; `validateBoundMintReceipt` takes it last. A certificate over the
+  old domain-less message still verifies: `noteCertificateKind` says
+  `'current'` or `'legacy'`. `decodeCs1WithAmount` refuses a recovery id
+  above 3.
+- **Breaking:** Lightning Address registration lives at
+  `/.well-known/lnurlp/<username>`, form-encoded, each proof signed by a
+  share's own key and binding its `cx1`: `registerUsername(server, username,
+share, shareKey, npub?)` (returns `{pr}` when the SERVICE charges an
+  address fee), new `updateUsername` (PUT: moves a name to a new share,
+  signed by the key on file - for a pre-LUD-26 registration the old branch
+  key) and `unregisterUsername(server, username, currentKey)`.
+  `signAddressProof(key, 'register' | 'update' | 'unregister', domain,
+username, cx1?)`.
+- **Breaking:** `scanForAddressNotes(withdrawUrl, noteKeyAt, opts)` walks
+  any chain by a function giving its note key at an index; `ScanPurpose` is
+  gone.
+- **Breaking - internal transfer.** `text/cpub` is gone, and with it
+  `parseInternalTransferHint`, `InternalTransferHint` and
+  `PayRequestInfo.internalTransfer`. A note goes to a Lightning Address at
+  its own mint whole, as `?amount=<its value>&k1=<its spend>` on the
+  address's payRequest callback: `isRegisteredAddress` (a `withdrawLink`
+  and no `commentAllowed`), `canPayInternally`, `sendNoteInternally`
+  and `payInternalTransfer(payee, withdrawLink, callback, k1s, amountMsat,
+totalInputMsat)`, which splits or merges into a fresh note of the
+  wallet's first when needed.
+- `parseMintFee` finds `Mint fees: base,ppm[,address_fee]` anywhere in a
+  `text/plain` entry; new `MintFee.addressFeeMsat`.
+- `classifyNoteError` reads LUD-25's exact `already in use` (a burned note)
+  as `NoteSpentError`.
+- `lnurlFetch(url, method, form?)` and `Transport` can send a
+  form-urlencoded body, dropped when a 301/302/303 turns the request into a
+  GET.
+- `specVectors.test.ts` runs the published `25-vectors.json` and
+  `26-vectors.json` (copied into `vectors/`).
+
 - `requestInvoice`/`requestInvoiceShort` take the payRequest itself as well
   as its callback, and then refuse an invoice whose description hash is not
   `sha256(metadata)` (LUD-06). One with a plain description still passes.

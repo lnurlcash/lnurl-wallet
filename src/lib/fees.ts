@@ -3,6 +3,10 @@
 export type MintFee = {
   baseFeeMsat: number
   feePpm: number
+  // LUD-26's third `Mint fees` value: what registering one Lightning
+  // Address costs. Absent when not advertised, or unparseable - either way
+  // a wallet refuses to pay a registration invoice it was not told about.
+  addressFeeMsat?: number
 }
 
 // The current LUD-25 draft profile requires enough room for exactly what
@@ -29,10 +33,45 @@ export const requireMintComment = (info: PayRequestCommentInfo): void => {
 }
 
 // LUD-25 mint fees (optional): SERVICE signals what it withholds on minting
-// via an extra ["text/plain", "Mint fees: <base_fee_msat>,<fee_percent_ppm>"]
-// entry in a payRequest's metadata array, so a client can warn the payer up
+// with a "Mint fees: <base_fee_msat>,<fee_ppm>" token anywhere in its
+// payRequest's text/plain metadata entry, so a client can warn the payer up
 // front that the note it ends up holding may be worth less than the invoice
-// it paid. A SERVICE that omits the entry is assumed fee-free.
+// it paid. The values are plain base-10 integers separated by commas,
+// ending at whitespace or the end of the entry; a third is LUD-26's address
+// fee. A SERVICE without the token is fee-free; one whose first two values
+// do not parse is a fee this client does not know (null too - rely on
+// maxWithdrawable alone).
+const MINT_FEES_TOKEN = 'Mint fees:'
+
+// above 2^53 a number loses integer precision: a fee read wrong is worse
+// than no fee
+const feeValue = (text: string | undefined): number | null =>
+  text !== undefined && /^\d+$/.test(text) && Number.isSafeInteger(Number(text))
+    ? Number(text)
+    : null
+
+const parseMintFeeToken = (text: string): MintFee | null => {
+  const at = text.indexOf(MINT_FEES_TOKEN)
+  if (at < 0) return null
+  const values = text
+    .slice(at + MINT_FEES_TOKEN.length)
+    .trimStart()
+    .split(/\s/)[0]!
+    .split(',')
+  const baseFeeMsat = feeValue(values[0])
+  const feePpm = feeValue(values[1])
+  if (baseFeeMsat === null || feePpm === null) return null
+  // a >= 100% fee can never net anything at all (applyMintFee floors at 0
+  // while the target stays positive), so there is no gross-up to offer
+  // and nothing a caller could do with one. Treat it as no valid fee
+  // entry at all.
+  if (feePpm >= 1_000_000) return null
+  const addressFeeMsat = feeValue(values[2])
+  return addressFeeMsat === null
+    ? {baseFeeMsat, feePpm}
+    : {baseFeeMsat, feePpm, addressFeeMsat}
+}
+
 export const parseMintFee = (metadata: string): MintFee | null => {
   let entries: unknown
   try {
@@ -43,23 +82,14 @@ export const parseMintFee = (metadata: string): MintFee | null => {
   if (!Array.isArray(entries)) return null
   for (const entry of entries) {
     if (!Array.isArray(entry) || entry[0] !== 'text/plain') continue
-    const match =
-      typeof entry[1] === 'string' &&
-      entry[1].match(/^Mint fees:\s*(\d+)\s*,\s*(\d+)\s*$/)
-    if (!match) continue
-    const baseFeeMsat = Number(match[1])
-    const feePpm = Number(match[2])
-    if (!Number.isFinite(baseFeeMsat) || !Number.isFinite(feePpm)) continue
-    // a >= 100% fee can never net anything at all (applyMintFee floors at 0
-    // while the target stays positive), so there is no gross-up to offer
-    // and nothing a caller could do with one. Treat it as no valid fee
-    // entry at all.
-    if (feePpm >= 1_000_000) continue
-    // an explicit "Mint fees: 0,0" has the exact same effect as omitting
-    // the entry entirely - treat it identically, so callers don't need to
+    if (typeof entry[1] !== 'string') continue
+    const fee = parseMintFeeToken(entry[1])
+    if (!fee) continue
+    // every value zero has the exact same effect as omitting the entry
+    // entirely - treat it identically, so callers don't need to
     // special-case a fee that's technically present but withholds nothing
-    if (baseFeeMsat === 0 && feePpm === 0) return null
-    return {baseFeeMsat, feePpm}
+    if (!fee.baseFeeMsat && !fee.feePpm && !fee.addressFeeMsat) return null
+    return fee
   }
   return null
 }

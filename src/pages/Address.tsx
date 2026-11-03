@@ -10,6 +10,7 @@ import {
   ADDRESS_SCAN_LABEL,
   type AddressScanMinutes
 } from '../addressRegistry'
+import {addressesToMigrate} from '../lud26Migration'
 import RequireWallet from '../components/RequireWallet'
 import AddressDialog from '../components/AddressDialog'
 import AddressScanDialog from '../components/AddressScanDialog'
@@ -18,11 +19,11 @@ import AddressScanDialog from '../components/AddressScanDialog'
 // new one at `server`
 type DialogTarget = {server: string; username?: string}
 
-// LUD-25 username@mint addresses, one card per trusted mint listing every
+// LUD-26 username@mint addresses, one card per trusted mint listing every
 // address this wallet holds there: claiming/managing one (AddressDialog)
 // and checking it for notes paid to it (AddressScanDialog, auto-check
-// included). A mint can hold any number - each registers its own branch
-// (see cashSecrets.ts's FIRST_ADDRESS_SLOT). Split out of the Mint page,
+// included). A mint can hold any number - each registers its own share
+// (see cashSecrets.ts's addressShareCx1). Split out of the Mint page,
 // which keeps only the plain wallet/change rescan (RescanDialog) - an
 // address is something a holder hands out and checks on, not part of
 // managing which mints to trust.
@@ -55,6 +56,20 @@ const Address: Component = () => {
               onClose={() => setScanFor(null)}
             />
           )}
+        </Show>
+        <Show when={addressesToMigrate().length > 0}>
+          <div class="warning">
+            <p>
+              {addressesToMigrate().length} of your addresses{' '}
+              {addressesToMigrate().length === 1 ? 'was' : 'were'} registered
+              before the LUD-26 upgrade and{' '}
+              {addressesToMigrate().length === 1 ? 'is' : 'are'} still paid onto
+              the old keys. Nothing is lost, but move each one to a new key:
+              press <strong>Move to a new key</strong> on it below (it keeps the
+              name), then <strong>Check notes → Full rescan</strong> to pick up
+              what was paid to the old key.
+            </p>
+          </div>
         </Show>
         <p>
           Claim username@mint Lightning Addresses at any of your trusted mints -
@@ -106,6 +121,12 @@ const Address: Component = () => {
                               ? `auto-check every ${ADDRESS_SCAN_LABEL[addr.autoScanMinutes as AddressScanMinutes]}`
                               : 'auto-check off'}
                           </p>
+                          <Show when={addr.share === undefined}>
+                            <p class="warning">
+                              Still on the pre-LUD-26 keys - move it to a new
+                              key.
+                            </p>
+                          </Show>
                           <div class="btns">
                             <button
                               title={`Check ${addr.username}@${serverOf(addr.server)} for notes paid to it (LUD-25)`}
@@ -129,7 +150,10 @@ const Address: Component = () => {
                               }
                             >
                               <IoAtCircleSharp />
-                              &nbsp;Manage
+                              &nbsp;
+                              {addr.share === undefined
+                                ? 'Move to a new key'
+                                : 'Manage'}
                             </button>
                           </div>
                         </>

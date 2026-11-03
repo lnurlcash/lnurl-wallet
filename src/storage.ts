@@ -286,16 +286,19 @@ export const reencryptAllRecords = async (
 // both keys are always saved under the same password, see WalletContext's
 // setup, so there's never a case where one qualifies and the other
 // doesn't). Trusted mints are plain (not secret - a mintPubkey is public),
-// included as-is. `cashAddressIndices` (LUD-25, see cashSecrets.ts's
+// included as-is. `lud26WalletIndices` (see cashSecrets.ts's
 // nextCashAddressSecret) is the per-SERVICE "next index" counter behind
 // every seed-derived cp1/ck1 note secret this wallet has generated - also
 // plain (an index alone is worthless without the cash root key), and,
 // unlike a bearer's own secret, small enough that backing up every note
 // this wallet will ever hold never grows this beyond one integer per mint
-// ever used. `cashChangeIndices` is the same bookkeeping for
-// NOTE_PURPOSE_CHANGE's own counter (cashSecrets.ts's nextChangeSecret) - a
-// separate field since the two purposes are separate counters that must
-// never be conflated on restore. Bearer notes' secrets are plain
+// ever used. `lud26ChangeIndices` is the same bookkeeping for the change
+// chain (cashSecrets.ts's nextChangeSecret) - a separate field since the
+// two chains are separate counters that must never be conflated on
+// restore. A backup from before LUD-26 carries `cashAddressIndices`/
+// `cashChangeIndices` instead, counters of the superseded scheme: they are
+// ignored, since raising the new counters with them would leave a gap a
+// gap-limited recovery scan never crosses. Bearer notes' secrets are plain
 // randomness, not seed-derived (see cashSecrets.ts's header comment), so
 // there is no equivalent counter for them to back up.
 export type BackupFile = {
@@ -311,8 +314,8 @@ export type BackupFile = {
   linkingKey?: StoredSecret
   storageRootKey?: StoredSecret
   cashRootKey?: StoredSecret
-  cashAddressIndices?: Record<string, number>
-  cashChangeIndices?: Record<string, number>
+  lud26WalletIndices?: Record<string, number>
+  lud26ChangeIndices?: Record<string, number>
   bearers: EncryptedBearerRecord[]
   trustedMints?: TrustedMint[]
 }
@@ -324,8 +327,8 @@ export const buildBackup = (): BackupFile => {
     createdAt: Date.now(),
     bearers: readEncryptedBearers(),
     trustedMints: trustedMints(),
-    cashAddressIndices: readCashAddressSecretIndices(),
-    cashChangeIndices: readCashChangeSecretIndices()
+    lud26WalletIndices: readCashAddressSecretIndices(),
+    lud26ChangeIndices: readCashChangeSecretIndices()
   }
   if (savedStorageRootKeyIsEncrypted()) {
     backup.storageRootKey = getSavedStorageRootKeyStored()!
@@ -466,16 +469,16 @@ export const applyBackup = (data: unknown): RestoreResult => {
     ? mergeTrustedMints(backup.trustedMints)
     : 0
 
-  // per-SERVICE key-path index (LUD-25) merges in regardless of the
+  // per-SERVICE key-path index (LUD-26) merges in regardless of the
   // linking-key outcome above - non-secret bookkeeping, safe to raise even
   // for a device keeping its own existing wallet (see
   // mergeCashAddressSecretIndices). A backup taken before this field
   // existed, or one still carrying the removed bearer `cashIndices` field,
   // just has nothing (or an ignored extra field) here.
-  mergeCashAddressSecretIndices(backup.cashAddressIndices)
-  // NOTE_PURPOSE_CHANGE's own counter, merged the same way and for the same
+  mergeCashAddressSecretIndices(backup.lud26WalletIndices)
+  // the change chain's counter, merged the same way and for the same
   // reason - a backup taken before this field existed just has nothing here.
-  mergeCashChangeSecretIndices(backup.cashChangeIndices)
+  mergeCashChangeSecretIndices(backup.lud26ChangeIndices)
 
   return {
     added,

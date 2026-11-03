@@ -54,7 +54,7 @@ describe('lnurlTools: a real payRequest with LUD-06 metadata + Nostr zaps', () =
       },
       {label: 'Identifier', value: 'dni2@mint.lnurlcash.com'},
       {
-        label: 'Internal transfer cpub (LUD-25)',
+        label: 'Internal transfer cpub (before LUD-26)',
         value:
           'cx15qwmqamrkyd0tkr8aawvkgdhpl0cw44sc5uealh9lpddqvtj22fy50dxfr082vy9h3wwq0f22gefdaprkuq9ap9qekfcn454dwg5nwc5rf47n:6'
       },

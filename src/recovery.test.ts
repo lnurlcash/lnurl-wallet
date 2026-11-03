@@ -1,12 +1,11 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {bytesToHex} from '@noble/hashes/utils.js'
+import {schnorr} from '@noble/curves/secp256k1.js'
 import {
-  deriveNotePubkey,
   encodeCp1,
   noteK1,
   recoverNoteOwnershipPubkey,
-  encodeCs1WithAmount,
-  NOTE_PURPOSE_WALLET
+  encodeCs1WithAmount
 } from './lnurlcash'
 import type {Bearer} from './storage'
 
@@ -56,25 +55,29 @@ const jsonResponse = (body: unknown) =>
 
 // a minimal LUD-25 mint fake, mirroring addressRecovery.test.ts's own
 // fakeMint: `liveIndices`' pubkeys are live outstanding notes, `spentIndex`
-// (if given) is already spent, every other index was never minted - enough
+// (if given) is already spent (burned: "already in use"), `legacyLive` are
+// live notes of the superseded scheme's purpose 0, every other index was
+// never minted - enough
 // to exercise recovery/spent/gap-limit handling without pulling in
 // mockMint.test.ts's much larger stateful mock
+const walletPubkeyAt = (i: number) =>
+  schnorr.getPublicKey(cashSecrets.cashAddressSecretAtIndex(SERVER, i)!)
+
 const fakeMint = (
   liveIndices: number[],
   spentIndex: number | null,
-  sig?: string
+  sig?: string | null,
+  legacyLive: number[] = []
 ) => {
-  const branch = cashSecrets.cashAddressBranch(SERVER)!
-  const cp1At = (i: number) =>
-    encodeCp1(
-      deriveNotePubkey(
-        branch.pubkeyXOnly,
-        branch.chainCode,
-        NOTE_PURPOSE_WALLET,
-        i
+  const cp1At = (i: number) => encodeCp1(walletPubkeyAt(i))
+  const liveCp1 = new Set([
+    ...liveIndices.map(cp1At),
+    ...legacyLive.map(i =>
+      encodeCp1(
+        schnorr.getPublicKey(cashSecrets.legacySecretAtIndex(SERVER, 0, i)!)
       )
     )
-  const liveCp1 = new Set(liveIndices.map(cp1At))
+  ])
   const spentCp1 = spentIndex === null ? null : cp1At(spentIndex)
   return (input: string | URL) => {
     const url = new URL(input.toString())
@@ -101,7 +104,7 @@ const fakeMint = (
         })
       }
       if (p && spentCp1 && p === spentCp1) {
-        return jsonResponse({status: 'ERROR', reason: 'Note already spent.'})
+        return jsonResponse({status: 'ERROR', reason: 'already in use'})
       }
       return jsonResponse({status: 'ERROR', reason: 'Unknown note.'})
     }
@@ -119,15 +122,7 @@ describe('scanMintForNotes', () => {
     expect(result.highestUsedIndex).toBe(0)
     // the recovered bearer's own k1 is a well-formed ck1 that actually
     // recovers to the same index's derived pubkey
-    const branch = cashSecrets.cashAddressBranch(SERVER)!
-    const expectedPk = bytesToHex(
-      deriveNotePubkey(
-        branch.pubkeyXOnly,
-        branch.chainCode,
-        NOTE_PURPOSE_WALLET,
-        0
-      )
-    )
+    const expectedPk = bytesToHex(walletPubkeyAt(0))
     const k1 = noteK1(result.recovered[0]!.url)!
     expect(k1.startsWith('ck1')).toBe(true)
     const owner = recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
@@ -136,7 +131,9 @@ describe('scanMintForNotes', () => {
   })
 
   it('attaches an already-disclosed offline-verification sig immediately, no separate rotate needed', async () => {
-    const sig = encodeCs1WithAmount(5000, new Uint8Array(65).fill(0xab))
+    const sig65 = new Uint8Array(65).fill(0xab)
+    sig65[64] = 1
+    const sig = encodeCs1WithAmount(5000, sig65)
     vi.stubGlobal('fetch', fakeMint([0], null, sig) as unknown as typeof fetch)
     const result = await recovery.scanMintForNotes(`mint@${SERVER}`)
     expect(result.recovered).toHaveLength(1)
@@ -218,18 +215,55 @@ describe('scanMintForNotes', () => {
     expect(result.error).toBeTruthy()
   })
 
-  it('reports progress before every probe, across both the wallet and change scans', async () => {
+  it('reports progress before every probe, across the wallet, change and legacy scans', async () => {
     vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
     const seen: number[] = []
     await recovery.scanMintForNotes(`mint@${SERVER}`, index => seen.push(index))
-    // scanMintForNotes now walks NOTE_PURPOSE_WALLET then NOTE_PURPOSE_CHANGE
-    // (25.md's Seed & derivation: two independent counters on the same
-    // branch), each its own full gap-limited pass since nothing is
-    // outstanding on either
-    expect(seen.length).toBe(2 * gapLimit.gapLimit())
+    // the wallet chain, the change chain, then the superseded scheme's
+    // purposes 0, 1 and its pre-purpose variant - each its own full
+    // gap-limited pass since nothing is outstanding on any
+    expect(seen.length).toBe(5 * gapLimit.gapLimit())
     expect(seen[0]).toBe(0)
     // the second pass (change) restarts its own progress count at 0 too
     expect(seen[gapLimit.gapLimit()]).toBe(0)
+  })
+
+  it('skips the legacy sweep when asked to', async () => {
+    vi.stubGlobal('fetch', fakeMint([], null) as unknown as typeof fetch)
+    const seen: number[] = []
+    await recovery.scanMintForNotes(
+      `mint@${SERVER}`,
+      index => seen.push(index),
+      [],
+      {legacy: false}
+    )
+    expect(seen.length).toBe(2 * gapLimit.gapLimit())
+  })
+
+  it('sweeps a note left on the superseded scheme', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeMint([], null, null, [2]) as unknown as typeof fetch
+    )
+    const passes: string[] = []
+    const result = await recovery.scanMintForNotes(
+      `mint@${SERVER}`,
+      undefined,
+      [],
+      {
+        onIndex: (_index, status, pass) => {
+          if (status === 'recovered') passes.push(pass)
+        }
+      }
+    )
+    expect(result.recovered).toHaveLength(1)
+    expect(passes).toEqual(['legacy'])
+    // a legacy note never raises the new chains' counters
+    expect(result.highestUsedIndex).toBeNull()
+    const k1 = noteK1(result.recovered[0]!.url)!
+    expect(
+      recoverNoteOwnershipPubkey(k1, result.recovered[0]!.url)
+    ).not.toBeNull()
   })
 
   it('starts each pass at its own configured index and labels progress by pass', async () => {
@@ -260,7 +294,8 @@ describe('scanMintForNotes', () => {
     vi.stubGlobal('fetch', fakeMint([1], 3, null) as unknown as typeof fetch)
     const cells: Record<string, Record<number, string>> = {
       wallet: {},
-      change: {}
+      change: {},
+      legacy: {}
     }
     await recovery.scanMintForNotes(`mint@${SERVER}`, undefined, [], {
       onIndex: (index, status, pass) => {
