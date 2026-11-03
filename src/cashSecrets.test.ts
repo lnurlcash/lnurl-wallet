@@ -371,22 +371,15 @@ describe('superseded derivation (sweep only)', () => {
     )
   })
 
-  it("proves an old registration with its branch's purpose-0 index-0 key, and finds its notes under purpose 2", () => {
+  it("proves an old registration with its slot node's own key (x(P) of the old cx1), and finds its notes under purpose 2", () => {
     const root = loadRoot()
-    const slotNode = deriveDomainBranchNode(root, 'mint.example').deriveChild(
-      0x80000000 + 2
-    )
+    const branch = deriveDomainBranchNode(root, 'mint.example')
+    const slotNode = branch.deriveChild(0x80000000 + 2)
     expect(
       bytesToHex(cashSecrets.legacyAddressProofKey('mint.example', 2)!)
-    ).toBe(
-      bytesToHex(
-        legacyDeriveNoteSecretKey(
-          slotNode.privateKey!,
-          slotNode.chainCode!,
-          LEGACY_NOTE_PURPOSE_WALLET,
-          0
-        )
-      )
+    ).toBe(bytesToHex(slotNode.privateKey!))
+    expect(bytesToHex(cashSecrets.legacyAddressProofKey('mint.example')!)).toBe(
+      bytesToHex(branch.privateKey!)
     )
     expect(
       bytesToHex(cashSecrets.legacyAddressSecretAtIndex('mint.example', 3, 2)!)
