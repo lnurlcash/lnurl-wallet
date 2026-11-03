@@ -90,6 +90,17 @@ export type UiNode =
   // public "user@host" anyone paying it already sees, never anything
   // seed-derived
   | {type: 'AddressPicker'; bind: string; label?: string}
+  // pick a JPG or PNG from the holder's own device - binds `{name, type,
+  // size, dataUrl}` (imageData.ts's PickedImage): the file itself as a
+  // `data:` URL, so it is plain JSON like every other state value. Read
+  // locally, never uploaded anywhere; anything that is not a JPG/PNG by its
+  // own bytes, or is larger than IMAGE_MAX_BYTES, binds null instead
+  | {type: 'ImagePicker'; bind: string; label?: string}
+  // shows a picture - but only a JPG/PNG `data:` URL (imageData.ts's
+  // isImageDataUrl), and nothing at all for any other value. Never an
+  // http(s) URL: an addon must not be able to make the holder's browser
+  // fetch from a server of the addon's choosing
+  | {type: 'Image'; value: Expr}
   // renders nothing; runs `onTick` once as soon as `when` turns truthy,
   // then every `every` seconds (clamped to POLL_MIN_SECONDS) for as long
   // as it stays truthy and this node stays mounted - never overlapping a
