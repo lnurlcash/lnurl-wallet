@@ -9,6 +9,7 @@ import {
   decodeBolt11AmountMsat,
   decodeBolt11PaymentHash,
   decodeBolt11DescriptionHash,
+  decodeBolt11ExpiresAt,
   invoiceMatchesMetadata,
   verifyMeltPreimage,
   encodeBolt11AmountSuffix,
@@ -177,5 +178,24 @@ describe('bolt11 description hash (LUD-06)', () => {
     expect(invoiceMatchesMetadata(SPEC_PR, SPEC_TEXT)).toBe(true)
     expect(invoiceMatchesMetadata(SPEC_PR, SPEC_TEXT + ' ')).toBe(false)
     expect(invoiceMatchesMetadata(SPEC_PR_D, 'anything')).toBe(true)
+  })
+})
+
+describe('bolt11 expiry', () => {
+  // BOLT-11's own examples, both timestamped 1496314658: the coffee-beans
+  // one carries x=60, the description-hash one no 'x' (default 3600)
+  const COFFEE =
+    'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp'
+  const NO_EXPIRY =
+    'lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqscc6gd6ql3jrc5yzme8v4ntcewwz5cnw92tz0pc8qcuufvq7khhr8wpald05e92xw006sq94mg8v2ndf4sefvf9sygkshp5zfem29trqq2yxxz7'
+
+  it('adds the x tag to the timestamp, 3600 when absent', () => {
+    expect(decodeBolt11ExpiresAt(COFFEE)).toBe(1496314658 + 60)
+    expect(decodeBolt11ExpiresAt(NO_EXPIRY)).toBe(1496314658 + 3600)
+  })
+
+  it('is null for anything that is not an invoice', () => {
+    expect(decodeBolt11ExpiresAt('not an invoice')).toBeNull()
+    expect(decodeBolt11ExpiresAt('lnbc1invalidchecksum')).toBeNull()
   })
 })

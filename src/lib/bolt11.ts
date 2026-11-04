@@ -124,6 +124,47 @@ const decodeBolt11Hash32 = (pr: string, wantTag: number): string | null => {
   }
 }
 
+// BOLT-11's 'x' tag (charset index 6): seconds after the timestamp the
+// invoice stays payable, 3600 when absent
+const BOLT11_TAG_EXPIRY = 6
+const BOLT11_DEFAULT_EXPIRY_S = 3600
+
+const wordsToNumber = (words: ArrayLike<number>): number => {
+  let n = 0
+  for (let i = 0; i < words.length; i++) n = n * 32 + words[i]!
+  return n
+}
+
+// when the invoice stops being payable, in unix SECONDS: its 35-bit
+// timestamp plus its 'x' expiry (default 3600). Null (never throws) for
+// anything that doesn't decode as bech32
+export const decodeBolt11ExpiresAt = (pr: string): number | null => {
+  const trimmed = pr.trim().toLowerCase()
+  try {
+    const {words} = bech32.decode(trimmed as `${string}1${string}`, 2048)
+    const fieldsEnd = words.length - 104
+    if (fieldsEnd < 7) return null
+    const timestamp = wordsToNumber(words.slice(0, 7))
+    let expiry = BOLT11_DEFAULT_EXPIRY_S
+    let pos = 7
+    while (pos + 3 <= fieldsEnd) {
+      const tag = words[pos]
+      const len = words[pos + 1]! * 32 + words[pos + 2]!
+      const start = pos + 3
+      const end = start + len
+      if (end > fieldsEnd) break
+      if (tag === BOLT11_TAG_EXPIRY) {
+        expiry = wordsToNumber(words.slice(start, end))
+        break
+      }
+      pos = end
+    }
+    return timestamp + expiry
+  } catch {
+    return null
+  }
+}
+
 // so a disclosed melt/mint preimage can be checked against the actual
 // invoice it claims to settle, not just trusted on the service's word
 export const decodeBolt11PaymentHash = (pr: string): string | null =>

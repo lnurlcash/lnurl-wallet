@@ -1,12 +1,22 @@
 import type {Component} from 'solid-js'
-import {For, Show, createMemo, createSignal} from 'solid-js'
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  untrack
+} from 'solid-js'
 import {
   IoAtCircleSharp,
   IoRefreshSharp,
   IoTrashSharp,
   IoCopySharp,
   IoEyeOffSharp,
-  IoCloseSharp
+  IoCloseSharp,
+  IoKeySharp,
+  IoCheckmarkSharp
 } from 'solid-icons/io'
 
 import Dialog from './Dialog'
@@ -39,6 +49,9 @@ import {
   forgetRegisteredAddress,
   forgottenAddresses,
   dismissForgottenAddress,
+  setAddressFeeInvoice,
+  candidateAddressKeys,
+  sameKey,
   type AddressKey,
   type RegisteredAddress
 } from '../addressRegistry'
@@ -46,7 +59,10 @@ import {isValidNpub} from '../nostrAddress'
 import {
   checkAddressOwnership,
   resolveAddressOwnership,
-  type AddressOwnership
+  checkAddressFee,
+  feeInvoiceExpiresAt,
+  type AddressOwnership,
+  type AddressFeeStatus
 } from '../addressRecovery'
 
 // why an unclaim failed, once checkAddressOwnership has looked - 'ours'
@@ -78,6 +94,19 @@ const proofKeyOf = (host: string, key: AddressKey): Uint8Array | null =>
 // already (from another device on the same seed)
 const SHARE_ATTEMPTS = 20
 
+// how often an open dialog asks the mint whether a pending fee was paid
+const FEE_POLL_MS = 10_000
+
+// "42 min" / "3 min 05 s" - time left on a fee invoice
+const formatRemaining = (ms: number): string => {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  const min = Math.floor(total / 60)
+  const sec = total % 60
+  if (min >= 10) return `${min} min`
+  if (min > 0) return `${min} min ${String(sec).padStart(2, '0')} s`
+  return `${sec} s`
+}
+
 // LUD-26 Lightning Address registration AND managing an already-claimed
 // one - npub, moving, unclaiming - scoped to one mint at a time and opened
 // from that mint's card on the Address page. A mint can hold many
@@ -108,9 +137,42 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     forgottenAddresses().filter(a => a.server === props.server)
   )
 
-  // LUD-26 address fee: the invoice a registration answered with. The name
-  // is held for this wallet's share and starts working once it is paid.
-  const [feeInvoice, setFeeInvoice] = createSignal<string | null>(null)
+  // POSTs `name` on the next unused share - moving past any the mint has
+  // seen already (claimed from another device on this seed). `pr` is the
+  // address fee invoice, if the mint charges one
+  const registerFresh = async (
+    name: string,
+    npubValue?: string
+  ): Promise<{share: number; pr?: string}> => {
+    const host = serverOf(props.server)
+    let share = nextAddressShare(props.server)
+    for (let attempt = 0; ; attempt++) {
+      const cx1 = addressShareCx1(host, share)
+      const shareKey = addressShareKey(host, share)
+      if (!cx1 || !shareKey) throw new Error(NO_SEED)
+      try {
+        const {pr} = await registerUsername(
+          props.server,
+          name,
+          cx1,
+          shareKey,
+          npubValue
+        )
+        return {share, pr}
+      } catch (err) {
+        skipAddressShare(props.server, share)
+        if (
+          attempt < SHARE_ATTEMPTS &&
+          err instanceof ServiceError &&
+          /cx1 already used/i.test(err.reason)
+        ) {
+          share++
+          continue
+        }
+        throw err
+      }
+    }
+  }
 
   // `reclaimName`: one of forgottenHere()'s names, claimed straight from
   // its own button instead of the username field
@@ -125,7 +187,6 @@ const AddressDialog: Component<AddressDialogProps> = props => {
       notify('Not a valid npub.', NotifyKind.ERROR)
       return
     }
-    const host = serverOf(props.server)
     if (!hasCashRoot()) {
       notify(NO_SEED, NotifyKind.ERROR)
       return
@@ -156,42 +217,14 @@ const AddressDialog: Component<AddressDialogProps> = props => {
         )
         return
       }
-      // a fresh claim takes the next unused share - moving past any the
-      // mint has seen already (claimed from another device on this seed)
-      let share = nextAddressShare(props.server)
-      for (let attempt = 0; ; attempt++) {
-        const cx1 = addressShareCx1(host, share)
-        const shareKey = addressShareKey(host, share)
-        if (!cx1 || !shareKey) throw new Error(NO_SEED)
-        try {
-          const {pr} = await registerUsername(
-            props.server,
-            name,
-            cx1,
-            shareKey,
-            npubValue || undefined
-          )
-          // a mint charging an address fee holds the name for this share
-          // until its invoice is paid - shown below, once recorded
-          if (pr) setFeeInvoice(pr)
-          break
-        } catch (err) {
-          skipAddressShare(props.server, share)
-          if (
-            attempt < SHARE_ATTEMPTS &&
-            err instanceof ServiceError &&
-            /cx1 already used/i.test(err.reason)
-          ) {
-            share++
-            continue
-          }
-          throw err
-        }
-      }
+      const {share, pr} = await registerFresh(name, npubValue || undefined)
       addRegisteredAddress(props.server, name, npubValue || undefined, share)
+      // a mint charging an address fee holds the name for this share until
+      // its invoice is paid - remembered on the record, shown below
+      setAddressFeeInvoice(props.server, name, pr)
       setClaimedName(name)
       notify(
-        feeInvoice()
+        pr
           ? `${name}@${serverOf(props.server)} is held for you - pay the registration fee to activate it.`
           : `Registered ${name}@${serverOf(props.server)}.`,
         NotifyKind.SUCCESS
@@ -209,57 +242,157 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   // full rescan sweeps them (addressRecovery.ts's runAddressScan).
   const moveTo = async (name: string, current: AddressKey, npub?: string) => {
     const host = serverOf(props.server)
-    const currentKey = proofKeyOf(host, current)
-    if (!currentKey) throw new Error(NO_SEED)
+    if (!hasCashRoot()) throw new Error(NO_SEED)
+    // the key on file: the recorded one, else whichever of this seed's
+    // other candidates the mint accepts (see candidateAddressKeys)
+    let onFile: AddressKey | null = null
     let share = nextAddressShare(props.server)
-    for (let attempt = 0; ; attempt++) {
-      const cx1 = addressShareCx1(host, share)
-      const shareKey = addressShareKey(host, share)
-      if (!cx1 || !shareKey) throw new Error(NO_SEED)
-      try {
-        await updateUsername(
-          props.server,
-          name,
-          currentKey,
-          cx1,
-          shareKey,
-          npub
-        )
-        break
-      } catch (err) {
-        skipAddressShare(props.server, share)
-        if (
-          attempt < SHARE_ATTEMPTS &&
-          err instanceof ServiceError &&
-          /cx1 already used/i.test(err.reason)
-        ) {
-          share++
-          continue
+    let firstError: unknown = null
+    candidates: for (const key of candidateAddressKeys(props.server, current)) {
+      const proofKey = proofKeyOf(host, key)
+      if (!proofKey) continue
+      for (let attempt = 0; ; attempt++) {
+        const cx1 = addressShareCx1(host, share)
+        const shareKey = addressShareKey(host, share)
+        if (!cx1 || !shareKey) throw new Error(NO_SEED)
+        try {
+          await updateUsername(
+            props.server,
+            name,
+            proofKey,
+            cx1,
+            shareKey,
+            npub
+          )
+          onFile = key
+          break candidates
+        } catch (err) {
+          const reason = err instanceof ServiceError ? err.reason : ''
+          // refused on the proof: nothing was accepted - try the next key
+          if (/invalid ownership signature/i.test(reason)) {
+            firstError ??= err
+            continue candidates
+          }
+          skipAddressShare(props.server, share)
+          if (attempt < SHARE_ATTEMPTS && /cx1 already used/i.test(reason)) {
+            share++
+            continue
+          }
+          throw err
         }
-        throw err
       }
     }
-    if (
-      !registeredAddresses().some(
-        a => a.server === props.server && a.username === name
-      )
-    ) {
-      addRegisteredAddress(
-        props.server,
-        name,
-        undefined,
-        current.kind === 'share' ? current.share : undefined,
-        current.kind === 'legacy' ? current.slot : undefined
+    if (!onFile) {
+      throw new Error(
+        `The mint refused every key this seed has for ${name}@${host} (${(firstError as Error)?.message ?? 'no key'}). It was registered under another seed, or re-claimed by someone else.`
       )
     }
-    moveRegisteredAddress(props.server, name, share)
+    // record the key that was actually on file, so it is the one retired
+    // (and swept by a full rescan) - not the one this device assumed
+    addRegisteredAddress(
+      props.server,
+      name,
+      registered()?.npub,
+      onFile.kind === 'share' ? onFile.share : undefined,
+      onFile.kind === 'legacy' ? onFile.slot : undefined
+    )
+    // the recorded key, when the mint had moved on from it already: notes
+    // paid to it before that earlier move still need sweeping
+    moveRegisteredAddress(
+      props.server,
+      name,
+      share,
+      sameKey(onFile, current) ? [] : [current]
+    )
     if (npub) addRegisteredAddress(props.server, name, npub, share)
   }
 
   // ---- manage (already registered) ----
   const [busy, setBusy] = createSignal(false)
-  const [confirm, setConfirm] = createSignal<'unclaim' | 'forget' | null>(null)
+  const [confirm, setConfirm] = createSignal<
+    'refresh' | 'unclaim' | 'forget' | null
+  >(null)
   const [problem, setProblem] = createSignal<string | null>(null)
+
+  // ---- address fee (a registration still waiting on its invoice) ----
+  const [now, setNow] = createSignal(Date.now())
+  const clock = setInterval(() => setNow(Date.now()), 1000)
+  onCleanup(() => clearInterval(clock))
+  const [feeStatus, setFeeStatus] = createSignal<AddressFeeStatus | null>(null)
+  const [checkingFee, setCheckingFee] = createSignal(false)
+  const feeExpiresAt = createMemo(() => {
+    const pr = registered()?.feeInvoice
+    return pr ? feeInvoiceExpiresAt(pr) : null
+  })
+  const feeExpired = () =>
+    feeStatus() === 'expired' ||
+    (feeExpiresAt() !== null && now() >= feeExpiresAt()!)
+
+  // `quiet`: a background poll - only a payment is worth a toast
+  const checkFee = async (quiet = false) => {
+    const addr = registered()
+    if (!addr?.feeInvoice || checkingFee() || offlineMode()) return
+    setCheckingFee(true)
+    try {
+      const status = await checkAddressFee(addr)
+      setFeeStatus(status)
+      if (status === 'paid') {
+        notify(
+          `Fee paid - ${addr.username}@${serverOf(addr.server)} is active.`,
+          NotifyKind.SUCCESS
+        )
+      } else if (!quiet) {
+        notify(
+          status === 'pending'
+            ? 'Not paid yet.'
+            : status === 'expired'
+              ? 'The fee invoice expired unpaid - the claim lapsed.'
+              : "Couldn't reach the mint to check the payment.",
+          status === 'unknown' ? NotifyKind.ERROR : null
+        )
+      }
+    } finally {
+      setCheckingFee(false)
+    }
+  }
+
+  // polls while the dialog shows a still-payable fee invoice - keyed on
+  // the invoice itself, not the ticking clock
+  const pendingInvoice = createMemo(() =>
+    registered()?.feeInvoice && !feeExpired() ? registered()!.feeInvoice : null
+  )
+  createEffect(() => {
+    if (!pendingInvoice()) return
+    untrack(() => void checkFee(true))
+    const poll = setInterval(() => void checkFee(true), FEE_POLL_MS)
+    onCleanup(() => clearInterval(poll))
+  })
+
+  // the hold lapsed: register the same name again on a fresh share (the
+  // lapsed one is never accepted again), answered with a new invoice
+  const claimAgain = async (addr: RegisteredAddress) => {
+    if (!hasCashRoot()) {
+      notify(NO_SEED, NotifyKind.ERROR)
+      return
+    }
+    setBusy(true)
+    try {
+      const {share, pr} = await registerFresh(addr.username, addr.npub)
+      addRegisteredAddress(addr.server, addr.username, addr.npub, share)
+      setAddressFeeInvoice(addr.server, addr.username, pr)
+      setFeeStatus(null)
+      notify(
+        pr
+          ? `${addr.username}@${serverOf(addr.server)} is held for you again - pay the new invoice to activate it.`
+          : `Registered ${addr.username}@${serverOf(addr.server)}.`,
+        NotifyKind.SUCCESS
+      )
+    } catch (err) {
+      notify((err as Error).message, NotifyKind.ERROR)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   // local bookkeeping only - nothing is sent to the mint (see
   // addressRegistry.ts's forgetRegisteredAddress). The way out when the
@@ -277,6 +410,7 @@ const AddressDialog: Component<AddressDialogProps> = props => {
     setBusy(true)
     try {
       await moveTo(addr.username, addressKeyOf(addr), addr.npub)
+      setConfirm(null)
       notify(
         `Moved ${addr.username}@${serverOf(addr.server)} to a new key. Run a full rescan to sweep notes paid to the old one.`,
         NotifyKind.SUCCESS
@@ -427,26 +561,95 @@ const AddressDialog: Component<AddressDialogProps> = props => {
             <p class="mint-date">
               registered {new Date(addr().registeredAt).toLocaleDateString()}
             </p>
-            <Show when={feeInvoice()}>
+            <Show when={addr().feeInvoice}>
               {pr => (
-                <div class="warning">
-                  <p>
-                    This mint charges a fee to register an address
-                    <Show when={decodeBolt11AmountMsat(pr())}>
-                      {msat => <> ({msatToSats(msat())} sats)</>}
+                <Show
+                  when={!feeExpired()}
+                  fallback={
+                    <div class="warning">
+                      <p>
+                        The registration fee invoice expired unpaid
+                        <Show when={feeExpiresAt()}>
+                          {at => <> at {new Date(at()).toLocaleTimeString()}</>}
+                        </Show>
+                        , so the mint released the hold - this claim has lapsed
+                        and {addr().username}@{serverOf(addr().server)} is free
+                        for anyone again. Claim it again for a new invoice, or
+                        forget it on this device.
+                      </p>
+                      <div class="btns">
+                        <button
+                          disabled={
+                            busy() || offlineMode() || state() !== 'unlocked'
+                          }
+                          onClick={() => claimAgain(addr())}
+                        >
+                          <Show when={busy()} fallback={<IoAtCircleSharp />}>
+                            <IoRefreshSharp class="spin" />
+                          </Show>
+                          &nbsp;Claim again
+                        </button>
+                        <button
+                          disabled={busy() || checkingFee() || offlineMode()}
+                          title="Ask the mint whether it was paid after all"
+                          onClick={() => checkFee()}
+                        >
+                          <Show
+                            when={checkingFee()}
+                            fallback={<IoCheckmarkSharp />}
+                          >
+                            <IoRefreshSharp class="spin" />
+                          </Show>
+                          &nbsp;Check payment
+                        </button>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div class="warning">
+                    <p>
+                      This mint charges a fee to register an address
+                      <Show when={decodeBolt11AmountMsat(pr())}>
+                        {msat => <> ({msatToSats(msat())} sats)</>}
+                      </Show>
+                      . The name is held for you; it starts receiving once this
+                      invoice is paid - from your wallet's Send, or any
+                      Lightning wallet.
+                    </p>
+                    <Show when={feeExpiresAt()}>
+                      {at => (
+                        <p>
+                          <strong>
+                            Expires in {formatRemaining(at() - now())}
+                          </strong>{' '}
+                          ({new Date(at()).toLocaleTimeString()}). Unpaid by
+                          then, the claim expires too and the name is free for
+                          anyone again.
+                        </p>
+                      )}
                     </Show>
-                    . The name is held for you; it starts receiving once this
-                    invoice is paid - from your wallet's Send, or any Lightning
-                    wallet.
-                  </p>
-                  <Qr value={pr().toUpperCase()} />
-                  <div class="btns">
-                    <button onClick={() => copyToClipboard(pr())}>
-                      <IoCopySharp />
-                      &nbsp;Copy invoice
-                    </button>
+                    <Qr value={pr().toUpperCase()} />
+                    <div class="btns">
+                      <button onClick={() => copyToClipboard(pr())}>
+                        <IoCopySharp />
+                        &nbsp;Copy invoice
+                      </button>
+                      <button
+                        disabled={checkingFee() || offlineMode()}
+                        title="Ask the mint whether the fee was paid (also checked automatically while this is open)"
+                        onClick={() => checkFee()}
+                      >
+                        <Show
+                          when={checkingFee()}
+                          fallback={<IoCheckmarkSharp />}
+                        >
+                          <IoRefreshSharp class="spin" />
+                        </Show>
+                        &nbsp;Check payment
+                      </button>
+                    </div>
                   </div>
-                </div>
+                </Show>
               )}
             </Show>
             <Show when={addr().share === undefined}>
@@ -469,6 +672,25 @@ const AddressDialog: Component<AddressDialogProps> = props => {
                     &nbsp;Move to a new key
                   </button>
                 </Show>
+                <Show when={addr().share !== undefined}>
+                  <button
+                    disabled={
+                      busy() ||
+                      offlineMode() ||
+                      state() !== 'unlocked' ||
+                      !!addr().feeInvoice
+                    }
+                    title={
+                      addr().feeInvoice
+                        ? 'Pay the registration fee first'
+                        : 'Replace the key this address is paid to with a fresh one, keeping the name'
+                    }
+                    onClick={() => setConfirm('refresh')}
+                  >
+                    <IoKeySharp />
+                    &nbsp;Refresh key
+                  </button>
+                </Show>
                 <button
                   class="icon-btn"
                   disabled={busy()}
@@ -485,6 +707,30 @@ const AddressDialog: Component<AddressDialogProps> = props => {
                 >
                   <IoEyeOffSharp />
                   &nbsp;Forget on this device
+                </button>
+              </div>
+            </Show>
+            <Show when={confirm() === 'refresh'}>
+              <p class="warning">
+                Replace the key {addr().username}@{serverOf(addr().server)} is
+                paid to? The mint moves the name to a fresh key from your seed
+                and pays new notes there; the current key is retired and never
+                accepted again. Notes already paid to it stay yours - run{' '}
+                <strong>Check notes → Full rescan</strong> afterwards to pick
+                them up.
+              </p>
+              <div class="btns">
+                <button
+                  disabled={busy() || offlineMode() || state() !== 'unlocked'}
+                  onClick={() => move(addr())}
+                >
+                  <Show when={busy()} fallback={<IoKeySharp />}>
+                    <IoRefreshSharp class="spin" />
+                  </Show>
+                  &nbsp;Yes, refresh key
+                </button>
+                <button disabled={busy()} onClick={() => setConfirm(null)}>
+                  Cancel
                 </button>
               </div>
             </Show>

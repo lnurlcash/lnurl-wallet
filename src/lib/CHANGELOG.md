@@ -2,6 +2,9 @@
 
 ## 0.14.0 - unreleased
 
+- `decodeBolt11ExpiresAt(pr)`: when an invoice stops being payable (unix
+  seconds - its timestamp plus its `x` expiry, 3600 when absent), e.g. to
+  show how long a LUD-26 address fee invoice holds its username.
 - **Breaking - LUD-26 derivation (luds b62b8bf, a6c4652).** Seed-derived
   notes are plain BIP-32 below a SERVICE root `S = m/139'/d1/d2/d3/d4`, `S`
   now hashing the domain without its port: wallet notes `S/a'/0/i`, change
