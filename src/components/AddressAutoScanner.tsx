@@ -5,7 +5,11 @@ import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
 import {hasCashRoot} from '../cashSecrets'
 import {registeredAddresses} from '../addressRegistry'
-import {runAddressScan} from '../addressRecovery'
+import {
+  runAddressScan,
+  checkAddressFee,
+  feeInvoiceExpiresAt
+} from '../addressRecovery'
 import {sendNotification} from '../notifications'
 import {notify, NotifyKind, msatToSats} from '../helpers'
 import {serverOf} from '../lnurlcash'
@@ -32,9 +36,35 @@ const AddressAutoScanner: Component = () => {
   const {state, bearers, addBearer, logActivity} = useWallet()
   const inFlight = new Set<string>()
 
+  // a registration still waiting on its LUD-26 address fee: asked about
+  // every tick until paid or its invoice lapses (checkAddressFee clears
+  // the invoice once paid) - public lookups only, no key material
+  const checkFees = async (now: number) => {
+    for (const addr of registeredAddresses()) {
+      if (!addr.feeInvoice) continue
+      const expiresAt = feeInvoiceExpiresAt(addr.feeInvoice)
+      if (expiresAt !== null && now >= expiresAt) continue
+      const key = `fee|${addr.server}|${addr.username}`
+      if (inFlight.has(key)) continue
+      inFlight.add(key)
+      try {
+        if ((await checkAddressFee(addr, now)) === 'paid') {
+          notify(
+            `Fee paid - ${addr.username}@${serverOf(addr.server)} is active.`,
+            NotifyKind.SUCCESS,
+            'bottom-center'
+          )
+        }
+      } finally {
+        inFlight.delete(key)
+      }
+    }
+  }
+
   const tick = async () => {
     if (state() !== 'unlocked' || offlineMode() || !hasCashRoot()) return
     const now = Date.now()
+    void checkFees(now)
     for (const addr of registeredAddresses()) {
       if (!addr.autoScanMinutes) continue
       const key = `${addr.server}|${addr.username}`

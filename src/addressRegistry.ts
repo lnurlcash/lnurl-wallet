@@ -1,5 +1,5 @@
 import {createSignal} from 'solid-js'
-import {serviceOriginOf} from './lnurlcash'
+import {serviceOriginOf, isBolt11Invoice} from './lnurlcash'
 import {isValidNpub} from './nostrAddress'
 import {LEGACY_FIRST_ADDRESS_SLOT} from './cashSecrets'
 
@@ -22,6 +22,11 @@ export const addressKeyOf = (a: {share?: number; slot?: number}): AddressKey =>
   a.share !== undefined
     ? {kind: 'share', share: a.share}
     : {kind: 'legacy', ...(a.slot !== undefined && {slot: a.slot})}
+
+export const sameKey = (a: AddressKey, b: AddressKey): boolean =>
+  a.kind === 'share'
+    ? b.kind === 'share' && a.share === b.share
+    : b.kind === 'legacy' && a.slot === b.slot
 
 export type RegisteredAddress = {
   // full SERVICE origin, same convention as trustedMints.ts's own `server`
@@ -57,6 +62,11 @@ export type RegisteredAddress = {
   // advances: past whatever this device has itself confirmed used - never
   // regresses
   nextScanIndex?: number
+  // LUD-26 address fee: the invoice the registration was answered with,
+  // kept until it is seen paid (addressRecovery.ts's checkAddressFee). The
+  // mint holds the name only until this invoice expires - unpaid by then,
+  // the claim lapses and the name is free for anyone again
+  feeInvoice?: string
 }
 
 // mirrors AUTO_LOCK_OPTIONS/AUTO_LOCK_LABEL's own shape (autoLock.ts) -
@@ -155,6 +165,10 @@ const readStored = (): RegisteredAddress[] => {
       const share = readShare(a?.share)
       const slot = share === undefined ? readSlot(a?.slot) : undefined
       const retired = readRetired(a?.retired)
+      const feeInvoice =
+        typeof a?.feeInvoice === 'string' && isBolt11Invoice(a.feeInvoice)
+          ? a.feeInvoice
+          : undefined
       return [
         {
           server,
@@ -166,7 +180,8 @@ const readStored = (): RegisteredAddress[] => {
           ...(npub && {npub}),
           ...(autoScanMinutes && {autoScanMinutes}),
           ...(lastAutoScanAt && {lastAutoScanAt}),
-          ...(nextScanIndex && {nextScanIndex})
+          ...(nextScanIndex && {nextScanIndex}),
+          ...(feeInvoice && {feeInvoice})
         }
       ]
     })
@@ -179,6 +194,12 @@ const [registeredAddresses, setRegisteredAddressesSignal] =
   createSignal<RegisteredAddress[]>(readStored())
 export {registeredAddresses}
 
+// Every write below starts from what is in storage NOW, never this
+// signal's copy: another tab (or the installed app) on the same wallet
+// writes here too, and writing back a stale in-memory list would undo its
+// changes - e.g. revert a moved address to its old key and scan index.
+// A `storage` event (fired in the OTHER tabs on every write) keeps each
+// tab's signal current.
 const persist = (addresses: RegisteredAddress[]): void => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(addresses))
   setRegisteredAddressesSignal(addresses)
@@ -208,7 +229,7 @@ export const addRegisteredAddress = (
     throw new Error('Not a valid username.')
   }
   dropForgotten(origin, name)
-  const current = registeredAddresses()
+  const current = readStored()
   const existing = current.find(a => a.server === origin && a.username === name)
   if (share !== undefined) markShareUsed(origin, share)
   const legacySlot = share === undefined ? slot : undefined
@@ -291,16 +312,19 @@ export const skipAddressShare = (server: string, share: number): void => {
 // moves this device's record of a registration to the share it was just
 // moved to (lib/addresses.ts's updateUsername): the old slot is gone, and
 // the scan floor starts over at the new share's index 0
+// `alsoRetire`: keys the address was on before that this device never
+// recorded moving off (see candidateAddressKeys) - still swept too
 export const moveRegisteredAddress = (
   server: string,
   username: string,
-  share: number
+  share: number,
+  alsoRetire: AddressKey[] = []
 ): void => {
   const origin = normalizeOrigin(server)
   if (!origin) return
   markShareUsed(origin, share)
   const name = username.trim().toLowerCase()
-  const record = registeredAddresses().find(
+  const record = readStored().find(
     a => a.server === origin && a.username === name
   )
   if (!record) return
@@ -308,7 +332,15 @@ export const moveRegisteredAddress = (
     share,
     slot: undefined,
     nextScanIndex: undefined,
-    retired: [...(record.retired ?? []), addressKeyOf(record)]
+    retired: [
+      ...(record.retired ?? []),
+      ...alsoRetire,
+      addressKeyOf(record)
+    ].filter(
+      (k, i, all) =>
+        all.findIndex(o => sameKey(o, k)) === i &&
+        !(k.kind === 'share' && k.share === share)
+    )
   })
 }
 
@@ -325,9 +357,7 @@ export const removeRegisteredAddress = (
   const origin = normalizeOrigin(server)
   const name = username.trim().toLowerCase()
   persist(
-    registeredAddresses().filter(
-      a => !(a.server === origin && a.username === name)
-    )
+    readStored().filter(a => !(a.server === origin && a.username === name))
   )
 }
 
@@ -387,7 +417,7 @@ const persistForgotten = (list: ForgottenAddress[]): void => {
 }
 
 const dropForgotten = (origin: string, name: string): void => {
-  const current = forgottenAddresses()
+  const current = readForgotten()
   if (current.some(a => a.server === origin && a.username === name)) {
     persistForgotten(
       current.filter(a => !(a.server === origin && a.username === name))
@@ -402,14 +432,14 @@ export const forgetRegisteredAddress = (
 ): void => {
   const origin = normalizeOrigin(server)
   const name = username.trim().toLowerCase()
-  const record = registeredAddresses().find(
+  const record = readStored().find(
     a => a.server === origin && a.username === name
   )
   removeRegisteredAddress(server, username)
   if (!origin) return
   dropForgotten(origin, name)
   persistForgotten([
-    ...forgottenAddresses(),
+    ...readForgotten(),
     {
       server: origin,
       username: name,
@@ -436,7 +466,7 @@ const updateAddress = (
 ): void => {
   const origin = normalizeOrigin(server)
   const name = username.trim().toLowerCase()
-  const current = registeredAddresses()
+  const current = readStored()
   if (!current.some(a => a.server === origin && a.username === name)) return
   persist(
     current.map(a =>
@@ -463,11 +493,69 @@ export const setAddressAutoScan = (
 // gap-limit stretch - see addressRecovery.ts's scanRegisteredAddress,
 // whose own `nextScanIndex` return value is what every caller feeds
 // straight back in here
+// `key`: the key that pass walked - when the address was moved to another
+// one meanwhile (moveRegisteredAddress), the old key's index means nothing
+// for the new one, and is dropped
 export const markAddressScanned = (
   server: string,
   username: string,
   nextScanIndex: number,
-  at: number = Date.now()
+  at: number = Date.now(),
+  key?: AddressKey
 ): void => {
+  if (key) {
+    const origin = normalizeOrigin(server)
+    const name = username.trim().toLowerCase()
+    const record = readStored().find(
+      a => a.server === origin && a.username === name
+    )
+    if (!record || !sameKey(addressKeyOf(record), key)) return
+  }
   updateAddress(server, username, {nextScanIndex, lastAutoScanAt: at})
+}
+
+// remembers (or, `pr` undefined, clears) the address fee invoice a
+// registration is waiting on - see RegisteredAddress's `feeInvoice`
+export const setAddressFeeInvoice = (
+  server: string,
+  username: string,
+  pr: string | undefined
+): void => {
+  updateAddress(server, username, {feeInvoice: pr})
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', e => {
+    if (e.key === STORAGE_KEY || e.key === null) {
+      setRegisteredAddressesSignal(readStored())
+    }
+    if (e.key === FORGOTTEN_KEY || e.key === null) {
+      setForgottenSignal(readForgotten())
+    }
+  })
+}
+
+// how far past what this device knows a move probes for the key on file
+const PROBE_LEGACY_SLOTS = 10
+const PROBE_SHARES = 10
+
+// Every key of this seed a registration of `username` at `server` could be
+// on file under, the recorded one (`current`) first. The record can be
+// wrong: a move the mint accepted but this device never saved (the app
+// closed, or an outdated build), or an old registration on a slot the
+// record never knew. A move tries these in turn - the mint checks the
+// proof before anything else, so a wrong one costs nothing.
+export const candidateAddressKeys = (
+  server: string,
+  current: AddressKey
+): AddressKey[] => {
+  const keys: AddressKey[] = [current, {kind: 'legacy'}]
+  for (let i = 0; i < PROBE_LEGACY_SLOTS; i++) {
+    keys.push({kind: 'legacy', slot: LEGACY_FIRST_ADDRESS_SLOT + i})
+  }
+  const shares = nextAddressShare(server) + PROBE_SHARES
+  for (let share = 0; share < shares; share++) {
+    keys.push({kind: 'share', share})
+  }
+  return keys.filter((k, i) => keys.findIndex(o => sameKey(o, k)) === i)
 }

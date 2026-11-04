@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal} from 'solid-js'
+import {Show, For, createMemo, createSignal} from 'solid-js'
 import {A} from '@solidjs/router'
 import {IoAtCircleSharp, IoSearchSharp, IoAddSharp} from 'solid-icons/io'
 
@@ -11,6 +11,7 @@ import {
   type AddressScanMinutes
 } from '../addressRegistry'
 import {addressesToMigrate} from '../lud26Migration'
+import {feeInvoiceExpiresAt} from '../addressRecovery'
 import RequireWallet from '../components/RequireWallet'
 import AddressDialog from '../components/AddressDialog'
 import AddressScanDialog from '../components/AddressScanDialog'
@@ -34,6 +35,18 @@ const Address: Component = () => {
   const [scanFor, setScanFor] = createSignal<Required<DialogTarget> | null>(
     null
   )
+
+  // mints holding the most of this wallet's addresses first; ties keep
+  // their trusted-mints order (Array.prototype.sort is stable)
+  const mintsByAddressCount = createMemo(() => {
+    const counts = new Map<string, number>()
+    for (const a of registeredAddresses()) {
+      counts.set(a.server, (counts.get(a.server) ?? 0) + 1)
+    }
+    return [...trustedMints()].sort(
+      (a, b) => (counts.get(b.server) ?? 0) - (counts.get(a.server) ?? 0)
+    )
+  })
 
   return (
     <RequireWallet>
@@ -88,7 +101,7 @@ const Address: Component = () => {
           }
         >
           <div class="mint-list">
-            <For each={trustedMints()}>
+            <For each={mintsByAddressCount()}>
               {mint => {
                 const addresses = () =>
                   registeredAddresses().filter(a => a.server === mint.server)
@@ -121,6 +134,23 @@ const Address: Component = () => {
                               ? `auto-check every ${ADDRESS_SCAN_LABEL[addr.autoScanMinutes as AddressScanMinutes]}`
                               : 'auto-check off'}
                           </p>
+                          <Show when={addr.feeInvoice}>
+                            {pr => {
+                              const expiresAt = () => feeInvoiceExpiresAt(pr())
+                              return (
+                                <p class="warning">
+                                  {expiresAt() !== null &&
+                                  Date.now() >= expiresAt()!
+                                    ? 'Registration fee unpaid and its invoice expired - this claim has lapsed. Open Manage to claim it again.'
+                                    : `Registration fee unpaid - the claim expires${
+                                        expiresAt() !== null
+                                          ? ` at ${new Date(expiresAt()!).toLocaleTimeString()}`
+                                          : ''
+                                      } unless it's paid. Open Manage for the invoice.`}
+                                </p>
+                              )
+                            }}
+                          </Show>
                           <Show when={addr.share === undefined}>
                             <p class="warning">
                               Still on the pre-LUD-26 keys - move it to a new
@@ -141,7 +171,7 @@ const Address: Component = () => {
                               &nbsp;Check notes
                             </button>
                             <button
-                              title={`Manage ${addr.username}@${serverOf(addr.server)} - npub, unclaim`}
+                              title={`Manage ${addr.username}@${serverOf(addr.server)} - fee, refresh key, unclaim`}
                               onClick={() =>
                                 setManageFor({
                                   server: addr.server,
@@ -153,7 +183,9 @@ const Address: Component = () => {
                               &nbsp;
                               {addr.share === undefined
                                 ? 'Move to a new key'
-                                : 'Manage'}
+                                : addr.feeInvoice
+                                  ? 'Pay fee'
+                                  : 'Manage'}
                             </button>
                           </div>
                         </>

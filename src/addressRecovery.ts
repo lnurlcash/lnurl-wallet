@@ -16,6 +16,7 @@ import {
   encodeCk1,
   signNoteOwnership,
   k1SpendsNote,
+  decodeBolt11ExpiresAt,
   ServiceError
 } from './lnurlcash'
 import {gapLimit} from './gapLimit'
@@ -25,7 +26,9 @@ import {
   registeredAddresses,
   forgottenAddresses,
   addressKeyOf,
-  type AddressKey
+  setAddressFeeInvoice,
+  type AddressKey,
+  type RegisteredAddress
 } from './addressRegistry'
 import type {Bearer, ActivityKind} from './storage'
 import type {IndexStatus} from './recovery'
@@ -266,12 +269,21 @@ export const runAddressScan = async (
       )
     }
   }
+  const key = opts.key ?? (record ? addressKeyOf(record) : undefined)
   const result = await scanRegisteredAddress(server, username, existing, {
     ...opts,
-    key: opts.key ?? (record ? addressKeyOf(record) : undefined)
+    key
   })
   await claim(result)
-  markAddressScanned(server, username, result.nextScanIndex)
+  // tied to the key walked: a move to a new key mid-scan must not inherit
+  // the old key's index
+  markAddressScanned(
+    server,
+    username,
+    result.nextScanIndex,
+    Date.now(),
+    key ?? {kind: 'share', share: 0}
+  )
   // a full rescan also sweeps every key the address was moved off: LUD-26
   // leaves notes credited there where they are
   if (!opts.key && (opts.startIndex ?? 0) === 0 && record?.retired) {
@@ -335,3 +347,47 @@ export const checkAddressOwnership = async (
   username: string
 ): Promise<AddressOwnership> =>
   (await resolveAddressOwnership(server, username)).ownership
+
+// where a registration's LUD-26 address fee stands:
+// - 'paid': the mint now publishes the address - its invoice is forgotten
+// - 'pending': still held for this wallet, the invoice still payable
+// - 'expired': the invoice lapsed unpaid, so the hold (and the claim) did
+//   too - the name is free for anyone again
+// - 'unknown': no fee pending, or the mint could not be asked
+export type AddressFeeStatus = 'paid' | 'pending' | 'expired' | 'unknown'
+
+// milliseconds, or null for an invoice that doesn't decode
+export const feeInvoiceExpiresAt = (pr: string): number | null => {
+  const at = decodeBolt11ExpiresAt(pr)
+  return at === null ? null : at * 1000
+}
+
+// Checks whether an address fee invoice was paid by looking the address up:
+// the mint publishes a held name only once its fee settled (and settles a
+// late-noticed payment on that very lookup), answering "unknown user"
+// until then. A paid fee clears `feeInvoice` on the record.
+export const checkAddressFee = async (
+  addr: Pick<RegisteredAddress, 'server' | 'username' | 'feeInvoice'>,
+  now: number = Date.now()
+): Promise<AddressFeeStatus> => {
+  if (!addr.feeInvoice) return 'unknown'
+  let host: string
+  try {
+    host = new URL(addr.server).host
+  } catch {
+    return 'unknown'
+  }
+  const payUrl = resolveMintInput(`${addr.username}@${host}`)
+  if (!payUrl) return 'unknown'
+  try {
+    await fetchPayRequest(payUrl)
+  } catch (err) {
+    if (err instanceof ServiceError && /unknown user/i.test(err.reason)) {
+      const expiresAt = feeInvoiceExpiresAt(addr.feeInvoice)
+      return expiresAt !== null && now >= expiresAt ? 'expired' : 'pending'
+    }
+    return 'unknown'
+  }
+  setAddressFeeInvoice(addr.server, addr.username, undefined)
+  return 'paid'
+}

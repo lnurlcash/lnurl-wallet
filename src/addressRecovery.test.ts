@@ -424,3 +424,61 @@ describe('checkAddressOwnership', () => {
     )
   })
 })
+
+describe('checkAddressFee', () => {
+  // BOLT-11's coffee-beans example: timestamp 1496314658, x=60
+  const FEE_PR =
+    'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp'
+  const EXPIRES_AT = (1496314658 + 60) * 1000
+
+  const held = async () => {
+    const registry = await import('./addressRegistry')
+    registry.addRegisteredAddress(SERVER, USERNAME, undefined, 0)
+    registry.setAddressFeeInvoice(SERVER, USERNAME, FEE_PR)
+    return registry
+  }
+
+  it('reads the invoice expiry in milliseconds', () => {
+    expect(addressRecovery.feeInvoiceExpiresAt(FEE_PR)).toBe(EXPIRES_AT)
+    expect(addressRecovery.feeInvoiceExpiresAt('nope')).toBeNull()
+  })
+
+  it("is 'paid' once the mint publishes the address, and forgets the invoice", async () => {
+    const registry = await held()
+    stub([])
+    const addr = registry.registeredAddresses()[0]!
+    expect(await addressRecovery.checkAddressFee(addr, EXPIRES_AT - 1)).toBe(
+      'paid'
+    )
+    expect(registry.registeredAddresses()[0]!.feeInvoice).toBeUndefined()
+  })
+
+  it("is 'pending' while held and the invoice still payable", async () => {
+    const registry = await held()
+    stub([], {unknownUser: true})
+    const addr = registry.registeredAddresses()[0]!
+    expect(await addressRecovery.checkAddressFee(addr, EXPIRES_AT - 1)).toBe(
+      'pending'
+    )
+    expect(registry.registeredAddresses()[0]!.feeInvoice).toBe(FEE_PR)
+  })
+
+  it("is 'expired' once the invoice lapsed unpaid", async () => {
+    const registry = await held()
+    stub([], {unknownUser: true})
+    const addr = registry.registeredAddresses()[0]!
+    expect(await addressRecovery.checkAddressFee(addr, EXPIRES_AT)).toBe(
+      'expired'
+    )
+  })
+
+  it("is 'unknown' with no fee pending", async () => {
+    stub([])
+    expect(
+      await addressRecovery.checkAddressFee({
+        server: SERVER,
+        username: USERNAME
+      })
+    ).toBe('unknown')
+  })
+})

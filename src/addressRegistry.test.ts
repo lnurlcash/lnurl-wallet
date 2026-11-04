@@ -215,3 +215,101 @@ describe('address shares', () => {
     expect(reloaded.nextAddressShare(SERVER)).toBe(6)
   })
 })
+
+describe('setAddressFeeInvoice', () => {
+  const PR =
+    'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp'
+
+  it('remembers the fee invoice across a reload, and clears it', async () => {
+    mod.addRegisteredAddress('mint.example', 'alice', undefined, 0)
+    mod.setAddressFeeInvoice('mint.example', 'alice', PR)
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    expect(mod.registeredAddresses()[0]?.feeInvoice).toBe(PR)
+    mod.setAddressFeeInvoice('mint.example', 'alice', undefined)
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    expect(mod.registeredAddresses()[0]?.feeInvoice).toBeUndefined()
+  })
+
+  it('drops a stored fee invoice that is not a bolt11', async () => {
+    store.set(
+      'lnurlcash_registered_addresses',
+      JSON.stringify([
+        {
+          server: 'https://mint.example',
+          username: 'alice',
+          registeredAt: 1,
+          share: 0,
+          feeInvoice: 'not an invoice'
+        }
+      ])
+    )
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    expect(mod.registeredAddresses()[0]?.feeInvoice).toBeUndefined()
+  })
+})
+
+describe('moving an address off its old key', () => {
+  const legacy = () =>
+    store.set(
+      'lnurlcash_registered_addresses',
+      JSON.stringify([
+        {
+          server: 'https://mint.example',
+          username: 'alice',
+          registeredAt: 1,
+          nextScanIndex: 7
+        }
+      ])
+    )
+
+  it('is not undone by a write from a tab that still holds the old record', async () => {
+    legacy()
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    // another tab moves it to share 0 - only storage changes here
+    vi.resetModules()
+    const otherTab = await import('./addressRegistry')
+    otherTab.moveRegisteredAddress('mint.example', 'alice', 0)
+    // this tab, still holding the legacy record in memory, writes next
+    mod.setAddressAutoScan('mint.example', 'alice', 15)
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    const entry = mod.registeredAddresses()[0]!
+    expect(entry.share).toBe(0)
+    expect(entry.nextScanIndex).toBeUndefined()
+    expect(entry.autoScanMinutes).toBe(15)
+  })
+
+  it("drops a scan's index for a key the address was moved off meanwhile", async () => {
+    legacy()
+    vi.resetModules()
+    mod = await import('./addressRegistry')
+    mod.moveRegisteredAddress('mint.example', 'alice', 0)
+    mod.markAddressScanned('mint.example', 'alice', 7, 1, {kind: 'legacy'})
+    expect(mod.registeredAddresses()[0]?.nextScanIndex).toBeUndefined()
+    mod.markAddressScanned('mint.example', 'alice', 3, 1, {
+      kind: 'share',
+      share: 0
+    })
+    expect(mod.registeredAddresses()[0]?.nextScanIndex).toBe(3)
+  })
+})
+
+describe('candidateAddressKeys', () => {
+  it('tries the recorded key first, then old slots and shares, once each', () => {
+    const keys = mod.candidateAddressKeys('mint.example', {
+      kind: 'share',
+      share: 3
+    })
+    expect(keys[0]).toEqual({kind: 'share', share: 3})
+    expect(keys[1]).toEqual({kind: 'legacy'})
+    expect(keys).toContainEqual({kind: 'legacy', slot: 2})
+    expect(keys).toContainEqual({kind: 'share', share: 0})
+    expect(keys.filter(k => k.kind === 'share' && k.share === 3)).toHaveLength(
+      1
+    )
+  })
+})
