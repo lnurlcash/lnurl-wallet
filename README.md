@@ -8,7 +8,7 @@ browser's local storage, and every network request goes directly from your
 browser to the LNURLcash service that issued a note.
 
 Built with the same stack as
-[lnurl_server](https://github.com/lnurlcash/lnurl_server)'s frontend: Vite,
+[lnurl-server](https://github.com/dni/lnurl-server)'s frontend: Vite,
 SolidJS 2, TypeScript, sass, `@scure`/`@noble` crypto, `qrcode`,
 `solid-icons`. Works against any spec-compliant service,
 e.g. [lnurl-mint](https://github.com/lnurlcash/lnurl-mint).
