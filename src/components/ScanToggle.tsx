@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, createSignal, onMount} from 'solid-js'
+import {Show, createSignal, onSettled} from 'solid-js'
 import {IoScanSharp} from 'solid-icons/io'
 import Scanner, {canScan, hasCameraDevice} from './Scanner'
 
@@ -22,8 +22,10 @@ const ScanToggle: Component<ScanToggleProps> = props => {
   // flips to hidden once that probe positively comes back empty
   const [available, setAvailable] = createSignal(canScan())
 
-  onMount(async () => {
-    setAvailable(await hasCameraDevice())
+  onSettled(() => {
+    void (async () => {
+      setAvailable(await hasCameraDevice())
+    })()
   })
 
   const handleScan = (value: string) => {
@@ -43,8 +45,8 @@ const ScanToggle: Component<ScanToggleProps> = props => {
       </Show>
       <button
         type="button"
-        class="icon-btn paste-scan-btn"
-        classList={{active: showScanner()}}
+        class={['icon-btn paste-scan-btn', {active: showScanner()}]}
+
         title={showScanner() ? 'Stop scanning' : 'Scan a QR code'}
         onClick={() => setShowScanner(v => !v)}
       >

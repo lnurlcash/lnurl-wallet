@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // A user-set policy, not detected connectivity: while on, lnurlFetch (the
 // one choke point every LNURLcash request goes through - lookups, melt,
@@ -18,7 +18,8 @@ const readStored = (): boolean => {
   }
 }
 
-const [offlineMode, setOfflineModeSignal] = createSignal<boolean>(readStored())
+const [offlineMode, setOfflineModeSignal] =
+  createFreshSignal<boolean>(readStored())
 export {offlineMode}
 
 export const setOfflineMode = (value: boolean): void => {

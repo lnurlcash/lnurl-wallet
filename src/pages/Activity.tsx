@@ -1,7 +1,6 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal} from 'solid-js'
-import {Dynamic} from 'solid-js/web'
-import {A} from '@solidjs/router'
+import {For, Show, createSignal} from 'solid-js'
+import {Dynamic} from '@solidjs/web'
 import {
   IoCashSharp,
   IoGitBranchSharp,
@@ -31,6 +30,7 @@ import {
 import {formatDate, formatRelativeTime, copyToClipboard} from '../helpers'
 import RequireWallet from '../components/RequireWallet'
 import Dialog from '../components/Dialog'
+import Link from '../components/Link'
 
 // one icon per ActivityKind, reusing the same icon each action already
 // shows elsewhere in the app (Mint's cash, BearerCard's split/refresh/
@@ -112,9 +112,9 @@ const Activity: Component = () => {
     <RequireWallet>
       <div id="activity" class="page">
         <div class="activity-header">
-          <A href="/wallet" class="icon-btn" title="Back to wallet">
+          <Link href="/wallet" class="icon-btn" title="Back to wallet">
             <IoArrowBackSharp />
-          </A>
+          </Link>
           <h2>Activity log</h2>
           <Show when={activity().length > 0}>
             <button

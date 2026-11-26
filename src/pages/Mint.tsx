@@ -1,11 +1,11 @@
 import type {Component} from 'solid-js'
 import {
-  Show,
   For,
-  createSignal,
+  Show,
   createMemo,
-  createEffect,
-  onCleanup
+  createSignal,
+  onCleanup,
+  onSettled
 } from 'solid-js'
 import {useNavigate} from '@solidjs/router'
 import {
@@ -283,10 +283,7 @@ const Mint: Component = () => {
   // A direct device-bound invoice is recoverable after a reload because its
   // public quote state was persisted before the QR was rendered. The device
   // still holds the only k1 in PENDING state.
-  let restoredPendingMint = false
-  createEffect(() => {
-    if (restoredPendingMint) return
-    restoredPendingMint = true
+  onSettled(() => {
     const pending = readPendingDeviceMint()
     if (pending) restoreDeviceMint(pending)
   })
@@ -1235,7 +1232,7 @@ const Mint: Component = () => {
                 }
                 onClick={refreshAllMints}
               >
-                <IoRefreshSharp classList={{spin: addressBusy()}} />
+                <IoRefreshSharp class={{spin: addressBusy()}} />
                 &nbsp;Refresh all
               </button>
             </div>
@@ -1404,7 +1401,7 @@ const Mint: Component = () => {
                           onClick={() => refreshMint(mint)}
                         >
                           <IoRefreshSharp
-                            classList={{
+                            class={{
                               spin: refreshingServer() === mint.server
                             }}
                           />
@@ -1613,8 +1610,10 @@ const Mint: Component = () => {
                   <MdSharpKeyboard />
                 </button>
                 <div
-                  class="paste-input-wrapper"
-                  classList={{'mobile-open': showMintKeyboard()}}
+                  class={[
+                    'paste-input-wrapper',
+                    {'mobile-open': showMintKeyboard()}
+                  ]}
                 >
                   <input
                     type="text"

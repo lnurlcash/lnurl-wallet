@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {createSignal, createMemo, Index, For, Show} from 'solid-js'
+import {For, Show, createMemo, createSignal} from 'solid-js'
 import type {Action, Expr, UiNode} from './types'
 import {VERBS} from './verbs'
 import {POLL_MIN_SECONDS} from './Renderer'
@@ -118,21 +118,21 @@ const ExprEditor: Component<ExprEditorProps> = props => {
       <div class="btns">
         <button
           type="button"
-          classList={{active: mode() === 'literal'}}
+          class={{active: mode() === 'literal'}}
           onClick={() => switchMode('literal')}
         >
           Literal
         </button>
         <button
           type="button"
-          classList={{active: mode() === 'field'}}
+          class={{active: mode() === 'field'}}
           onClick={() => switchMode('field')}
         >
           Field
         </button>
         <button
           type="button"
-          classList={{active: mode() === 'advanced'}}
+          class={{active: mode() === 'advanced'}}
           onClick={() => switchMode('advanced')}
         >
           Advanced
@@ -143,21 +143,21 @@ const ExprEditor: Component<ExprEditorProps> = props => {
         <div class="btns">
           <button
             type="button"
-            classList={{active: literalType() === 'string'}}
+            class={{active: literalType() === 'string'}}
             onClick={() => props.onChange('')}
           >
             Text
           </button>
           <button
             type="button"
-            classList={{active: literalType() === 'number'}}
+            class={{active: literalType() === 'number'}}
             onClick={() => props.onChange(0)}
           >
             Number
           </button>
           <button
             type="button"
-            classList={{active: literalType() === 'boolean'}}
+            class={{active: literalType() === 'boolean'}}
             onClick={() => props.onChange(false)}
           >
             Yes/No
@@ -275,21 +275,21 @@ const ActionEditor: Component<ActionEditorProps> = props => {
       <div class="btns">
         <button
           type="button"
-          classList={{active: mode() === 'set'}}
+          class={{active: mode() === 'set'}}
           onClick={() => switchMode('set')}
         >
           Path action
         </button>
         <button
           type="button"
-          classList={{active: mode() === 'verb'}}
+          class={{active: mode() === 'verb'}}
           onClick={() => switchMode('verb')}
         >
           Run verb
         </button>
         <button
           type="button"
-          classList={{active: mode() === 'advanced'}}
+          class={{active: mode() === 'advanced'}}
           onClick={() => switchMode('advanced')}
         >
           Advanced
@@ -300,14 +300,14 @@ const ActionEditor: Component<ActionEditorProps> = props => {
         <div class="btns">
           <button
             type="button"
-            classList={{active: asPathAction().action === 'set'}}
+            class={{active: asPathAction().action === 'set'}}
             onClick={() => props.onChange({...asPathAction(), action: 'set'})}
           >
             Set
           </button>
           <button
             type="button"
-            classList={{active: asPathAction().action === 'push'}}
+            class={{active: asPathAction().action === 'push'}}
             onClick={() => props.onChange({...asPathAction(), action: 'push'})}
           >
             Push
@@ -782,27 +782,30 @@ const UiBuilder: Component<UiBuilderProps> = props => {
   return (
     <div class="ui-builder">
       <div class="ui-outliner">
-        {/* <Index>, not <For>: Settings.tsx's patchDraft round-trips every
+        {/* non-keyed <For> (Solid 1's <Index>): Settings.tsx's patchDraft round-trips every
         edit through JSON.stringify/JSON.parse, so props.ui (and therefore
         every row object flatten() builds) gets a brand-new identity on
-        every keystroke anywhere in the tree. A <For> keys by reference and
-        would tear down/rebuild every row's DOM - including whatever input
-        currently has focus - on every keystroke. <Index> is positionally
+        every keystroke anywhere in the tree. A keyed <For> keys by reference
+        and would tear down/rebuild every row's DOM - including whatever input
+        currently has focus - on every keystroke. keyed={false} is positionally
         stable regardless of value identity, which is correct here since
         insert/delete/move already reflow position anyway. */}
-        <Index each={rows()}>
+        <For each={rows()} keyed={false}>
           {row => (
             <button
               type="button"
-              class="ui-outliner-row"
+              class={[
+                'ui-outliner-row',
+                {selected: pathEquals(row().path, selectedPath())}
+              ]}
               style={{'padding-left': `${row().depth * 16}px`}}
-              classList={{selected: pathEquals(row().path, selectedPath())}}
+
               onClick={() => setSelectedPath(row().path)}
             >
               {describeNode(row().node)}
             </button>
           )}
-        </Index>
+        </For>
       </div>
       <div class="ui-inspector">
         {/* keyed: remount specifically when the selected PATH changes (a

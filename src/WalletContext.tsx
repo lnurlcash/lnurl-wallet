@@ -1,14 +1,14 @@
-import type {Accessor, JSX} from 'solid-js'
+import type {Accessor} from 'solid-js'
 import {
   createContext,
   createEffect,
   createSignal,
-  onCleanup,
-  onMount,
-  untrack,
+  onSettled,
   useContext
 } from 'solid-js'
-import toast from 'solid-toast'
+import type {JSX} from '@solidjs/web'
+import toast from './components/Toaster'
+import {createFreshSignal} from './freshSignal'
 
 import {notify, NotifyKind} from './helpers'
 import {autoLockMinutes} from './autoLock'
@@ -177,9 +177,13 @@ const rootKeyIsEncrypted = (): boolean =>
 const initialState = (): WalletState => (rootKeyExists() ? 'locked' : 'none')
 
 export const WalletProvider = (props: {children: JSX.Element}) => {
-  const [state, setState] = createSignal<WalletState>(initialState())
-  const [bearers, setBearers] = createSignal<Bearer[]>([])
-  const [activity, setActivity] = createSignal<ActivityEvent[]>([])
+  // fresh signals (see freshSignal.ts): the whole app reads these right
+  // after mutating them through this context (add a note, then list them;
+  // lock, then check the state), which Solid 2's deferred plain-signal
+  // reads would answer with the previous value
+  const [state, setState] = createFreshSignal<WalletState>(initialState())
+  const [bearers, setBearers] = createFreshSignal<Bearer[]>([])
+  const [activity, setActivity] = createFreshSignal<ActivityEvent[]>([])
   const [encryptionUpgraded, setEncryptionUpgraded] = createSignal(
     savedStorageRootKeyExists()
   )
@@ -211,10 +215,12 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
   const showLockWarning = () => {
     if (warningToastId) return
     warningToastId = toast.custom(
-      <span>
-        Locking due to inactivity in {warningSecondsLeft()}s.&nbsp;
-        <button onClick={postponeLock}>Stay unlocked</button>
-      </span>,
+      () => (
+        <span>
+          Locking due to inactivity in {warningSecondsLeft()}s.&nbsp;
+          <button onClick={postponeLock}>Stay unlocked</button>
+        </span>
+      ),
       {duration: Infinity}
     )
   }
@@ -466,20 +472,22 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
   // this effect existed, not just ones created going forward. trustedMints()
   // is read untracked so this only re-runs on bearer changes, not on every
   // unrelated trust-list update (a rename, a refreshed node info, ...)
-  createEffect(() => {
-    const heldServers = new Set(
-      bearers()
-        .filter(b => !b.spent)
-        .map(b => serviceOriginOf(b.url))
-    )
-    untrack(() => {
+  createEffect(
+    () =>
+      new Set(
+        bearers()
+          .filter(b => !b.spent)
+          .map(b => serviceOriginOf(b.url))
+      ),
+    // apply phase is untracked - trustedMints() is read, not subscribed to
+    heldServers => {
       for (const mint of trustedMints()) {
         if (mint.locked && !heldServers.has(mint.server)) {
           unlockTrustedMint(mint.server)
         }
       }
-    })
-  })
+    }
+  )
 
   // best-effort and silent on failure - a wallet action that already
   // succeeded (the note was split/melted/whatever) must never surface an
@@ -508,7 +516,7 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
     setState(initialState())
   }
 
-  onMount(() => {
+  onSettled(() => {
     if (state() === 'locked' && !rootKeyIsEncrypted()) {
       unlock().catch(() => setState('none'))
     }
@@ -519,28 +527,30 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
   // clock time against lastActivity rather than relying on a single
   // setTimeout, since a backgrounded tab throttles timers but Date.now()
   // still reflects real elapsed time whenever this next gets to run
-  createEffect(() => {
-    const minutes = autoLockMinutes()
-    if (state() !== 'unlocked' || !rootKeyIsEncrypted() || minutes === 0) {
-      dismissWarning()
-      return
-    }
-    const autoLockMs = minutes * 60 * 1000
-    lastActivity = Date.now()
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - lastActivity
-      if (elapsed >= autoLockMs) {
-        lock()
-        notify('Wallet locked due to inactivity.', NotifyKind.ERROR)
-      } else if (elapsed >= autoLockMs - LOCK_WARNING_MS) {
-        setWarningSecondsLeft(Math.ceil((autoLockMs - elapsed) / 1000))
-        showLockWarning()
-      } else if (warningToastId) {
+  createEffect(
+    () => ({minutes: autoLockMinutes(), state: state()}),
+    ({minutes, state}) => {
+      if (state !== 'unlocked' || !rootKeyIsEncrypted() || minutes === 0) {
         dismissWarning()
+        return
       }
-    }, 1000)
-    onCleanup(() => clearInterval(interval))
-  })
+      const autoLockMs = minutes * 60 * 1000
+      lastActivity = Date.now()
+      const interval = setInterval(() => {
+        const elapsed = Date.now() - lastActivity
+        if (elapsed >= autoLockMs) {
+          lock()
+          notify('Wallet locked due to inactivity.', NotifyKind.ERROR)
+        } else if (elapsed >= autoLockMs - LOCK_WARNING_MS) {
+          setWarningSecondsLeft(Math.ceil((autoLockMs - elapsed) / 1000))
+          showLockWarning()
+        } else if (warningToastId) {
+          dismissWarning()
+        }
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  )
 
   // warns before a refresh, tab close, or navigating away while unlocked
   // and encrypted - aesKey lives in memory only (see activate/lock above),
@@ -548,23 +558,24 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
   // password again to get back in. Skipped for a plaintext-stored key,
   // which just silently re-unlocks itself on load (see the onMount above)
   // - nothing is actually at stake there, so nothing to warn about
-  createEffect(() => {
-    if (state() !== 'unlocked' || !rootKeyIsEncrypted()) return
-    const warnBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      // legacy assignment some browsers still require to trigger the
-      // native confirm prompt at all - the string itself is ignored by
-      // every modern browser, which shows its own generic "leave site?"
-      // wording instead (a security measure against fake warning text)
-      e.returnValue = ''
+  createEffect(
+    () => state() === 'unlocked' && rootKeyIsEncrypted(),
+    atStake => {
+      if (!atStake) return
+      const warnBeforeUnload = (e: BeforeUnloadEvent) => {
+        e.preventDefault()
+        // legacy assignment some browsers still require to trigger the
+        // native confirm prompt at all - the string itself is ignored by
+        // every modern browser, which shows its own generic "leave site?"
+        // wording instead (a security measure against fake warning text)
+        e.returnValue = ''
+      }
+      window.addEventListener('beforeunload', warnBeforeUnload)
+      return () => window.removeEventListener('beforeunload', warnBeforeUnload)
     }
-    window.addEventListener('beforeunload', warnBeforeUnload)
-    onCleanup(() =>
-      window.removeEventListener('beforeunload', warnBeforeUnload)
-    )
-  })
+  )
 
-  onMount(() => {
+  onSettled(() => {
     // once the warning is up, passive activity (just moving the mouse
     // toward the toast) is deliberately ignored - only its own "Stay
     // unlocked" button (postponeLock) dismisses it, so the button can't
@@ -576,15 +587,15 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
     for (const event of events) {
       window.addEventListener(event, registerActivity, {passive: true})
     }
-    onCleanup(() => {
+    return () => {
       for (const event of events) {
         window.removeEventListener(event, registerActivity)
       }
-    })
+    }
   })
 
   return (
-    <WalletContext.Provider
+    <WalletContext
       value={{
         state,
         bearers,
@@ -606,7 +617,7 @@ export const WalletProvider = (props: {children: JSX.Element}) => {
       }}
     >
       {props.children}
-    </WalletContext.Provider>
+    </WalletContext>
   )
 }
 

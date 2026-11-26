@@ -9,8 +9,8 @@ browser to the LNURLcash service that issued a note.
 
 Built with the same stack as
 [lnurl_server](https://github.com/lnurlcash/lnurl_server)'s frontend: Vite,
-SolidJS, TypeScript, sass, `@scure`/`@noble` crypto, `solid-qr-code`,
-`solid-toast`, `solid-icons`. Works against any spec-compliant service,
+SolidJS 2, TypeScript, sass, `@scure`/`@noble` crypto, `qrcode`,
+`solid-icons`. Works against any spec-compliant service,
 e.g. [lnurl-mint](https://github.com/lnurlcash/lnurl-mint).
 
 ## LNURLcash (LUD-25)

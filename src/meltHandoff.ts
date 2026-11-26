@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // in-memory handoff of a bolt11 invoice from ReceiveDialog (paste detected
 // an invoice, not a note) to MeltDialog on the Wallet page - still needed
@@ -10,9 +10,9 @@ import {createSignal} from 'solid-js'
 // still records a pending payment (amount, sometimes a description) in
 // persistent local state for no reason. Module-level so neither side has
 // to import the other's component.
-const [pendingMeltInvoice, setPendingMeltInvoice] = createSignal<string | null>(
-  null
-)
+const [pendingMeltInvoice, setPendingMeltInvoice] = createFreshSignal<
+  string | null
+>(null)
 
 export const handoffMeltInvoice = (pr: string): void => {
   setPendingMeltInvoice(pr.trim())

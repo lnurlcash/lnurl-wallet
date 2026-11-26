@@ -1,8 +1,9 @@
 /* @refresh reload */
-import {ErrorBoundary} from 'solid-js'
-import {render} from 'solid-js/web'
-import {Route, HashRouter, Navigate} from '@solidjs/router'
-import toast, {Toaster} from 'solid-toast'
+import {Errored} from 'solid-js'
+import type {JSX} from '@solidjs/web'
+import {render} from '@solidjs/web'
+import {createRouter, hashHistory, useNavigate} from '@solidjs/router'
+import toast, {Toaster} from './components/Toaster'
 import {registerSW} from 'virtual:pwa-register'
 
 import {WalletProvider} from './WalletContext'
@@ -37,18 +38,14 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
   )
 }
 
-const App = (props: any) => {
+const App = (props: {children?: JSX.Element}) => {
   return (
     <WalletProvider>
       <DeviceProvider>
-        {/* solid-toast's default top offset sits right under the viewport
-        edge, which the fixed nav (taller still on mobile, see .nav-toggle in
+        {/* the default top offset sits right under the viewport edge,
+        which the fixed nav (taller still on mobile, see .nav-toggle in
         style.scss) then overlaps - pushed down past it instead */}
-        <Toaster
-          position="top-right"
-          toastOptions={{duration: 5000}}
-          containerStyle={{top: '64px'}}
-        />
+        <Toaster position="top-right" duration={5000} topOffset={64} />
         <Nav />
         {/* mounted once, wallet-wide, regardless of which page is open -
         same reasoning as WalletContext.tsx's own auto-lock ticking effect
@@ -62,56 +59,75 @@ const App = (props: any) => {
         {/* a render-time throw (e.g. one malformed stored record) must
         never take down the whole app shell - show a recoverable error
         instead of a permanently blank page */}
-        <ErrorBoundary
-          fallback={(err: Error) => (
+        <Errored
+          fallback={err => (
             <div class="page">
               <h2>Something went wrong</h2>
               <p>
-                The last view failed to render ({err.message}). Your notes are
-                still safe in storage - reload the page, and if this keeps
-                happening, use Settings to export a backup.
+                The last view failed to render (
+                {err() instanceof Error
+                  ? (err() as Error).message
+                  : String(err())}
+                ). Your notes are still safe in storage - reload the page, and
+                if this keeps happening, use Settings to export a backup.
               </p>
             </div>
           )}
         >
           {props.children}
-        </ErrorBoundary>
+        </Errored>
         <Footer />
       </DeviceProvider>
     </WalletProvider>
   )
 }
 
+// what <Navigate> used to be - a route whose whole job is sending the
+// holder somewhere else, without leaving its own URL in the history
+const redirectTo = (href: string) => () => {
+  useNavigate()(href, {replace: true})
+  return null
+}
+
+const Router = createRouter({
+  history: hashHistory(),
+  // only anchors marked `link` are router-managed - none are. In-app links
+  // are components/Link.tsx instead, which renders a `#/path` href and
+  // handles its own clicks and link state (see its comment for why the
+  // router's own plain-anchor handling can't, under hash routing); every
+  // other anchor (external, lightning:, the Lock action) is left alone
+  explicitLinks: true,
+  routes: [
+    {path: '/', component: Hero},
+    {path: '/wallet', component: Wallet},
+    {path: '/setup', component: Setup},
+    {path: '/mint', component: Mint},
+    {path: '/address', component: Address},
+    // /mints merged into /mint (trusted-mint management now lives at the
+    // bottom of that page) - kept as a redirect so old links/bookmarks
+    // still land somewhere useful instead of 404ing
+    {path: '/mints', component: redirectTo('/mint')},
+    // /melt merged into /wallet (MeltDialog, opened from the "Melt" hero
+    // button or automatically via a pasted invoice in Receive - see
+    // meltHandoff.ts) - kept as a redirect so old links/bookmarks still
+    // land somewhere useful instead of 404ing
+    {path: '/melt', component: redirectTo('/wallet')},
+    {path: '/activity', component: Activity},
+    // /backup merged into /settings (backup/restore/forget now live
+    // alongside the other wallet-wide settings there) - kept as a redirect
+    // so old links/bookmarks still land somewhere useful instead of 404ing
+    {path: '/backup', component: redirectTo('/settings')},
+    {path: '/docs', component: Docs},
+    {path: '/settings', component: Settings},
+    {path: '/addons/:addonId', component: AddonRun},
+    {path: '/vault', component: Vault},
+    {path: '/claim', component: Claim},
+    {path: '*', component: () => <h1>Page not found</h1>}
+  ]
+})
+
 const cleanup = render(
-  () => (
-    <HashRouter root={App}>
-      <Route path="/" component={Hero} />
-      <Route path="/wallet" component={Wallet} />
-      <Route path="/setup" component={Setup} />
-      <Route path="/mint" component={Mint} />
-      <Route path="/address" component={Address} />
-      {/* /mints merged into /mint (trusted-mint management now lives at
-      the bottom of that page) - kept as a redirect so old links/bookmarks
-      still land somewhere useful instead of 404ing */}
-      <Route path="/mints" component={() => <Navigate href="/mint" />} />
-      {/* /melt merged into /wallet (MeltDialog, opened from the "Melt" hero
-      button or automatically via a pasted invoice in Receive - see
-      meltHandoff.ts) - kept as a redirect so old links/bookmarks still land
-      somewhere useful instead of 404ing */}
-      <Route path="/melt" component={() => <Navigate href="/wallet" />} />
-      <Route path="/activity" component={Activity} />
-      {/* /backup merged into /settings (backup/restore/forget now live
-      alongside the other wallet-wide settings there) - kept as a redirect
-      so old links/bookmarks still land somewhere useful instead of 404ing */}
-      <Route path="/backup" component={() => <Navigate href="/settings" />} />
-      <Route path="/docs" component={Docs} />
-      <Route path="/settings" component={Settings} />
-      <Route path="/addons/:addonId" component={AddonRun} />
-      <Route path="/vault" component={Vault} />
-      <Route path="/claim" component={Claim} />
-      <Route path="*" component={() => <h1>Page not found</h1>} />
-    </HashRouter>
-  ),
+  () => <Router>{props => <App>{props.children}</App>}</Router>,
   root!
 )
 
@@ -126,17 +142,19 @@ if (import.meta.hot) {
 const updateSW = registerSW({
   onNeedRefresh: () => {
     const id = toast.custom(
-      <span>
-        A new version is ready.&nbsp;
-        <button
-          onClick={() => {
-            toast.dismiss(id)
-            updateSW(true)
-          }}
-        >
-          Reload
-        </button>
-      </span>,
+      () => (
+        <span>
+          A new version is ready.&nbsp;
+          <button
+            onClick={() => {
+              toast.dismiss(id)
+              updateSW(true)
+            }}
+          >
+            Reload
+          </button>
+        </span>
+      ),
       {duration: Infinity}
     )
   },

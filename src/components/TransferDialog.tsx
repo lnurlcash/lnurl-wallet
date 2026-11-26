@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal, createMemo, onCleanup} from 'solid-js'
+import {For, Show, createMemo, createSignal, onCleanup} from 'solid-js'
 import {useNavigate} from '@solidjs/router'
 import {IoRefreshSharp} from 'solid-icons/io'
 
@@ -57,6 +57,7 @@ import {offlineMode} from '../offlineMode'
 import Qr from './Qr'
 import Dialog from './Dialog'
 import FiatValue from './FiatValue'
+import {createFreshSignal} from '../freshSignal'
 
 export type TransferDialogProps = {
   sourceBearer: Bearer
@@ -89,7 +90,9 @@ const TransferDialog: Component<TransferDialogProps> = props => {
   const {client: deviceClient} = useDevice()
   const navigate = useNavigate()
 
-  const [mintInput, setMintInput] = createSignal('')
+  // fresh (see freshSignal.ts): selectMint() sets this and runs lookup()
+  // in the same tick, which must see the picked address
+  const [mintInput, setMintInput] = createFreshSignal('')
   const [payRequest, setPayRequest] = createSignal<PayRequestInfo | null>(null)
   const [pendingTrust, setPendingTrust] = createSignal<{
     server: string

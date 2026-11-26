@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // optional fiat estimate shown alongside sats everywhere in the app (see
 // FiatValue.tsx) - purely a display convenience, never part of any actual
@@ -32,15 +32,15 @@ const readStored = (): Currency => {
   }
 }
 
-const [currency, setCurrencySignal] = createSignal<Currency>(readStored())
+const [currency, setCurrencySignal] = createFreshSignal<Currency>(readStored())
 export {currency}
 
 type Rates = {usd: number; eur: number; gbp: number}
 
-const [rates, setRates] = createSignal<Rates | null>(null)
+const [rates, setRates] = createFreshSignal<Rates | null>(null)
 // surfaced by CurrencyMenu so a failed fetch (offline, service down) is
 // visible instead of a silently-missing fiat estimate
-const [ratesError, setRatesError] = createSignal<string | null>(null)
+const [ratesError, setRatesError] = createFreshSignal<string | null>(null)
 export {rates, ratesError}
 
 type RatesResponse = {

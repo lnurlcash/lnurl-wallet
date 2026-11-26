@@ -1,5 +1,5 @@
-import {createSignal} from 'solid-js'
 import {serviceOriginOf, type MintAddressInfo} from './lnurlcash'
+import {createFreshSignal} from './freshSignal'
 
 // A mint's signing key (LUD-25 Offline verification's `mintPubkey`) - not a
 // secret, just a public identity, so this is plain unencrypted localStorage,
@@ -179,7 +179,7 @@ const readStored = (): TrustedMint[] => {
 }
 
 const [trustedMints, setTrustedMintsSignal] =
-  createSignal<TrustedMint[]>(readStored())
+  createFreshSignal<TrustedMint[]>(readStored())
 export {trustedMints}
 
 const persist = (mints: TrustedMint[]): void => {

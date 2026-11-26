@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, For, createMemo, createSignal} from 'solid-js'
+import {For, Show, createMemo, createSignal} from 'solid-js'
 import {IoRefreshSharp, IoSearchSharp, IoTimeSharp} from 'solid-icons/io'
 
 import Dialog from './Dialog'
@@ -189,8 +189,8 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
                 &nbsp;Full rescan
               </button>
               <button
-                class="icon-btn icon-btn-gap"
-                classList={{active: showAutoCheck()}}
+                class={['icon-btn icon-btn-gap', {active: showAutoCheck()}]}
+
                 disabled={busy()}
                 title="Auto-check on a timer"
                 onClick={() => setShowAutoCheck(v => !v)}
@@ -212,7 +212,7 @@ const AddressScanDialog: Component<AddressScanDialogProps> = props => {
                   {option => (
                     <button
                       type="button"
-                      classList={{
+                      class={{
                         active: (addr().autoScanMinutes ?? 0) === option
                       }}
                       onClick={() => setAutoCheck(addr(), option)}

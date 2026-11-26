@@ -1,5 +1,6 @@
-import type {Accessor, JSX} from 'solid-js'
-import {createContext, createSignal, onMount, useContext} from 'solid-js'
+import type {Accessor} from 'solid-js'
+import {createContext, createSignal, onSettled, useContext} from 'solid-js'
+import type {JSX} from '@solidjs/web'
 
 import {
   DeviceClient,
@@ -208,30 +209,32 @@ export const DeviceProvider = (props: {children: JSX.Element}) => {
   // On load, bring back the vault the owner already granted, with no click.
   // Only for a transport that has worked here before: an unprompted scan of
   // every granted port on a wallet nobody has ever paired is noise.
-  onMount(async () => {
-    const last = readLastTransport()
-    if (!last) return
-    if (connectionState() !== 'disconnected') return
-    setReconnecting(true)
-    try {
-      const transport =
-        last === 'serial'
-          ? await SerialTransport.tryReconnect(probe)
-          : await BleTransport.tryReconnect(probe)
-      if (!transport) return
-      const newClient = new DeviceClient(transport)
-      newClient.onDisconnect(teardown)
-      setClient(newClient)
-      setConnectionState('connected')
-      await checkIdentity(newClient)
-      await drainPendingDeviceOps(newClient)
-      await refresh().catch(() => {})
-    } catch {
-      // nothing granted, unplugged, or in use elsewhere. Silent by design:
-      // this runs without anyone asking for it, so it must never interrupt
-    } finally {
-      setReconnecting(false)
-    }
+  onSettled(() => {
+    void (async () => {
+      const last = readLastTransport()
+      if (!last) return
+      if (connectionState() !== 'disconnected') return
+      setReconnecting(true)
+      try {
+        const transport =
+          last === 'serial'
+            ? await SerialTransport.tryReconnect(probe)
+            : await BleTransport.tryReconnect(probe)
+        if (!transport) return
+        const newClient = new DeviceClient(transport)
+        newClient.onDisconnect(teardown)
+        setClient(newClient)
+        setConnectionState('connected')
+        await checkIdentity(newClient)
+        await drainPendingDeviceOps(newClient)
+        await refresh().catch(() => {})
+      } catch {
+        // nothing granted, unplugged, or in use elsewhere. Silent by design:
+        // this runs without anyone asking for it, so it must never interrupt
+      } finally {
+        setReconnecting(false)
+      }
+    })()
   })
 
   const disconnect = async () => {
@@ -265,7 +268,7 @@ export const DeviceProvider = (props: {children: JSX.Element}) => {
   }
 
   return (
-    <DeviceContext.Provider
+    <DeviceContext
       value={{
         connectionState,
         info,
@@ -286,7 +289,7 @@ export const DeviceProvider = (props: {children: JSX.Element}) => {
       }}
     >
       {props.children}
-    </DeviceContext.Provider>
+    </DeviceContext>
   )
 }
 

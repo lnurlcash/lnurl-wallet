@@ -1,5 +1,5 @@
 import {configDefaults, defineConfig} from 'vitest/config'
-import solidPlugin from 'vite-plugin-solid'
+import solidPlugin from '@solidjs/vite-plugin'
 import {gitVersion} from './scripts/git-version.mjs'
 
 export default defineConfig({

@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // TODO.md: Vault (pairing + read-only visibility for LNURLvault hardware,
 // see pages/Vault.tsx) is still alpha - it doesn't fit the addon DSL at
@@ -18,7 +18,7 @@ const readStored = (): boolean => {
 }
 
 const [vaultEnabled, setVaultEnabledSignal] =
-  createSignal<boolean>(readStored())
+  createFreshSignal<boolean>(readStored())
 export {vaultEnabled}
 
 export const setVaultEnabled = (value: boolean): void => {

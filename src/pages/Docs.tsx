@@ -1,6 +1,6 @@
 import type {Component} from 'solid-js'
 import {For} from 'solid-js'
-import {A} from '@solidjs/router'
+import Link from '../components/Link'
 
 // the LUDs this wallet actually speaks: bech32 encoding, withdrawRequest,
 // seed derivation, payRequest, disposable/storeable links, Lightning
@@ -132,13 +132,12 @@ const Docs: Component = () => {
         <ul>
           <li>
             Signing keys are <strong>pinned to a service's full origin</strong>
-            (scheme + port), tracked on the <A href="/mint">
-              Trusted mints
-            </A>{' '}
-            section of the Mint page. The first lookup against a brand new key
-            asks whether to trust it; a later, different key is staged for
-            review rather than silently replacing the pin, since an unsigned
-            response cannot authorise its own replacement.
+            (scheme + port), tracked on the{' '}
+            <Link href="/mint">Trusted mints</Link> section of the Mint page.
+            The first lookup against a brand new key asks whether to trust it; a
+            later, different key is staged for review rather than silently
+            replacing the pin, since an unsigned response cannot authorise its
+            own replacement.
           </li>
           <li>
             Verification tries both the spec text's signature byte order and the
@@ -148,8 +147,8 @@ const Docs: Component = () => {
           <li>
             A mint you already hold a note from is trusted automatically and
             can't be removed; anything added by hand can be. The list travels
-            with your <A href="/settings">backup</A> in plain (a signing key
-            isn't a secret), but restored keys stay unconfirmed until a live
+            with your <Link href="/settings">backup</Link> in plain (a signing
+            key isn't a secret), but restored keys stay unconfirmed until a live
             lookup corroborates them.
           </li>
         </ul>

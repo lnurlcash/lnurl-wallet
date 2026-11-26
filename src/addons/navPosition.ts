@@ -1,5 +1,5 @@
-import {createSignal} from 'solid-js'
 import type {Addon} from './types'
+import {createFreshSignal} from '../freshSignal'
 
 // TODO.md: "add customizable position to addons, left / right" - an
 // addon's manifest still DECLARES a default (see AddonNavEntry's own
@@ -35,7 +35,7 @@ const readStored = (): Record<string, NavPosition> => {
 }
 
 const [navPositionOverrides, setNavPositionOverridesSignal] =
-  createSignal<Record<string, NavPosition>>(readStored())
+  createFreshSignal<Record<string, NavPosition>>(readStored())
 export {navPositionOverrides}
 
 // pass null to clear the override and fall back to the addon's own

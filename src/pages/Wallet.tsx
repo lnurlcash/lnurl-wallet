@@ -1,17 +1,13 @@
 import type {Component} from 'solid-js'
 import {
-  Show,
   For,
-  createSignal,
-  createMemo,
+  Show,
   createEffect,
-  on,
-  onMount,
-  onCleanup
+  createMemo,
+  createSignal,
+  onSettled
 } from 'solid-js'
-import {render} from 'solid-js/web'
-import {A} from '@solidjs/router'
-import {QRCodeSVG, ErrorCorrectionLevel} from 'solid-qr-code'
+import {qrSvg} from '../qr'
 import {
   IoAddCircleSharp,
   IoLockOpenSharp,
@@ -100,6 +96,7 @@ import MeltDialog from '../components/MeltDialog'
 import ScanToggle from '../components/ScanToggle'
 import NfcToggle from '../components/NfcToggle'
 import FiatValue from '../components/FiatValue'
+import Link from '../components/Link'
 
 const Wallet: Component = () => {
   const {
@@ -184,7 +181,7 @@ const Wallet: Component = () => {
   // the active filter set rather than picking just one
   const [showTagMenu, setShowTagMenu] = createSignal(false)
   let tagMenuRef: HTMLDivElement | null = null
-  onMount(() => {
+  onSettled(() => {
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as Node
       if (moreMenuRef && !moreMenuRef.contains(target)) {
@@ -201,7 +198,7 @@ const Wallet: Component = () => {
       }
     }
     document.addEventListener('mousedown', onDocClick)
-    onCleanup(() => document.removeEventListener('mousedown', onDocClick))
+    return () => document.removeEventListener('mousedown', onDocClick)
   })
   // captured once Transfer is clicked, independent of live selection -
   // starting a transfer immediately marks the source spent, which would
@@ -227,7 +224,7 @@ const Wallet: Component = () => {
   const [meltHandoffInvoice, setMeltHandoffInvoice] = createSignal<
     string | null
   >(null)
-  onMount(() => {
+  onSettled(() => {
     const pr = takeMeltInvoice()
     if (pr && isBolt11Invoice(pr)) {
       setMeltHandoffInvoice(pr)
@@ -591,33 +588,10 @@ const Wallet: Component = () => {
     )
   }
 
-  // renders QRCodeSVG into a detached container just long enough to pull
-  // its rendered <svg> back out - same trick Qr.tsx's own download button
-  // uses (see its comment), just without ever attaching the container to
-  // the visible page. render() (solid-js/web) mounts synchronously for
-  // plain content like this, so the <svg> is there as soon as it returns.
-  const svgForNote = (bearer: Bearer): string | null => {
-    const container = document.createElement('div')
-    const dispose = render(
-      () => (
-        <QRCodeSVG
-          backgroundColor="white"
-          backgroundAlpha={1}
-          foregroundColor="black"
-          foregroundAlpha={1}
-          width={512}
-          height={512}
-          value={toBech32Lnurl(bearer.url)}
-          level={ErrorCorrectionLevel.LOW}
-        />
-      ),
-      container
-    )
-    const svg = container.querySelector('svg')
-    const source = svg ? new XMLSerializer().serializeToString(svg) : null
-    dispose()
-    return source
-  }
+  // same renderer Qr.tsx's own download button uses (see qr.ts), so each
+  // file matches what that note's on-screen code looks like
+  const svgForNote = (bearer: Bearer): string =>
+    qrSvg(toBech32Lnurl(bearer.url), 512)
 
   // one .svg download per selected note - a single QR can only carry one
   // note's worth of data, so there's no meaningful "combined" file the way
@@ -908,12 +882,10 @@ const Wallet: Component = () => {
   // once per visit, as soon as the wallet is unlocked - a note stranded by
   // an earlier stalled request shouldn't wait for a manual Rotate all
   createEffect(
-    on(
-      () => state() === 'unlocked',
-      unlocked => {
-        if (unlocked) void recoverPendingOutputs()
-      }
-    )
+    () => state() === 'unlocked',
+    unlocked => {
+      if (unlocked) void recoverPendingOutputs()
+    }
   )
 
   const refreshSelected = async () => {
@@ -1414,9 +1386,9 @@ const Wallet: Component = () => {
             <h2>No wallet on this device yet</h2>
             <p>Create one, or restore a seed phrase you already have.</p>
             <div class="btns">
-              <A href="/setup" class="hero-btn hero-btn-primary">
+              <Link href="/setup" class="hero-btn hero-btn-primary">
                 Create wallet
-              </A>
+              </Link>
             </div>
           </div>
         </div>
@@ -1448,7 +1420,7 @@ const Wallet: Component = () => {
                 </div>
               </form>
               <p>
-                <A href="/setup?tab=restore">Forgot password?</A>
+                <Link href="/setup?tab=restore">Forgot password?</Link>
               </p>
             </div>
           </div>
@@ -1466,10 +1438,10 @@ const Wallet: Component = () => {
                   note someone handed you.
                 </p>
                 <div class="hero-actions">
-                  <A href="/mint" class="hero-btn hero-btn-primary">
+                  <Link href="/mint" class="hero-btn hero-btn-primary">
                     <IoAddCircleSharp />
                     &nbsp;Mint
-                  </A>
+                  </Link>
                   <figure class="paste-widget hero-paste-widget">
                     <div class="paste-input-row">
                       <ScanToggle
@@ -1507,8 +1479,10 @@ const Wallet: Component = () => {
                         <MdSharpKeyboard />
                       </button>
                       <div
-                        class="paste-input-wrapper"
-                        classList={{'mobile-open': showHeroKeyboard()}}
+                        class={[
+                          'paste-input-wrapper',
+                          {'mobile-open': showHeroKeyboard()}
+                        ]}
                       >
                         <input
                           ref={el => (heroPasteRef = el)}
@@ -1532,8 +1506,11 @@ const Wallet: Component = () => {
                       </div>
                       <button
                         type="button"
-                        class="icon-btn paste-confirm-btn"
-                        classList={{'mobile-open': showHeroKeyboard()}}
+                        class={[
+                          'icon-btn paste-confirm-btn',
+                          {'mobile-open': showHeroKeyboard()}
+                        ]}
+
                         title="Receive a note, or pay an invoice/address"
                         disabled={heroValue() === '' || heroReceiving()}
                         onClick={handleHero}
@@ -1644,10 +1621,10 @@ const Wallet: Component = () => {
                 </Show>
               </div>
               <div class="btns">
-                <A href="/mint" class="link-btn wallet-hero-btn">
+                <Link href="/mint" class="link-btn wallet-hero-btn">
                   <IoAddCircleSharp />
                   &nbsp;Mint
-                </A>
+                </Link>
                 <div class="paste-widget hero-paste-widget">
                   <div class="paste-input-row">
                     <ScanToggle onScan={onHeroScan} accept={isValidHeroInput} />
@@ -1679,8 +1656,10 @@ const Wallet: Component = () => {
                       <MdSharpKeyboard />
                     </button>
                     <div
-                      class="paste-input-wrapper"
-                      classList={{'mobile-open': showHeroKeyboard()}}
+                      class={[
+                        'paste-input-wrapper',
+                        {'mobile-open': showHeroKeyboard()}
+                      ]}
                     >
                       <input
                         ref={el => (heroPasteRef = el)}
@@ -1704,8 +1683,11 @@ const Wallet: Component = () => {
                     </div>
                     <button
                       type="button"
-                      class="icon-btn paste-confirm-btn"
-                      classList={{'mobile-open': showHeroKeyboard()}}
+                      class={[
+                        'icon-btn paste-confirm-btn',
+                        {'mobile-open': showHeroKeyboard()}
+                      ]}
+
                       title="Receive a note, or pay an invoice/address"
                       disabled={heroValue() === '' || heroReceiving()}
                       onClick={handleHero}
@@ -1803,7 +1785,7 @@ const Wallet: Component = () => {
                     <div class="more-menu-panel">
                       <button
                         type="button"
-                        classList={{active: sortKey() === 'amount'}}
+                        class={{active: sortKey() === 'amount'}}
                         onClick={() => {
                           toggleSort('amount')
                           setShowSortMenu(false)
@@ -1819,7 +1801,7 @@ const Wallet: Component = () => {
                       </button>
                       <button
                         type="button"
-                        classList={{active: sortKey() === 'updated'}}
+                        class={{active: sortKey() === 'updated'}}
                         onClick={() => {
                           toggleSort('updated')
                           setShowSortMenu(false)
@@ -1839,8 +1821,8 @@ const Wallet: Component = () => {
                 <Show when={spentCount() > 0}>
                   <button
                     type="button"
-                    class="spent-btn"
-                    classList={{active: showSpent()}}
+                    class={['spent-btn', {active: showSpent()}]}
+
                     title="Spent notes are locally locked (melted, or marked by hand) - this just shows or hides them, it doesn't change anything about them"
                     onClick={() => setShowSpent(v => !v)}
                   >
@@ -1851,8 +1833,8 @@ const Wallet: Component = () => {
                 </Show>
                 <button
                   type="button"
-                  class="group-btn"
-                  classList={{active: groupByMint()}}
+                  class={['group-btn', {active: groupByMint()}]}
+
                   title="Show notes grouped under their issuing mint instead of one flat list"
                   onClick={() => setGroupByMint(!groupByMint())}
                 >
@@ -1863,8 +1845,11 @@ const Wallet: Component = () => {
                   <div class="more-menu" ref={el => (tagMenuRef = el)}>
                     <button
                       type="button"
-                      class="icon-btn list-more-btn"
-                      classList={{active: selectedTags().size > 0}}
+                      class={[
+                        'icon-btn list-more-btn',
+                        {active: selectedTags().size > 0}
+                      ]}
+
                       title={
                         selectedTags().size > 0
                           ? `Filtering by ${selectedTags().size} tag${selectedTags().size === 1 ? '' : 's'} - click to change`
@@ -1880,7 +1865,7 @@ const Wallet: Component = () => {
                           {tag => (
                             <button
                               type="button"
-                              classList={{active: selectedTags().has(tag)}}
+                              class={{active: selectedTags().has(tag)}}
                               onClick={() => toggleTag(tag)}
                             >
                               {decodeTag(tag)}

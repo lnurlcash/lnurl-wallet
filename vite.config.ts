@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
 import type {Plugin} from 'vite'
 import {defineConfig} from 'vite'
-import solidPlugin from 'vite-plugin-solid'
+import solidPlugin from '@solidjs/vite-plugin'
 import {VitePWA} from 'vite-plugin-pwa'
 import {gitVersion} from './scripts/git-version.mjs'
 

@@ -1,11 +1,12 @@
 import type {Component} from 'solid-js'
 import {Show, createMemo, createSignal} from 'solid-js'
-import {A, useLocation} from '@solidjs/router'
+import {useLocation} from '@solidjs/router'
 import {IoCloseSharp} from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
 import {msatToSats} from '../helpers'
 import {addressesToMigrate, notesToMigrate} from '../lud26Migration'
+import Link from './Link'
 
 const DISMISSED_KEY = 'lnurlcash_lud26_banner_dismissed'
 
@@ -71,8 +72,8 @@ const MigrationBanner: Component = () => {
               {addresses().length === 1 ? ' is' : 'es are'} still on the old
               keys. Payments keep arriving, but move{' '}
               {addresses().length === 1 ? 'it' : 'each'} to a new key on the{' '}
-              <A href="/address">Addresses</A> page (Manage → Move to a new
-              key), then run a full rescan there.
+              <Link href="/address">Addresses</Link> page (Manage → Move to a
+              new key), then run a full rescan there.
             </p>
           </Show>
           <Show when={notes().length > 0}>
@@ -82,7 +83,7 @@ const MigrationBanner: Component = () => {
               your seed's new derivation, so restoring from your seed alone
               might not find {notes().length === 1 ? 'it' : 'them'}. Refresh{' '}
               {notes().length === 1 ? 'it' : 'them'} on the{' '}
-              <A href="/wallet">Wallet</A> page.
+              <Link href="/wallet">Wallet</Link> page.
             </p>
           </Show>
         </div>

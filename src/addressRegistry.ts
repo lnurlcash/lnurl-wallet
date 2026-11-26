@@ -1,7 +1,7 @@
-import {createSignal} from 'solid-js'
 import {serviceOriginOf, isBolt11Invoice} from './lnurlcash'
 import {isValidNpub} from './nostrAddress'
 import {LEGACY_FIRST_ADDRESS_SLOT} from './cashSecrets'
+import {createFreshSignal} from './freshSignal'
 
 // LUD-26 - usernames THIS wallet has registered for itself at a mint, each
 // backed by its own share (see cashSecrets.ts's addressShareCx1). Distinct
@@ -191,7 +191,7 @@ const readStored = (): RegisteredAddress[] => {
 }
 
 const [registeredAddresses, setRegisteredAddressesSignal] =
-  createSignal<RegisteredAddress[]>(readStored())
+  createFreshSignal<RegisteredAddress[]>(readStored())
 export {registeredAddresses}
 
 // Every write below starts from what is in storage NOW, never this
@@ -408,7 +408,7 @@ const readForgotten = (): ForgottenAddress[] => {
 }
 
 const [forgottenAddresses, setForgottenSignal] =
-  createSignal<ForgottenAddress[]>(readForgotten())
+  createFreshSignal<ForgottenAddress[]>(readForgotten())
 export {forgottenAddresses}
 
 const persistForgotten = (list: ForgottenAddress[]): void => {

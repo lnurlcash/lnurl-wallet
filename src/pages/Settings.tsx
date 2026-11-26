@@ -1,6 +1,6 @@
 import type {Component} from 'solid-js'
-import {For, Show, Switch, Match, createSignal} from 'solid-js'
-import {A, useNavigate} from '@solidjs/router'
+import {For, Match, Show, Switch, createSignal} from 'solid-js'
+import {useNavigate} from '@solidjs/router'
 import {
   IoCashSharp,
   IoCloudOfflineSharp,
@@ -71,6 +71,8 @@ import type {
   Permission,
   UiNode
 } from '../addons/types'
+import {createFreshSignal} from '../freshSignal'
+import Link from '../components/Link'
 
 // order they appear - 'none' (Disabled) first since that's the default/off
 // state, then alphabetical by the same three currencies price.lnbits.com
@@ -106,7 +108,9 @@ const Settings: Component = () => {
   const [editingAddon, setEditingAddon] = createSignal<
     AddonManifest | 'new' | null
   >(null)
-  const [addonDraft, setAddonDraft] = createSignal('')
+  // fresh (see freshSignal.ts): the form view patches this JSON string by
+  // read-modify-write, which must never start from a not-yet-flushed value
+  const [addonDraft, setAddonDraft] = createFreshSignal('')
   const [confirmDeleteAddon, setConfirmDeleteAddon] = createSignal<
     string | null
   >(null)
@@ -366,7 +370,7 @@ const Settings: Component = () => {
                 {option => (
                   <button
                     type="button"
-                    classList={{active: autoLockMinutes() === option}}
+                    class={{active: autoLockMinutes() === option}}
                     onClick={() => setAutoLockMinutes(option)}
                   >
                     {AUTO_LOCK_LABEL[option]}
@@ -394,7 +398,7 @@ const Settings: Component = () => {
                 {option => (
                   <button
                     type="button"
-                    classList={{active: gapLimit() === option}}
+                    class={{active: gapLimit() === option}}
                     onClick={() => setGapLimit(option)}
                   >
                     {GAP_LIMIT_LABEL[option]}
@@ -418,7 +422,7 @@ const Settings: Component = () => {
                 {option => (
                   <button
                     type="button"
-                    classList={{active: currency() === option}}
+                    class={{active: currency() === option}}
                     onClick={() => setCurrency(option)}
                   >
                     {option === 'none' ? 'Disabled' : CURRENCY_LABEL[option]}
@@ -440,7 +444,7 @@ const Settings: Component = () => {
             <div class="btns">
               <button
                 type="button"
-                classList={{active: offlineMode()}}
+                class={{active: offlineMode()}}
                 onClick={() => setOfflineMode(!offlineMode())}
               >
                 <IoCloudOfflineSharp />
@@ -464,7 +468,7 @@ const Settings: Component = () => {
             <div class="btns">
               <button
                 type="button"
-                classList={{active: vaultEnabled()}}
+                class={{active: vaultEnabled()}}
                 onClick={() => setVaultEnabled(!vaultEnabled())}
               >
                 <IoHardwareChipSharp />
@@ -581,7 +585,7 @@ const Settings: Component = () => {
               Notes from the file merge in (duplicates skipped), but only
               decrypt under the key they were encrypted with.{' '}
               <strong>Order matters</strong>: restore your seed first (see{' '}
-              <A href="/setup">Restore from seed</A>
+              <Link href="/setup">Restore from seed</Link>
               ), or select this file while the device has no wallet yet, if it
               carries its own encrypted key. Setting up a wallet here first and
               importing after leaves the notes present but undecryptable.
@@ -631,8 +635,8 @@ const Settings: Component = () => {
                 }
               >
                 <p class="warning">
-                  <A href="/wallet">Unlock the wallet</A> with the password the
-                  key was encrypted with.
+                  <Link href="/wallet">Unlock the wallet</Link> with the
+                  password the key was encrypted with.
                 </p>
               </Show>
             </Show>
@@ -708,8 +712,8 @@ const Settings: Component = () => {
 
           <button
             type="button"
-            class="icon-btn"
-            classList={{active: experimentalAddonsVisible()}}
+            class={['icon-btn', {active: experimentalAddonsVisible()}]}
+
             title={
               experimentalAddonsVisible()
                 ? 'Hide experimental addons (still under active development/review) again'
@@ -741,8 +745,8 @@ const Settings: Component = () => {
                     <span class="mint-picker-entry">
                       <button
                         type="button"
-                        class="icon-btn"
-                        classList={{active: enabled()}}
+                        class={['icon-btn', {active: enabled()}]}
+
                         title={enabled() ? 'Turn off' : 'Turn on'}
                         onClick={() =>
                           setAddonEnabled(addon.manifest.id, !enabled())
@@ -766,16 +770,17 @@ const Settings: Component = () => {
                         <Show when={custom()}>&nbsp;(custom)</Show>
                       </button>
                       <Show when={enabled()}>
-                        <A
+                        <a
                           href={
-                            addon.manifest.nav?.route ??
-                            `/addons/${addon.manifest.id}`
+                            '#' +
+                            (addon.manifest.nav?.route ??
+                              `/addons/${addon.manifest.id}`)
                           }
                           class="icon-btn"
                           title="Open this addon"
                         >
                           <IoOpenSharp />
-                        </A>
+                        </a>
                       </Show>
                       <Show
                         when={
@@ -922,7 +927,7 @@ const Settings: Component = () => {
                       <div class="btns">
                         <button
                           type="button"
-                          classList={{
+                          class={{
                             active: effectiveNavPosition(found) === 'left'
                           }}
                           onClick={() =>
@@ -933,7 +938,7 @@ const Settings: Component = () => {
                         </button>
                         <button
                           type="button"
-                          classList={{
+                          class={{
                             active: effectiveNavPosition(found) === 'right'
                           }}
                           onClick={() =>
@@ -985,21 +990,21 @@ const Settings: Component = () => {
               <div class="btns">
                 <button
                   type="button"
-                  classList={{active: editorMode() === 'form'}}
+                  class={{active: editorMode() === 'form'}}
                   onClick={() => switchEditorMode('form')}
                 >
                   Form
                 </button>
                 <button
                   type="button"
-                  classList={{active: editorMode() === 'json'}}
+                  class={{active: editorMode() === 'json'}}
                   onClick={() => switchEditorMode('json')}
                 >
                   Raw JSON
                 </button>
                 <button
                   type="button"
-                  classList={{active: editorMode() === 'visual'}}
+                  class={{active: editorMode() === 'visual'}}
                   onClick={() => switchEditorMode('visual')}
                 >
                   Visual
@@ -1125,7 +1130,7 @@ const Settings: Component = () => {
                     <div class="btns">
                       <button
                         type="button"
-                        classList={{active: draftNav() !== undefined}}
+                        class={{active: draftNav() !== undefined}}
                         onClick={() =>
                           setDraftNav(
                             draftNav() !== undefined
@@ -1150,7 +1155,7 @@ const Settings: Component = () => {
                           <div class="btns">
                             <button
                               type="button"
-                              classList={{active: nav().position === 'left'}}
+                              class={{active: nav().position === 'left'}}
                               onClick={() =>
                                 setDraftNav({...nav(), position: 'left'})
                               }
@@ -1159,7 +1164,7 @@ const Settings: Component = () => {
                             </button>
                             <button
                               type="button"
-                              classList={{active: nav().position === 'right'}}
+                              class={{active: nav().position === 'right'}}
                               onClick={() =>
                                 setDraftNav({...nav(), position: 'right'})
                               }

@@ -1,6 +1,7 @@
-import type {Component, JSX} from 'solid-js'
-import {onCleanup, onMount} from 'solid-js'
-import {Portal} from 'solid-js/web'
+import type {Component} from 'solid-js'
+import {onSettled} from 'solid-js'
+import type {JSX} from '@solidjs/web'
+import {Portal} from '@solidjs/web'
 import {IoCloseSharp} from 'solid-icons/io'
 
 export type DialogProps = {
@@ -19,8 +20,10 @@ const Dialog: Component<DialogProps> = props => {
     if (e.key === 'Escape') props.onClose()
   }
 
-  onMount(() => document.addEventListener('keydown', onKeydown))
-  onCleanup(() => document.removeEventListener('keydown', onKeydown))
+  onSettled(() => {
+    document.addEventListener('keydown', onKeydown)
+    return () => document.removeEventListener('keydown', onKeydown)
+  })
 
   return (
     <Portal>
