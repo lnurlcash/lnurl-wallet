@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {onCleanup, onMount} from 'solid-js'
+import {onSettled} from 'solid-js'
 
 import {useWallet} from '../WalletContext'
 import {offlineMode} from '../offlineMode'
@@ -106,12 +106,9 @@ const AddressAutoScanner: Component = () => {
     }
   }
 
-  let timer: ReturnType<typeof setInterval> | undefined
-  onMount(() => {
-    timer = setInterval(() => void tick(), TICK_MS)
-  })
-  onCleanup(() => {
-    if (timer !== undefined) clearInterval(timer)
+  onSettled(() => {
+    const timer = setInterval(() => void tick(), TICK_MS)
+    return () => clearInterval(timer)
   })
 
   return null

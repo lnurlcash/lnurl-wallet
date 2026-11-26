@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // LUD-11: a payRequest's second (invoice) callback response MAY set
 // `disposable: false` to say the LNURL/Lightning Address that led here -
@@ -55,7 +55,7 @@ const readStored = (key: string): StoreableLink[] => {
 }
 
 const makeRegistry = (storageKey: string) => {
-  const [links, setLinksSignal] = createSignal<StoreableLink[]>(
+  const [links, setLinksSignal] = createFreshSignal<StoreableLink[]>(
     readStored(storageKey)
   )
 

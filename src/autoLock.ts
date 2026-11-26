@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // idle-timeout minutes before an unlocked, password-encrypted wallet
 // auto-locks itself (see WalletContext.tsx's own idle-timeout bookkeeping) -
@@ -25,7 +25,7 @@ const readStored = (): AutoLockMinutes => {
 }
 
 const [autoLockMinutes, setAutoLockMinutesSignal] =
-  createSignal<AutoLockMinutes>(readStored())
+  createFreshSignal<AutoLockMinutes>(readStored())
 export {autoLockMinutes}
 
 export const setAutoLockMinutes = (value: AutoLockMinutes): void => {

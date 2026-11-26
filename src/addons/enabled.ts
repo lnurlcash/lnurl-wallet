@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from '../freshSignal'
 
 // which addons (see registry.ts's ADDONS) a holder has turned on - off by
 // default, same "nothing enabled until you ask for it" posture the
@@ -16,7 +16,7 @@ const readStored = (): Set<string> => {
 }
 
 const [enabledAddonIds, setEnabledAddonIdsSignal] =
-  createSignal<Set<string>>(readStored())
+  createFreshSignal<Set<string>>(readStored())
 export {enabledAddonIds}
 
 export const setAddonEnabled = (id: string, enabled: boolean): void => {

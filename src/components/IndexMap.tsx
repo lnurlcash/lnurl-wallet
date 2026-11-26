@@ -78,8 +78,11 @@ const IndexMap: Component<IndexMapProps> = props => {
           <For each={indices()}>
             {index => (
               <span
-                class={`index-cell index-cell-${stateOf(index)}`}
-                classList={{'index-cell-current': props.current === index}}
+                class={[
+                  `index-cell index-cell-${stateOf(index)}`,
+                  {'index-cell-current': props.current === index}
+                ]}
+
                 tabindex="0"
                 title={`#${index}: ${STATE_LABEL[stateOf(index)]}`}
                 aria-label={`Index ${index}: ${STATE_LABEL[stateOf(index)]}`}

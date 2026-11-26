@@ -1,6 +1,6 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal} from 'solid-js'
-import {A, useNavigate, useSearchParams} from '@solidjs/router'
+import {For, Show, createSignal} from 'solid-js'
+import {useNavigate, useSearchParams} from '@solidjs/router'
 import {IoRefreshSharp, IoSearchSharp, IoTrashSharp} from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
@@ -14,6 +14,7 @@ import {
   mergeCashAddressSecretIndices,
   mergeCashChangeSecretIndices
 } from '../cashSecrets'
+import Link from '../components/Link'
 
 type Tab = 'create' | 'restore'
 
@@ -27,7 +28,9 @@ const Setup: Component = () => {
   const {setup, state} = useWallet()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const [tab, setTab] = createSignal<Tab>(
+  // writable derived: follows ?tab= (e.g. Wallet's "Forgot password?"
+  // link into ?tab=restore), while the tab buttons still set it directly
+  const [tab, setTab] = createSignal<Tab>(() =>
     searchParams.tab === 'restore' ? 'restore' : 'create'
   )
   const [seedPhrase, setSeedPhrase] = createSignal<string | null>(null)
@@ -115,13 +118,13 @@ const Setup: Component = () => {
         </Show>
         <div class="tabs">
           <button
-            classList={{active: tab() === 'create'}}
+            class={{active: tab() === 'create'}}
             onClick={() => setTab('create')}
           >
             Create new
           </button>
           <button
-            classList={{active: tab() === 'restore'}}
+            class={{active: tab() === 'restore'}}
             onClick={() => setTab('restore')}
           >
             Restore from seed
@@ -216,7 +219,7 @@ const Setup: Component = () => {
           <p>
             Restoring straight from a backup file instead - no seed phrase
             needed, as long as you still know its password - happens on the{' '}
-            <A href="/settings">Settings</A> page.
+            <Link href="/settings">Settings</Link> page.
           </p>
         </div>
       </div>

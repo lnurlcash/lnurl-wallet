@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from '../freshSignal'
 
 // whether Settings' addon list shows addons flagged experimental?: true in
 // their own manifest (types.ts) - off by default, same posture as
@@ -17,7 +17,7 @@ const readStored = (): boolean => {
 }
 
 const [experimentalAddonsVisible, setExperimentalAddonsVisibleSignal] =
-  createSignal<boolean>(readStored())
+  createFreshSignal<boolean>(readStored())
 export {experimentalAddonsVisible}
 
 export const setExperimentalAddonsVisible = (visible: boolean): void => {

@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, For, createMemo, createSignal} from 'solid-js'
+import {For, Show, createMemo, createSignal} from 'solid-js'
 import {
   IoTrashSharp,
   IoShieldCheckmarkSharp,
@@ -288,14 +288,17 @@ const BearerCard: Component<BearerCardProps> = props => {
 
   return (
     <figure
-      class="bearer-card"
-      classList={{
-        tinted: !!noteColor(),
-        selected: props.selected,
-        selectable: !isSpent()
-      }}
+      class={[
+        'bearer-card',
+        {
+          tinted: !!noteColor(),
+          selected: props.selected,
+          selectable: !isSpent()
+        }
+      ]}
+
       style={cardStyle()}
-      tabIndex={isSpent() ? undefined : 0}
+      tabindex={isSpent() ? undefined : 0}
       title={
         isSpent() ? undefined : 'Click to select for combine/split/transfer'
       }
@@ -492,7 +495,7 @@ const BearerCard: Component<BearerCardProps> = props => {
             <div class="btns handover-encoding-btns">
               <button
                 type="button"
-                classList={{active: handoverEncoding() === 'bech32'}}
+                class={{active: handoverEncoding() === 'bech32'}}
                 title="LNURL1... - this wallet's usual QR/copy encoding"
                 onClick={() => setHandoverEncoding('bech32')}
               >
@@ -500,7 +503,7 @@ const BearerCard: Component<BearerCardProps> = props => {
               </button>
               <button
                 type="button"
-                classList={{active: handoverEncoding() === 'lud17'}}
+                class={{active: handoverEncoding() === 'lud17'}}
                 title="lnurlw://... - LUD-17's shorter, human-readable scheme link"
                 onClick={() => setHandoverEncoding('lud17')}
               >

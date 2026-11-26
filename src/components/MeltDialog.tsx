@@ -1,5 +1,12 @@
 import type {Component} from 'solid-js'
-import {Show, For, createSignal, createMemo, onMount, onCleanup} from 'solid-js'
+import {
+  For,
+  Show,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled
+} from 'solid-js'
 import {
   IoClipboardSharp,
   IoCloseSharp,
@@ -65,6 +72,7 @@ import ScanToggle from './ScanToggle'
 import NfcToggle from './NfcToggle'
 import Dialog from './Dialog'
 import FiatValue from './FiatValue'
+import {createFreshSignal} from '../freshSignal'
 
 export type MeltDialogProps = {
   onClose: () => void
@@ -92,7 +100,9 @@ const MeltDialog: Component<MeltDialogProps> = props => {
   const {client: deviceClient} = useDevice()
   let pasteRef: HTMLInputElement | null = null
 
-  const [value, setValue] = createSignal('')
+  // fresh (see freshSignal.ts): paste() sets this and submits in the same
+  // tick, and handle() must see the pasted text, not the previous value
+  const [value, setValue] = createFreshSignal('')
   // the paste field is hidden behind a keyboard icon on mobile (see
   // .paste-keyboard-btn) - desktop ignores this, CSS only hides the field
   // under the mobile breakpoint
@@ -256,7 +266,7 @@ const MeltDialog: Component<MeltDialogProps> = props => {
     }
   }
 
-  onMount(() => {
+  onSettled(() => {
     if (props.initialAddress) lookupLnAddress(props.initialAddress)
   })
 
@@ -1076,14 +1086,13 @@ const MeltDialog: Component<MeltDialogProps> = props => {
               <MdSharpKeyboard />
             </button>
             <div
-              class="paste-input-wrapper"
-              classList={{'mobile-open': showKeyboard()}}
+              class={['paste-input-wrapper', {'mobile-open': showKeyboard()}]}
             >
               <input
                 ref={pasteRef}
                 type="text"
-                class="paste-input"
-                classList={{invalid: value() !== '' && !isValid()}}
+                class={['paste-input', {invalid: value() !== '' && !isValid()}]}
+
                 placeholder="lnbc1... or user@example.com"
                 value={value()}
                 onInput={e => setValue(e.currentTarget.value)}
@@ -1327,8 +1336,8 @@ const MeltDialog: Component<MeltDialogProps> = props => {
                     getTrustedMintNodeColor(serverOf(bearer.url))
                   return (
                     <figure
-                      class="bearer-card"
-                      classList={{tinted: !!noteColor()}}
+                      class={['bearer-card', {tinted: !!noteColor()}]}
+
                       style={
                         noteColor() ? {'--note-tint': noteColor()!} : undefined
                       }

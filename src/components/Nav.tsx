@@ -1,5 +1,5 @@
-import {Show, For, createSignal} from 'solid-js'
-import {A, useNavigate} from '@solidjs/router'
+import {For, Show, createSignal} from 'solid-js'
+import {useNavigate} from '@solidjs/router'
 import {
   IoMenuSharp,
   IoCloseSharp,
@@ -19,6 +19,7 @@ import {enabledAddonIds} from '../addons/enabled'
 import {ADDON_ICONS} from '../addons/icons'
 import {effectiveNavPosition} from '../addons/navPosition'
 import {vaultEnabled} from '../vaultFeature'
+import Link from './Link'
 
 // enabled addons (bundled or custom) that asked for a nav entry (see
 // addons/types.ts's AddonNavEntry) - 'left' joins Wallet/Mint/Address/Vault
@@ -42,7 +43,11 @@ const Nav = () => {
 
   const closeMenu = () => setMenuOpen(false)
 
-  const lock_action = () => {
+  // an action dressed as a link - the router no longer intercepts plain
+  // anchors (see index.tsx's explicitLinks), so without this the browser
+  // would follow "#lock" itself, straight past the navigate() below
+  const lock_action = (e: MouseEvent) => {
+    e.preventDefault()
     closeMenu()
     lock()
     navigate('/wallet')
@@ -57,22 +62,22 @@ const Nav = () => {
       >
         {menuOpen() ? <IoCloseSharp /> : <IoMenuSharp />}
       </button>
-      <A href="/" class="nav-brand" onClick={closeMenu}>
+      <Link href="/" class="nav-brand" onClick={closeMenu}>
         LNURLwallet
-      </A>
+      </Link>
       {/* wraps both groups so they collapse into one dropdown on mobile -
       Docs always renders regardless of wallet state, so this is never
       empty when opened (see .nav-menu in style.scss) */}
-      <div class="nav-menu" classList={{open: menuOpen()}} onClick={closeMenu}>
+      <div class={['nav-menu', {open: menuOpen()}]} onClick={closeMenu}>
         <div class="nav-links">
           {/* shown whenever there's a wallet on this device, even locked -
           that's where the unlock form lives now that "/" is the landing
           page (see pages/Hero.tsx and pages/Wallet.tsx) */}
           <Show when={state() !== 'none'}>
-            <A href="/wallet" class="nav-link">
+            <Link href="/wallet" class="nav-link">
               <IoWalletSharp />
               &nbsp;Wallet
-            </A>
+            </Link>
           </Show>
           {/* not gated on state()/offlineMode() - trusted-mint management
           lives at the bottom of this page too now (see pages/Mint.tsx) and
@@ -80,30 +85,30 @@ const Nav = () => {
           same as /backup below. Melt has no nav link of its own anymore -
           it's a dialog on the Wallet page now (see its own "Melt" button),
           same as Send/Receive */}
-          <A
+          <Link
             href="/mint"
             class="nav-link"
             title="Mint a note, or manage trusted mints"
           >
             <IoLibrarySharp />
             &nbsp;Mint
-          </A>
+          </Link>
           {/* claiming/checking username@mint addresses - needs an
           unlocked wallet (see pages/Address.tsx), so hidden with none */}
           <Show when={state() !== 'none'}>
-            <A
+            <Link
               href="/address"
               class="nav-link"
               title="Claim and check username@mint Lightning Addresses"
             >
               <IoAtCircleSharp />
               &nbsp;Address
-            </A>
+            </Link>
           </Show>
           {/* still alpha (TODO.md) - off by default, a holder opts in via
           Settings instead of this permanently occupying a nav slot */}
           <Show when={vaultEnabled()}>
-            <A
+            <Link
               href="/vault"
               class="nav-link"
               title={
@@ -114,23 +119,24 @@ const Nav = () => {
             >
               <IoHardwareChipSharp />
               &nbsp;Vault
-            </A>
+            </Link>
           </Show>
           <Show when={state() !== 'none'}>
             <For each={addonsWithNav('left')}>
               {addon => {
                 const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
                 return (
-                  <A
+                  <a
                     href={
-                      addon.manifest.nav!.route ??
-                      `/addons/${addon.manifest.id}`
+                      '#' +
+                      (addon.manifest.nav!.route ??
+                        `/addons/${addon.manifest.id}`)
                     }
                     class="nav-link"
                   >
                     {Icon && <Icon />}
                     &nbsp;{addon.manifest.nav!.label}
-                  </A>
+                  </a>
                 )
               }}
             </For>
@@ -143,18 +149,18 @@ const Nav = () => {
           there was the whole bug this comment used to guard against on the
           old standalone /backup link: after "Forget this wallet" there was
           no way back to it at all */}
-          <A href="/docs" title="Documentation">
+          <Link href="/docs" title="Documentation">
             <IoBookSharp />
             <span class="nav-label">&nbsp;Docs</span>
-          </A>
+          </Link>
           <Show when={state() !== 'none'}>
-            <A
+            <Link
               href="/activity"
               title="Activity log - a history of every mint, split, combine, melt and transfer"
             >
               <IoReceiptSharp />
               <span class="nav-label">&nbsp;Activity</span>
-            </A>
+            </Link>
           </Show>
           {/* addons sit left of Settings - Settings stays the outermost
           (rightmost) page link, a fixed landmark regardless of how many
@@ -164,28 +170,29 @@ const Nav = () => {
               {addon => {
                 const Icon = ADDON_ICONS[addon.manifest.nav!.icon]
                 return (
-                  <A
+                  <a
                     href={
-                      addon.manifest.nav!.route ??
-                      `/addons/${addon.manifest.id}`
+                      '#' +
+                      (addon.manifest.nav!.route ??
+                        `/addons/${addon.manifest.id}`)
                     }
                   >
                     {Icon && <Icon />}
                     <span class="nav-label">
                       &nbsp;{addon.manifest.nav!.label}
                     </span>
-                  </A>
+                  </a>
                 )
               }}
             </For>
           </Show>
-          <A
+          <Link
             href="/settings"
             title="Settings - auto-lock, currency, offline mode, backup, restore &amp; addons"
           >
             <IoCogSharp />
             <span class="nav-label">&nbsp;Settings</span>
-          </A>
+          </Link>
           <Show when={state() === 'unlocked' && encrypted()}>
             <a href="#lock" title="Lock wallet" onClick={lock_action}>
               <IoLockClosedSharp />

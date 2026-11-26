@@ -1,6 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, For, createMemo, createSignal} from 'solid-js'
-import {A} from '@solidjs/router'
+import {For, Show, createMemo, createSignal} from 'solid-js'
 import {IoAtCircleSharp, IoSearchSharp, IoAddSharp} from 'solid-icons/io'
 
 import {serverOf} from '../lnurlcash'
@@ -15,6 +14,7 @@ import {feeInvoiceExpiresAt} from '../addressRecovery'
 import RequireWallet from '../components/RequireWallet'
 import AddressDialog from '../components/AddressDialog'
 import AddressScanDialog from '../components/AddressScanDialog'
+import Link from '../components/Link'
 
 // which address a dialog is open for - `username` omitted means claiming a
 // new one at `server`
@@ -95,8 +95,8 @@ const Address: Component = () => {
           when={trustedMints().length > 0}
           fallback={
             <p>
-              No trusted mints yet - add one on the <A href="/mint">Mint</A>{' '}
-              page first.
+              No trusted mints yet - add one on the{' '}
+              <Link href="/mint">Mint</Link> page first.
             </p>
           }
         >

@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // LUD-25's own recovery-scan convention - "WALLET stops scanning a given
 // SERVICE after some gap limit of consecutive unknown indices, the same
@@ -28,7 +28,7 @@ const readStored = (): GapLimit => {
   }
 }
 
-const [gapLimit, setGapLimitSignal] = createSignal<GapLimit>(readStored())
+const [gapLimit, setGapLimitSignal] = createFreshSignal<GapLimit>(readStored())
 export {gapLimit}
 
 export const setGapLimit = (value: GapLimit): void => {

@@ -2423,3 +2423,99 @@ $index-spent: #c98500;
   border-radius: 5px;
   padding: 8px;
 }
+
+// toasts (components/Toaster.tsx) - same light card look solid-toast drew
+// by default, so the swap away from it isn't a visual change
+.toaster {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  &.toaster-top-left,
+  &.toaster-bottom-left {
+    align-items: flex-start;
+  }
+  &.toaster-top-center,
+  &.toaster-bottom-center {
+    align-items: center;
+  }
+  &.toaster-top-right,
+  &.toaster-bottom-right {
+    align-items: flex-end;
+  }
+  &.toaster-bottom-left,
+  &.toaster-bottom-center,
+  &.toaster-bottom-right {
+    flex-direction: column-reverse;
+  }
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 350px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff;
+  color: #363636;
+  line-height: 1.3;
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.1),
+    0 3px 3px rgba(0, 0, 0, 0.05);
+  pointer-events: auto;
+  animation: toast-enter 0.25s ease-out;
+}
+
+.toast-message {
+  margin: 4px 0;
+}
+
+.toast-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.toast-icon-success {
+  background: #61d345;
+}
+.toast-icon-error {
+  background: #ff4b4b;
+}
+.toast-icon-loading {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e0e0e0;
+  border-right-color: #616161;
+  animation: toast-spin 1s linear infinite;
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+  }
+}
+@keyframes toast-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast-icon-loading {
+    animation: none;
+  }
+}

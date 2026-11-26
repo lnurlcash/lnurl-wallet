@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from '../freshSignal'
 
 // one persisted settings store per addon - same module-level-signal +
 // localStorage pattern as offlineMode.ts, just keyed per addon id instead
@@ -34,9 +34,9 @@ export const addonSettingsStore = (
   const existing = stores.get(addonId)
   if (existing) return existing
 
-  const [settings, setSettingsSignal] = createSignal<Record<string, unknown>>(
-    readStored(addonId, defaults)
-  )
+  const [settings, setSettingsSignal] = createFreshSignal<
+    Record<string, unknown>
+  >(readStored(addonId, defaults))
   const setSettings = (value: Record<string, unknown>): void => {
     try {
       localStorage.setItem(keyFor(addonId), JSON.stringify(value))

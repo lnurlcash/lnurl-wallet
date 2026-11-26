@@ -1,6 +1,6 @@
 import type {Component} from 'solid-js'
 import {Show} from 'solid-js'
-import {A, useParams} from '@solidjs/router'
+import {useParams} from '@solidjs/router'
 
 import RequireWallet from '../components/RequireWallet'
 import AddonRenderer from '../addons/Renderer'
@@ -8,6 +8,7 @@ import {findAddon} from '../addons/registry'
 import {enabledAddonIds} from '../addons/enabled'
 import {addonSettingsStore} from '../addons/settingsStore'
 import type {Addon} from '../addons/types'
+import Link from '../components/Link'
 
 // runs one bundled or custom addon's own `ui` (see Settings.tsx's Addons
 // column for the enable/disable/edit list) - gated on both "enabled" (a
@@ -34,9 +35,9 @@ const AddonRun: Component = () => {
         fallback={
           <div class="setup-card">
             <p>That addon doesn't exist.</p>
-            <A href="/settings" class="hero-btn hero-btn-primary">
+            <Link href="/settings" class="hero-btn hero-btn-primary">
               Back to Settings
-            </A>
+            </Link>
           </div>
         }
       >
@@ -46,9 +47,9 @@ const AddonRun: Component = () => {
             fallback={
               <div class="setup-card">
                 <p>{found.manifest.name} is turned off.</p>
-                <A href="/settings" class="hero-btn hero-btn-primary">
+                <Link href="/settings" class="hero-btn hero-btn-primary">
                   Turn it on
-                </A>
+                </Link>
               </div>
             }
           >

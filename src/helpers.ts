@@ -1,4 +1,4 @@
-import toast, {type ToastPosition} from 'solid-toast'
+import toast, {type ToastPosition} from './components/Toaster'
 
 export enum NotifyKind {
   SUCCESS = 'success',
@@ -7,7 +7,7 @@ export enum NotifyKind {
 }
 
 // position is a per-call override of index.tsx's <Toaster position="top-right">
-// default - solid-toast groups toasts by their own resolved position, so a
+// default - the Toaster groups toasts by their own resolved position, so a
 // single Toaster instance can show some at the default corner and others
 // (e.g. AddressAutoScanner's background-found-funds toast, which wants to
 // be noticed at the bottom of the screen rather than blend into the usual

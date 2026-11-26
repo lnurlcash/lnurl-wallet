@@ -1,6 +1,6 @@
 import {AiFillGithub} from 'solid-icons/ai'
 import {IoLockClosedSharp, IoGlobeSharp} from 'solid-icons/io'
-import {A} from '@solidjs/router'
+import Link from './Link'
 
 const Footer = () => {
   return (
@@ -29,10 +29,10 @@ const Footer = () => {
           &nbsp;Github
         </a>
       </div>
-      <A class="footer-item" href="/docs">
+      <Link class="footer-item" href="/docs">
         <IoLockClosedSharp />
         &nbsp;keys never leave your browser
-      </A>
+      </Link>
     </footer>
   )
 }

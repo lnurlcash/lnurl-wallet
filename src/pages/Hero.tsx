@@ -1,6 +1,5 @@
 import type {Component} from 'solid-js'
 import {Show} from 'solid-js'
-import {A} from '@solidjs/router'
 import {
   IoCashSharp,
   IoLockClosedSharp,
@@ -11,6 +10,7 @@ import {
 } from 'solid-icons/io'
 
 import {useWallet} from '../WalletContext'
+import Link from '../components/Link'
 
 // The home page - always the marketing/landing view, regardless of wallet
 // state. The actual wallet (bearer list, unlock form) lives at /wallet;
@@ -32,14 +32,14 @@ const Hero: Component = () => {
           <Show
             when={state() !== 'none'}
             fallback={
-              <A href="/setup" class="hero-btn hero-btn-primary">
+              <Link href="/setup" class="hero-btn hero-btn-primary">
                 Create wallet
-              </A>
+              </Link>
             }
           >
-            <A href="/wallet" class="hero-btn hero-btn-primary">
+            <Link href="/wallet" class="hero-btn hero-btn-primary">
               Go to my wallet
-            </A>
+            </Link>
           </Show>
         </div>
       </section>

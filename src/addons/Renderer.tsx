@@ -1,15 +1,14 @@
-import type {Component, JSX} from 'solid-js'
+import type {Component} from 'solid-js'
 import {
-  Show,
+  Errored,
   For,
-  ErrorBoundary,
+  Show,
   createEffect,
   createMemo,
-  onCleanup,
-  untrack
+  createStore,
+  snapshot
 } from 'solid-js'
-import {createStore, produce} from 'solid-js/store'
-import {A} from '@solidjs/router'
+import type {JSX} from '@solidjs/web'
 import {useWallet} from '../WalletContext'
 import {useDevice} from '../DeviceContext'
 import {requireDeviceClient} from '../deviceOrchestration'
@@ -21,6 +20,7 @@ import {evaluate, type EvalContext} from './expr'
 import {VERBS, type VerbContext} from './verbs'
 import {GLOBAL_HELPERS} from './globalHelpers'
 import type {Action, Addon, Expr, UiNode} from './types'
+import Link from '../components/Link'
 
 export type AddonRendererProps = {
   addon: Addon
@@ -213,37 +213,47 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
     return handler(args, ctx)
   }
 
+  // Solid 1's path setters (setStore('a', 'b', value)) are gone in Solid
+  // 2 - writes go through a draft. Same contract as before: every segment
+  // but the last must already exist (a missing one throws, which runAction
+  // reports), and the last is assigned outright
+  const setPath = (path: string[], value: unknown) =>
+    setStore(draft => {
+      let node = draft as Record<string, any>
+      for (const key of path.slice(0, -1)) node = node[key]
+      node[path[path.length - 1]!] = value
+    })
+
+  // snapshot(), not {...store}: a store read lags its writes until the
+  // next flush in Solid 2, but a snapshot includes them - this always runs
+  // right after a write - and it's a plain deep copy, safe to persist
   const persistSettings = () => {
-    if (props.mode === 'settings') props.settingsStore?.[1]({...store})
+    if (props.mode === 'settings') props.settingsStore?.[1](snapshot(store))
   }
 
   const runAction = async (action: Action, vars: Vars): Promise<void> => {
     try {
       if ('verb' in action) {
         const result = await runVerb(action.verb, action.args, vars)
-        if (action.result) setStore(action.result, result)
+        if (action.result) setPath([action.result], result)
         return
       }
       const path = action.path.split('.')
       if (action.action === 'set') {
         const value = resolveExpr(action.value, vars)
-        setStore(...(path as [string]), value)
+        setPath(path, value)
       } else if (action.action === 'push') {
         const value = resolveExpr(action.value, vars)
-        setStore(
-          produce(s => {
-            const arr = path.reduce<any>((acc, key) => acc[key], s)
-            arr.push(value)
-          })
-        )
+        setStore(s => {
+          const arr = path.reduce<any>((acc, key) => acc[key], s)
+          arr.push(value)
+        })
       } else if (action.action === 'removeAt') {
         const index = Number(resolveExpr(action.index, vars))
-        setStore(
-          produce(s => {
-            const arr = path.reduce<any>((acc, key) => acc[key], s)
-            arr.splice(index, 1)
-          })
-        )
+        setStore(s => {
+          const arr = path.reduce<any>((acc, key) => acc[key], s)
+          arr.splice(index, 1)
+        })
       }
       persistSettings()
     } catch (err) {
@@ -279,7 +289,7 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
     if (bind.startsWith('item.') && vars.__writeItem) {
       vars.__writeItem(bind.slice('item.'.length), value)
     } else {
-      setStore(...(bind.split('.') as [string]), value)
+      setPath(bind.split('.'), value)
     }
     persistSettings()
   }
@@ -292,14 +302,14 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
     switch (node.type) {
       case 'View':
         return (
-          <div classList={{[`addon-${node.style}`]: !!node.style}}>
+          <div class={{[`addon-${node.style}`]: !!node.style}}>
             {renderChildren(node.children, vars)}
           </div>
         )
 
       case 'Text':
         return (
-          <p classList={{[`addon-${node.style}`]: !!node.style}}>
+          <p class={{[`addon-${node.style}`]: !!node.style}}>
             {String(resolveExpr(node.value, vars) ?? '')}
           </p>
         )
@@ -468,14 +478,12 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
                 __indexOf: index,
                 __writeItem: basePath
                   ? (field: string, value: unknown) => {
-                      setStore(
-                        produce(s => {
-                          const arr = (s as Record<string, unknown[]>)[
-                            basePath
-                          ] as Record<string, unknown>[]
-                          arr[index()]![field] = value
-                        })
-                      )
+                      setStore(s => {
+                        const arr = (s as Record<string, unknown[]>)[
+                          basePath
+                        ] as Record<string, unknown>[]
+                        arr[index()]![field] = value
+                      })
                       persistSettings()
                     }
                   : undefined
@@ -518,10 +526,15 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
       }
 
       case 'JsonDisplay': {
-        const resolved = resolveExpr(node.value, vars)
-        const value =
-          typeof resolved === 'string' ? tryParseJson(resolved) : resolved
-        return <pre class="addon-json">{renderJsonValue(value)}</pre>
+        // a function, read in JSX - stays live as the bound value changes,
+        // instead of freezing at whatever it was when this node mounted
+        const value = () => {
+          const resolved = resolveExpr(node.value, vars)
+          return typeof resolved === 'string'
+            ? tryParseJson(resolved)
+            : resolved
+        }
+        return <pre class="addon-json">{renderJsonValue(value())}</pre>
       }
 
       case 'QrDisplay':
@@ -542,7 +555,7 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
             fallback={
               <p class="addon-form-note">
                 No Lightning Address registered yet - claim one on a mint's card
-                on the <A href="/mint">Mint</A> page first.
+                on the <Link href="/mint">Mint</Link> page first.
               </p>
             }
           >
@@ -584,7 +597,6 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
         // while it stays truthy
         const active = createMemo(() => Boolean(resolveExpr(node.when, vars)))
         let busy = false
-        let timer: ReturnType<typeof setInterval> | undefined
         const tick = async () => {
           if (busy) return
           busy = true
@@ -594,19 +606,24 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
             busy = false
           }
         }
-        createEffect(() => {
-          clearInterval(timer)
-          timer = undefined
-          if (!active()) return
-          // untracked: runAction resolves its args synchronously, and
-          // those reads must not become this effect's own dependencies
-          untrack(() => void tick())
-          timer = setInterval(
+        // only active() is tracked (compute); the apply phase is untracked,
+        // so the reads runAction makes resolving its args synchronously
+        // never become this effect's own dependencies
+        createEffect(active, isActive => {
+          if (!isActive) return
+          // the first tick runs from a timer too, not right here - runAction
+          // reads addon state, which belongs in an event callback, not this
+          // effect's own
+          const first = setTimeout(() => void tick(), 0)
+          const timer = setInterval(
             () => void tick(),
             Math.max(POLL_MIN_SECONDS, node.every) * 1000
           )
+          return () => {
+            clearTimeout(first)
+            clearInterval(timer)
+          }
         })
-        onCleanup(() => clearInterval(timer))
         return null
       }
     }
@@ -622,24 +639,26 @@ const AddonRenderer: Component<AddonRendererProps> = props => {
       {/* scoped to this ONE addon's own tree - a bug in one addon's `ui`
       (bundled or a holder's own hand-authored custom one) must not take
       down the whole app shell the way it did before this existed (see
-      index.tsx's own app-wide ErrorBoundary, still the backstop for
+      index.tsx's own app-wide Errored boundary, still the backstop for
       anything thrown outside this addon's own render, e.g. a bad initial
       state). Logs full details for debugging regardless of build mode -
       see AddonRenderError below - since a minified production message
       alone ("e is not a function") is useless for tracking down what
       actually broke */}
-      <ErrorBoundary
+      <Errored
         fallback={(err, reset) => (
           <AddonRenderError
             addon={props.addon}
             mode={props.mode}
-            error={err}
+            error={err()}
             reset={reset}
           />
         )}
       >
-        <Show when={ui}>{node => renderNode(node(), store)}</Show>
-      </ErrorBoundary>
+        <Show when={ui} keyed>
+          {node => renderNode(node, store)}
+        </Show>
+      </Errored>
     </div>
   )
 }
@@ -651,35 +670,44 @@ const AddonRenderError: Component<{
   error: unknown
   reset: () => void
 }> = props => {
-  const error =
+  const error = createMemo(() =>
     props.error instanceof Error ? props.error : new Error(String(props.error))
+  )
   // unconditional, not DEV-gated - a holder hitting this in production
   // still has devtools open more often than not, and this is the only
   // place the full stack survives; the UI below only ever shows the
   // message, never the stack, to stay readable for a non-technical holder
-  console.error(
-    `[addon:${props.addon.manifest.id}] failed to render (${props.mode} mode):`,
-    error
+  createEffect(
+    () => ({
+      err: error(),
+      id: props.addon.manifest.id,
+      mode: props.mode
+    }),
+    ({err, id, mode}) => {
+      console.error(`[addon:${id}] failed to render (${mode} mode):`, err)
+    }
   )
   return (
     <div class="setup-card addon-error">
       <h3>{props.addon.manifest.name} hit an error</h3>
       <p>
-        This addon couldn't finish rendering ({error.message}). The rest of your
-        wallet is unaffected - your notes are still safe in storage.
+        This addon couldn't finish rendering ({error().message}). The rest of
+        your wallet is unaffected - your notes are still safe in storage.
       </p>
       <details class="addon-error-details">
         <summary>Technical details</summary>
-        <pre class="addon-response-block">{error.stack ?? error.message}</pre>
+        <pre class="addon-response-block">
+          {error().stack ?? error().message}
+        </pre>
       </details>
       <div class="btns">
         <button type="button" onClick={() => props.reset()}>
           Try again
         </button>
         <Show when={props.mode === 'run'}>
-          <A href="/settings" class="hero-btn">
+          <Link href="/settings" class="hero-btn">
             Back to Settings
-          </A>
+          </Link>
         </Show>
       </div>
     </div>

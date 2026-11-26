@@ -1,8 +1,9 @@
-import type {Component, JSX} from 'solid-js'
+import type {Component} from 'solid-js'
 import {Show} from 'solid-js'
-import {A} from '@solidjs/router'
+import type {JSX} from '@solidjs/web'
 
 import {useWallet} from '../WalletContext'
+import Link from './Link'
 
 // Gate for pages that need an unlocked wallet (mint/scan/paste/backup):
 // without one there is no AES key to encrypt incoming bearers with, so
@@ -20,16 +21,16 @@ const RequireWallet: Component<{children: JSX.Element}> = props => {
               fallback={
                 <>
                   <p>No wallet on this device yet.</p>
-                  <A href="/setup" class="hero-btn hero-btn-primary">
+                  <Link href="/setup" class="hero-btn hero-btn-primary">
                     Create wallet
-                  </A>
+                  </Link>
                 </>
               }
             >
               <p>Your wallet is locked.</p>
-              <A href="/wallet" class="hero-btn hero-btn-primary">
+              <Link href="/wallet" class="hero-btn hero-btn-primary">
                 Unlock
-              </A>
+              </Link>
             </Show>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import {createSignal} from 'solid-js'
+import {createFreshSignal} from './freshSignal'
 
 // how the note list on Wallet.tsx is sorted/grouped, remembered across
 // reloads instead of always resetting to the same default - same
@@ -40,7 +40,7 @@ const readGroupByMint = (): boolean => {
 }
 
 const [noteSortKey, setNoteSortKeySignal] =
-  createSignal<NoteSortKey>(readSortKey())
+  createFreshSignal<NoteSortKey>(readSortKey())
 export {noteSortKey}
 export const setNoteSortKey = (value: NoteSortKey): void => {
   try {
@@ -53,7 +53,7 @@ export const setNoteSortKey = (value: NoteSortKey): void => {
 }
 
 const [noteSortDesc, setNoteSortDescSignal] =
-  createSignal<boolean>(readSortDesc())
+  createFreshSignal<boolean>(readSortDesc())
 export {noteSortDesc}
 export const setNoteSortDesc = (value: boolean): void => {
   try {
@@ -66,7 +66,7 @@ export const setNoteSortDesc = (value: boolean): void => {
 }
 
 const [noteGroupByMint, setNoteGroupByMintSignal] =
-  createSignal<boolean>(readGroupByMint())
+  createFreshSignal<boolean>(readGroupByMint())
 export {noteGroupByMint}
 export const setNoteGroupByMint = (value: boolean): void => {
   try {

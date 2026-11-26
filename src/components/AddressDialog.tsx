@@ -5,8 +5,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  onCleanup,
-  untrack
+  onCleanup
 } from 'solid-js'
 import {
   IoAtCircleSharp,
@@ -361,11 +360,11 @@ const AddressDialog: Component<AddressDialogProps> = props => {
   const pendingInvoice = createMemo(() =>
     registered()?.feeInvoice && !feeExpired() ? registered()!.feeInvoice : null
   )
-  createEffect(() => {
-    if (!pendingInvoice()) return
-    untrack(() => void checkFee(true))
+  createEffect(pendingInvoice, invoice => {
+    if (!invoice) return
+    void checkFee(true)
     const poll = setInterval(() => void checkFee(true), FEE_POLL_MS)
-    onCleanup(() => clearInterval(poll))
+    return () => clearInterval(poll)
   })
 
   // the hold lapsed: register the same name again on a fresh share (the

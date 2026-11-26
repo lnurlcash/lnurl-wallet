@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, createSignal, onCleanup, onMount} from 'solid-js'
+import {Show, createSignal, onCleanup, onSettled} from 'solid-js'
 import jsQR from 'jsqr'
 
 export type ScannerProps = {
@@ -102,33 +102,35 @@ const Scanner: Component<ScannerProps> = props => {
     }, 250)
   }
 
-  onMount(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Camera access is not available in this browser.')
-      return
-    }
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {facingMode: 'environment'}
-      })
-    } catch (err) {
-      // NotFoundError: hasCameraDevice's own probe (ScanToggle) missed a
-      // race - the camera was unplugged/reclaimed between probing and
-      // opening. Distinct message from an actual permission denial, which
-      // is the far more common real-world case.
-      setError(
-        err instanceof DOMException && err.name === 'NotFoundError'
-          ? 'No camera was found.'
-          : 'Camera access was denied.'
-      )
-      return
-    }
-    if (!videoRef) return
-    videoRef.srcObject = stream
-    await videoRef.play()
+  onSettled(() => {
+    void (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError('Camera access is not available in this browser.')
+        return
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {facingMode: 'environment'}
+        })
+      } catch (err) {
+        // NotFoundError: hasCameraDevice's own probe (ScanToggle) missed a
+        // race - the camera was unplugged/reclaimed between probing and
+        // opening. Distinct message from an actual permission denial, which
+        // is the far more common real-world case.
+        setError(
+          err instanceof DOMException && err.name === 'NotFoundError'
+            ? 'No camera was found.'
+            : 'Camera access was denied.'
+        )
+        return
+      }
+      if (!videoRef) return
+      videoRef.srcObject = stream
+      await videoRef.play()
 
-    if (hasBarcodeDetector) scanWithBarcodeDetector()
-    else scanWithJsQr()
+      if (hasBarcodeDetector) scanWithBarcodeDetector()
+      else scanWithJsQr()
+    })()
   })
 
   onCleanup(stop)

@@ -1,9 +1,9 @@
 import type {Component} from 'solid-js'
-import {Show, onMount} from 'solid-js'
+import {Show, createMemo} from 'solid-js'
 import {IoDownloadSharp} from 'solid-icons/io'
 
 import {copyToClipboard} from '../helpers'
-import {QRCodeSVG, ErrorCorrectionLevel} from 'solid-qr-code'
+import {qrMatrix, qrSvg} from '../qr'
 
 export interface QrProps {
   value: string
@@ -16,40 +16,20 @@ export interface QrProps {
 
 const Qr: Component<QrProps> = (props: QrProps) => {
   // the actual on-screen size is controlled by CSS (.qrcode scales the SVG
-  // to fill its box - see style.scss) - this only sets the coordinate
-  // space the library draws into, so a higher default gives denser codes
-  // (e.g. a long bolt11 invoice vs. a short LNURL) more sub-pixel
-  // precision before that scaling, instead of looking uneven/blurry
-  const width = props.width || 340
-  const height = props.height || 340
-  let frameRef: HTMLDivElement | undefined
+  // to fill its box via its viewBox - see style.scss) - width/height only
+  // set the pixel size a downloaded .svg opens at in other viewers
+  const width = () => props.width || 340
+  const height = () => props.height || 340
+  const matrix = createMemo(() => qrMatrix(props.value))
 
-  // the library sets width/height as plain attributes with no viewBox (see
-  // the comment above) - without one, CSS resizing the box (.qrcode's own
-  // width: 100%) doesn't scale the drawn modules at all, it just resizes the
-  // *viewport* and leaves the code pinned at its native width x height in
-  // the corner (blank space padding out the rest, or clipped if CSS shrinks
-  // it below that). A viewBox maps that native coordinate space onto
-  // whatever box CSS ends up giving the element, the same as every other
-  // scalable inline SVG - fixes it for every Qr instance/size, not just
-  // whichever one happened to get noticed
-  onMount(() => {
-    frameRef
-      ?.querySelector('svg')
-      ?.setAttribute('viewBox', `0 0 ${width} ${height}`)
-  })
-
-  // QRCodeSVG renders straight into the DOM with no ref of its own, so the
-  // rendered <svg> is pulled back out of frameRef rather than built again
-  // from props here - keeps the downloaded file pixel-identical to what's
-  // on screen
+  // built from the same value as the on-screen code (qr.ts renders both),
+  // so the downloaded file is identical to what's shown
   const download = (e: MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    const svg = frameRef?.querySelector('svg')
-    if (!svg) return
-    const source = new XMLSerializer().serializeToString(svg)
-    const blob = new Blob([source], {type: 'image/svg+xml'})
+    const blob = new Blob([qrSvg(props.value, width())], {
+      type: 'image/svg+xml'
+    })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -60,20 +40,19 @@ const Qr: Component<QrProps> = (props: QrProps) => {
 
   const code = (
     <div class="qrcode" onClick={() => copyToClipboard(props.value)}>
-      <QRCodeSVG
-        backgroundColor="white"
-        backgroundAlpha={1}
-        foregroundColor="black"
-        foregroundAlpha={1}
-        width={width}
-        height={height}
-        value={props.value}
-        level={ErrorCorrectionLevel.LOW}
-      />
+      <svg
+        width={width()}
+        height={height()}
+        viewBox={`0 0 ${matrix().size} ${matrix().size}`}
+        shape-rendering="crispEdges"
+      >
+        <rect width={matrix().size} height={matrix().size} fill="#fff" />
+        <path fill="#000" d={matrix().path} />
+      </svg>
     </div>
   )
   return (
-    <div class="qr-frame" ref={frameRef}>
+    <div class="qr-frame">
       <Show when={props.href} fallback={code}>
         <a class="qrcode-link" href={props.href}>
           {code}

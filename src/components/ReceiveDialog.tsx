@@ -1,5 +1,5 @@
 import type {Component} from 'solid-js'
-import {Show, createSignal, createMemo} from 'solid-js'
+import {Show, createMemo, createSignal} from 'solid-js'
 import {useNavigate} from '@solidjs/router'
 import {
   IoClipboardSharp,
@@ -43,7 +43,9 @@ const ReceiveDialog: Component<ReceiveDialogProps> = props => {
   const {client: deviceClient} = useDevice()
   const navigate = useNavigate()
   let pasteRef: HTMLInputElement | null = null
-  const [value, setValue] = createSignal(props.initialValue ?? '')
+  // writable derived: seeded from (and reset by) props.initialValue, but
+  // freely editable in between
+  const [value, setValue] = createSignal(() => props.initialValue ?? '')
   const [busy, setBusy] = createSignal(false)
   // the paste field is hidden behind a keyboard icon on mobile (see
   // .paste-keyboard-btn) - desktop ignores this, CSS only hides the field
@@ -106,22 +108,25 @@ const ReceiveDialog: Component<ReceiveDialogProps> = props => {
   // that also takes a bolt11, since that's realistically typed/pasted in
   const onScan = (scanned: string) => receiveIntoWallet(scanned)
 
-  const handlePaste = async () => {
-    if (value() === '') return
-    if (isBolt11Invoice(value())) {
-      goToMelt(value())
+  // takes the text explicitly when it was only just set - paste() writes
+  // value and submits in the same tick, before that write is readable
+  const submit = async (input: string) => {
+    if (input === '') return
+    if (isBolt11Invoice(input)) {
+      goToMelt(input)
       setValue('')
       return
     }
-    if (!isValidNoteInput(value())) {
+    if (!isValidNoteInput(input)) {
       notify(
         'Not a valid LNURLcash bearer note or bolt11 invoice.',
         NotifyKind.ERROR
       )
       return
     }
-    await receiveIntoWallet(value())
+    await receiveIntoWallet(input)
   }
+  const handlePaste = () => submit(value())
 
   const paste = async () => {
     const text = await pasteFromClipboard()
@@ -129,7 +134,7 @@ const ReceiveDialog: Component<ReceiveDialogProps> = props => {
       setValue(text)
       setShowKeyboard(true)
       pasteRef?.focus()
-      handlePaste()
+      void submit(text)
     }
   }
 
@@ -163,15 +168,12 @@ const ReceiveDialog: Component<ReceiveDialogProps> = props => {
           >
             <MdSharpKeyboard />
           </button>
-          <div
-            class="paste-input-wrapper"
-            classList={{'mobile-open': showKeyboard()}}
-          >
+          <div class={['paste-input-wrapper', {'mobile-open': showKeyboard()}]}>
             <input
               ref={pasteRef}
               type="text"
-              class="paste-input"
-              classList={{invalid: value() !== '' && !isValid()}}
+              class={['paste-input', {invalid: value() !== '' && !isValid()}]}
+
               placeholder="lnurl1... / lnurlw://...?k1=... / lnbc1..."
               value={value()}
               onInput={e => setValue(e.currentTarget.value)}

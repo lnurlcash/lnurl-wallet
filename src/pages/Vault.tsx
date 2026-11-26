@@ -1,6 +1,5 @@
 import type {Component} from 'solid-js'
 import {For, Show, createSignal} from 'solid-js'
-import {A} from '@solidjs/router'
 import {
   IoBanSharp,
   IoDownloadSharp,
@@ -22,6 +21,7 @@ import {
 import {identityWarning} from '../devicePinning'
 import {msatToSats, notify, NotifyKind} from '../helpers'
 import {vaultEnabled} from '../vaultFeature'
+import Link from '../components/Link'
 
 // get_info's `storage` (docs/PROTOCOL.md) - only 'ok' (or absent, meaning
 // this build has no persistent storage to worry about) means note_count
@@ -218,9 +218,9 @@ const Vault: Component = () => {
               Vault is still an alpha feature, opt-in only - turn it on in
               Settings to pair a hardware device.
             </p>
-            <A href="/settings" class="hero-btn hero-btn-primary">
+            <Link href="/settings" class="hero-btn hero-btn-primary">
               Go to Settings
-            </A>
+            </Link>
           </div>
         }
       >
@@ -544,8 +544,10 @@ const Vault: Component = () => {
                     <For each={consoleLog()}>
                       {entry => (
                         <div
-                          class="console-entry"
-                          classList={{'console-entry-error': !entry.ok}}
+                          class={[
+                            'console-entry',
+                            {'console-entry-error': !entry.ok}
+                          ]}
                         >
                           <p class="console-request">&gt; {entry.request}</p>
                           <pre class="console-response">{entry.response}</pre>

@@ -1,5 +1,5 @@
-import {createSignal} from 'solid-js'
 import type {AddonManifest} from './types'
+import {createFreshSignal} from '../freshSignal'
 
 // holder-authored/edited addons (see the builder on Addons.tsx) - JSON
 // manifests only, no helpers (a helper is a TS function; a custom addon
@@ -18,7 +18,7 @@ const readStored = (): AddonManifest[] => {
 }
 
 const [customAddonManifests, setCustomAddonManifestsSignal] =
-  createSignal<AddonManifest[]>(readStored())
+  createFreshSignal<AddonManifest[]>(readStored())
 export {customAddonManifests}
 
 const persist = (manifests: AddonManifest[]): void => {
